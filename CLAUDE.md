@@ -645,6 +645,26 @@ signal read green.
 - **The dead man's switch was rendered as a warning.** Filtered out now; and because hiding it must
   not hide its absence, a response without it raises a `fail` line in its place.
 
+### The credential that could not read the number, and four defects on the path to it
+- A `claude setup-token` gets **403 `user:profile`** from `GET /api/oauth/usage`, which a signed-in
+  workstation reads fine - so the account-wide percentages three consumers promised are unreachable
+  from a headless host. The status on the phase's own model call is what replaced them, and
+  **absence must PROCEED rather than refuse**, the inverse of the rule the endpoint design had.
+- **`shutil.rmtree` on a symlinked directory deletes nothing and raises inside `ignore_errors`**,
+  while `isdir` follows the link and says yes - a planted `.git/hooks` survived and `post-checkout`
+  ran as `core` outside every boundary. The report was built from `listdir` before the removal, so
+  it claimed a deletion that never happened.
+- **`core.quotePath` C-quotes any non-ASCII path**, so a refused path escaped classification by
+  being spelled with an accent. A drift check compared a flow's `value` and never its `schema`. A
+  `# noqa` on one imported name does not cover the import, and `ruff --fix` would have deleted a
+  live attribute.
+- **`git reset --hard` leaves untracked files** and `prepare_worktree` never cleaned - the lesson
+  was applied to the verification tree only, and worktrees are reused.
+- **Starting an MCP server is a process spawn, not a tool call**, so no hook sees it. `--bare` skips
+  hooks; `--permission-mode bypassPermissions` is the supported spelling of the bypass.
+  `--setting-sources ''` loads nothing while `--settings` still installs the hook, and a hook
+  outranks `--allowed-tools`. `-p` silently ignores a settings file that fails validation.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

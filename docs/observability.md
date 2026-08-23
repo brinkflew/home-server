@@ -384,13 +384,43 @@ than removed because the section's shape is the thing worth stating; if it drift
 
 **They were written before the thing they measure**, which was deliberate rather than premature: a
 fleet that spends quota before anything reads the quota is the failure the whole of this file exists
-to prevent, so the readers landed first and `conduct` was written against them. Most of them now
-measure something real. **The quota arm still does not**, and that is the one gap worth naming here
-rather than leaving to be discovered: `agents.quota_headroom` tells a reader conduct "refuses to
-dispatch above" 90%, `home_server_agent_quota_ratio`'s help text says the same, and
-`AgentQuotaHeadroomLow` fires on it - while nothing yet writes the three quota keys, because nothing
-yet reads a rate-limit window and any number would be invented. Inert and honest today; a lie the
-day a model phase runs without the pacing landing with it.
+to prevent, so the readers landed first and `conduct` was written against them.
+
+**The quota arm was written against a source this host cannot reach, and that was found by trying
+it rather than by reasoning about it.** For as long as this section has existed,
+`agents.quota_headroom` graded `quota_5h_pct` and `quota_week_pct` - account-wide percentages, which
+`GET /api/oauth/usage` really does return, in 0.26 s, with the credential a signed-in workstation
+holds. It answers **403 `permission_error: OAuth token does not meet scope requirement
+user:profile`** to a `claude setup-token`, which is the only long-lived credential a headless server
+can hold. An interactive credential carries that scope; a setup-token carries what is needed to run
+the model and no more. Measured from the server, with the real token, on 2026-08-23 - before a line
+of the pacing was built on it, and it is the reason that check happened first.
+
+**So the signal is the API's own rate-limit status, taken from the phase's own model call**, and it
+is better than the fallback it sounds like. `--output-format stream-json` emits a `rate_limit_event`
+carrying the unified rate-limit headers: `allowed`, `allowed_warning` or `rejected`, per window,
+with the epoch that window clears. No second credential, account-wide because it is the API's own
+accounting rather than a tally `conduct` keeps, and incapable of drifting from what the model saw
+because it **is** what the model saw. The same stream carries the `result` object, so one output
+format serves the pacing and the accounting both.
+
+**What it costs is stated rather than glossed: a status, not a number.** `quota_5h_pct` and
+`quota_week_pct` are gone from the marker; `quota_status`, `quota_window` and `quota_resets_at`
+replace them, `home_server_agent_quota_ratio` became `home_server_agent_quota_status` graded 0/1/2
+in `home_server_check_status`'s idiom, and `AgentQuotaHeadroomLow` became `AgentQuotaRejected`.
+Three consumers and a key set moved in one change, which is what the marker contract is for.
+
+**And the hold expires by itself, so there is no staleness arm any more.** The old one existed
+because a percentage goes out of date silently. A status carries `resets_at`: the window either has
+rolled over or has not, and the API said when. `quota_read_at` is still recorded - "no model phase
+has run in a week" is worth being able to see - but it grades nothing.
+
+**`AgentQuotaRejected` fires on a rejection and not on the warning below it, and the gap is the
+design.** `conduct` holds the fleet at `allowed_warning`, so it cannot take the account to a
+rejection by itself; a rejection therefore means something else spent the window, almost always your
+own sessions. That also makes it the one alert here whose remedy is **not** to stop the fleet - the
+fleet has already stopped, and stopping it does not give the window back. What it tells you is that
+your next session will fail, which is worth knowing before you sit down to one.
 
 **`agents.publish_configured` is named for what it can prove**, and its message says so. A file
 existing is not a write-capable deploy key and a row in Windmill's `variable` table is not an

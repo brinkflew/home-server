@@ -1688,3 +1688,85 @@ answering; four had never served a single query and were deleted.
   above the real ones and inflated the firing count. It is filtered out now - but **hiding it must
   not hide its absence**, which is the only thing it was ever able to say, so a response that does
   not contain it raises a `fail` line in its place.
+
+## The credential that could not read the number, and four defects on the path to it
+
+- **A `claude setup-token` cannot read `GET /api/oauth/usage`**, and that is the finding the whole
+  quota design turned on. The endpoint returns exactly what three consumers had promised since the
+  observability tier shipped - account-wide `five_hour.utilization` and `seven_day.utilization`, in
+  0.26 s - **with the credential a signed-in workstation holds**. From the server, with the real
+  token, it answers `403 permission_error: OAuth token does not meet scope requirement
+  user:profile`. An interactive credential carries that scope; the only long-lived credential a
+  headless machine can hold carries what is needed to run the model and no more. **Measuring the
+  endpoint with the wrong credential and calling it available is the mistake that was one step
+  away** - the first measurement did use the interactive one, and the design would have been built
+  on it.
+- **The signal that IS available comes from the model call itself**, which is better than a
+  fallback: `--output-format stream-json` emits a `rate_limit_event` carrying the API's own unified
+  rate-limit headers - `allowed` / `allowed_warning` / `rejected`, per window, with the epoch that
+  window clears. No second credential, account-wide because it is the API's accounting rather than
+  a tally anybody keeps, and it cannot drift from what the model saw because it **is** what the
+  model saw. The same stream carries the `result` object, so one output format serves the pacing
+  and the accounting both. The cost is that it is a status rather than a number, and that it only
+  updates when a phase runs - so **absence must PROCEED rather than refuse**, or the fleet can
+  never produce the reading that would unblock it. That is the exact inverse of the rule the
+  endpoint design had, and the two are one line apart in the same function.
+- **`resets_at` removes the need for a staleness heuristic entirely.** A percentage goes out of
+  date silently, which is why the old check graded the age of the reading before the reading. A
+  status carries the moment its window rolls over, so a hold expires by itself and nothing has to
+  estimate.
+- **`shutil.rmtree` on a symlinked directory deletes NOTHING and raises where you cannot see it.**
+  CPython's fd-walk does an lstat/fstat samestat check and raises `OSError("Cannot call rmtree on a
+  symbolic link")` before the scandir that would unlink anything - so with `ignore_errors=True` the
+  call is a silent no-op, and `os.path.isdir` had already followed the link and said yes. In
+  `gitsafe.sanitize` that meant a planted `.git/hooks -> ./real` survived, and `git checkout` then
+  ran `post-checkout` as `core` on the host, outside the cgroup, the namespace, the capability set
+  and SELinux - reachable with no model phase in existence, by a lockfile postinstall, because
+  worktrees are reused and mounted `:rw` including `.git`. **And the report lied in the same
+  breath**: `removed` was built from `os.listdir` BEFORE the rmtree, so verify printed "the phase
+  left executable git state behind and it was removed before any git command ran". Ask about the
+  link, never the target; and never `ignore_errors` on a removal something else will report.
+- **A drift check that compares half of what it deploys reports "matches git" on the other half.**
+  `conduct flow --check` compared the flow's `value` and never its `schema`, while `flow_push` sends
+  both - so a UI edit to a run form was invisible for ever. Harmless while the form was four strings
+  with sane defaults; not harmless once one of its fields becomes a model's prompt. Measured before
+  fixing: both deployed schemas came back byte-identical to git's, so this one compares whole rather
+  than stripping generated keys the way the `value` comparison must.
+- **`core.quotePath` is on by default, so a protected path can escape classification by being
+  spelled with an accent.** `git diff --name-only` returns `"api/tests/test_caf\303\251.py"` -
+  C-quoted and wrapped in double quotes - and every `fnmatch` glob then fails against a string that
+  begins with a quote. The refused-path list IS the boundary in `conduct verify`, so the boundary
+  was byte-dependent, and the card showed the mangled name to the human being asked to make up for
+  it. `-c core.quotePath=false` on every diff that feeds a path decision.
+- **A `# noqa` on one imported name does not cover the import.** `flows/ship.py` carried
+  `# noqa: F401` on `CONDUCT_PREFIX,` rather than on the `from .common import (` line, so `SCHEMA`
+  read as unused - and it is not unused, it is read from outside as `flow.SCHEMA`. `ruff --fix`
+  would have deleted it and the ship flow would have lost its run form, surfacing as one non-fatal
+  "flow: not reconciled" line at startup while the other flow deployed perfectly. A lint comment
+  that is itself wrong is not caught by the lint.
+- **`git reset --hard` does not remove untracked files, and this repository already knew that.** It
+  is the whole reason `verify.pristine` does `rm -rf .git; git init; git clean -xdff` - and the
+  lesson had never been applied to `prepare_worktree`, where it was harmless only because every
+  phase was deterministic. Worktrees are deliberately reused, so a model's `git add -A` commits the
+  previous run's abandoned scratch, and a phase killed mid-edit - a designed path - poisons the
+  worktree permanently while `verify.clean()` blames each later run in turn.
+- **Starting an MCP server is a process spawn, not a tool call.** In `-p` mode a discovered
+  `.mcp.json` is auto-approved and its servers started before the first turn, so no `PreToolUse`
+  hook fires and no permission rule applies. A guardrail that only sees tool calls cannot see the
+  thing that starts first; `--strict-mcp-config` closes it at run time and `.mcp.json` in the
+  refused-path list closes it where the boundary actually is.
+- **`--bare` skips hooks**, and `--permission-mode bypassPermissions` is the supported spelling of
+  the bypass the deny list already refuses the model for typing. Both are one flag away from
+  disarming the in-container guardrail entirely, and neither is caught by a rule written against
+  `--dangerously-skip-permissions`.
+- **`--setting-sources ''` is accepted and loads nothing** - not user, not project, not local - so a
+  phase can be given no on-disk settings at all while `--settings` still installs conduct's own.
+  Measured: the hook fired and blocked a Bash call that `--allowed-tools` had explicitly permitted,
+  so **a hook outranks an allow-list**. The cost is that it also drops the project's skills, which
+  is a trade to make deliberately rather than absorb.
+- **`-p` silently ignores a settings file that FAILS VALIDATION** while a settings file that is
+  MISSING exits 1 loudly. `sha256sum -c` proves the bytes arrived and cannot prove Claude Code
+  accepted them, so the digest gate has a blind half.
+- **A one-word reply costs about $0.12** because the system prompt is ~29,000 cache-creation tokens
+  on every run. There is no such thing as a cheap model phase, which is what makes a spend floor a
+  number rather than a gesture.

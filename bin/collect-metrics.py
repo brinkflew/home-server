@@ -1354,7 +1354,11 @@ AGENT_NUMBERS = (
     ("tokens_today", "tokens_today",
      "Tokens spent since midnight. A gauge, not a counter: it resets daily by "
      "design, and rate() over a resetting counter is a lie."),
-    ("tokens_week", "tokens_week", "Tokens spent in the current weekly window."),
+    ("tokens_week", "tokens_week",
+     "Tokens the fleet spent in a rolling seven days. NOT the account's weekly "
+     "window, which resets at a time only the API knows: this is conduct's own "
+     "runs, and the gap between it and the account's status is your own "
+     "sessions."),
     ("runs_today", "runs_today", "Phase runs started since midnight."),
     ("runs_failed_today", "runs_failed_today",
      "Phase runs that ended in a failure since midnight."),
@@ -1363,15 +1367,30 @@ AGENT_NUMBERS = (
      "compares it against what is on disk."),
 )
 
-# The two quota windows, as fractions rather than percentages, because every
-# other ratio in this file is one and an alert reading `> 0.9` should not have to
-# know which convention this particular metric picked.
-AGENT_QUOTA = (("quota_5h_pct", "5h"), ("quota_week_pct", "week"))
+# A STATUS, NOT A RATIO, AND THE CHANGE IS FORCED RATHER THAN PREFERRED. This was
+# two windows as fractions, read from GET /api/oauth/usage - which returns exactly
+# that and answers 403 to the only long-lived credential a headless server can
+# hold, measured on 2026-08-23 before anything was built on it. What is available
+# is the API's own unified rate-limit status on the phase's own model call.
+#
+# GRADED 0/1/2 THE WAY home_server_check_status IS, so an alert reads `>= 1` and
+# a panel can colour it without knowing the words. An unrecognised status ranks
+# WORST: the enum came out of a binary rather than a contract, and a fourth value
+# reading as "fine" is the one direction that spends the cap.
+#
+# quota_window is deliberately NOT a label. It is the forbidden-label family by
+# the phase_label precedent - worth a sentence in the battery's message, not worth
+# a dimension in a store that keeps 400 days.
+AGENT_STATUS_RANK = {"allowed": 0, "allowed_warning": 1, "rejected": 2}
 
 # (marker key, metric infix)
 AGENT_STAMPS = (("last_ok_at", "last_ok"), ("heartbeat_at", "heartbeat"),
                 ("phase_started_at", "phase_started"),
-                ("quota_read_at", "quota_read"))
+                ("quota_read_at", "quota_read"),
+                # WHEN THE HOLD ENDS, which is the whole reason the status needs
+                # no staleness rule: the window either has rolled over or has not,
+                # and the API said when rather than leaving it to be estimated.
+                ("quota_resets_at", "quota_resets"))
 
 
 def _marker(path):
@@ -1463,11 +1482,14 @@ def source_agents(m):
               "subtracts from time(), so a stopped orchestrator shows as "
               "staleness rather than freezing at its last value.")
 
-    for key, window in AGENT_QUOTA:
-        m.add("home_server_agent_quota_ratio",
-              _marker_number(state.get(key), 0.01), {"window": window},
-              "Fraction of the quota window conduct has spent. It paces itself "
-              "to stay under 0.9 of both; past that it stops dispatching.")
+    status = state.get("quota_status")
+    m.add("home_server_agent_quota_status",
+          None if not status else AGENT_STATUS_RANK.get(status, 2), None,
+          "The API's own unified rate-limit status on the last model call: "
+          "0 allowed, 1 allowed_warning, 2 rejected. ABSENT until a model phase "
+          "has run, which is not the same as 0 and must not be drawn as healthy. "
+          "conduct holds the fleet at 1 or above until the window it named "
+          "clears, so a 2 here means something other than the fleet spent it.")
 
     for key, suffix, help_text in AGENT_NUMBERS:
         m.add("home_server_agent_" + suffix, _marker_number(state.get(key)),

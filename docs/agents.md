@@ -502,8 +502,13 @@ that admission about `TasksMax` until a real gate run measured it at 325.
 ## The marker, and why it is not in `backup-state`
 
 conduct writes `~/.cache/home-server/conduct-state`, flat `key=value`, in the shape of
-`backup-state` and `metrics-state`. Twelve checks in `bin/verify-host.sh`, twenty-two series in
+`backup-state` and `metrics-state`. **Four** checks in `bin/verify-host.sh`, **thirteen** series in
 `bin/collect-metrics.py` and one refusal in `bin/reboot-when-staged.sh` read it.
+
+That sentence said "twelve checks, twenty-two series" until 2026-08-23, and both numbers were wrong
+*and* described the wrong thing: fourteen checks and twenty-one series exist in the agents section,
+but only four and thirteen of them read this file. `conduct/marker.py` carried the identical wrong
+sentence and moved with it - the same both-halves rule, applied to a count rather than to a finding.
 
 **It is its own file rather than a section of `backup-state`, and the reason is invisible until
 somebody tidies the two together**: `bin/backup-server.sh` rewrites `backup-state` **whole** at
@@ -518,11 +523,29 @@ Three asymmetries in the contract that look like mistakes and are not:
   not look alike.
 - **`phase_label`** is read only into a message, never as a metric label. It is the forbidden-label
   family: worktree path, branch, PR number, job id, session id.
+- **`quota_window`** is the same, by the same precedent. Which of the four windows the API named is
+  worth a sentence and is not worth a label dimension in a store that keeps 400 days.
 
 **Omitted is not zero.** A key with no value is left out entirely, because the collector drops a
-sample that does not parse - so an unmeasured quota *vanishes* rather than reading as 0% used, and
+sample that does not parse - so an unmeasured quota *vanishes* rather than reading as healthy, and
 `agents.quota_headroom` NOTEs on the absence. `tokens_today` is written as `0` because for a phase
 with no model call zero is a measurement.
+
+**The quota keys are a status and not a percentage**, and that is a correction rather than a
+preference. They were `quota_5h_pct` and `quota_week_pct`, graded against `GET /api/oauth/usage` -
+which does return account-wide percentages, and which answers **403 `permission_error: OAuth token
+does not meet scope requirement user:profile`** to a `claude setup-token`, the only long-lived
+credential a headless server can hold. Measured from the server with the real token on 2026-08-23,
+before anything was built on it. What is available instead is the API's own unified rate-limit
+status on the phase's own model call - `allowed`, `allowed_warning`, `rejected`, per window, with
+the epoch it clears - so the keys are `quota_status`, `quota_window`, `quota_resets_at` and
+`quota_read_at`. See `conduct/quota.py`, which carries the argument in full.
+
+**And a recorded hold expires by itself.** `quota_resets_at` is the API's own answer to when the
+window comes back, so nothing here estimates staleness: `conduct` holds while the status is
+`allowed_warning` or worse *and* the window has not yet rolled over, and stops holding the moment it
+has. `quota_read_at` is still written, because "no model phase has run in a week" is worth being
+able to see, but nothing grades it.
 
 ## Two constraints the timing creates
 
@@ -800,23 +823,31 @@ draft pull request is exercised end to end.
 
 **The model phases themselves.** Their precondition is built - `conduct verify`, the deny hook and
 the two-tier path list all ship and are proved by planted commits rather than by a clean run - but
-nothing yet calls `claude -p`. What is still missing was counted rather than guessed, and it is
-twelve things rather than four. The binding one is **quota**: `bin/verify-host.sh` tells a reader
-conduct "refuses to dispatch above" 90%, `bin/collect-metrics.py` mints
-`home_server_agent_quota_ratio` saying the same, and `AgentQuotaHeadroomLow` fires on it - while
-`conduct/serve.py` deliberately omits the three quota keys because *"nothing has read a rate-limit
-window, so any number here would be invented"*. Today that is honest and inert. The moment a model
-phase runs, either the keys stay unwritten and the fleet spends the shared subscription while the
-battery reports "nothing has spent any yet", or somebody writes them without the refusal and that
-sentence becomes a lie. The rest: the prompt, the verdict schema, the podman secret carrying the
-session credential, the `ship` phase's own command, `--settings` on a command line (the file is
-rendered, hashed and mounted and named by nothing), `--strict-mcp-config` and `--setting-sources`
-(neither string appears in either repository), a pin on `@anthropic-ai/claude-code` while three
-behaviours measured against 2.1.238 are load-bearing, and a test that the `settings.json` ->
-`deny.py` exec path works - everything today runs it as `python3 deny.py`. **`conduct verify` works
-today and can be run by hand on any worktree**, which is deliberate: it is the half that had to
-exist before there was anything to verify, so that it was written against an adversary rather than
-around one.
+nothing yet calls `claude -p`.
+
+**The quota half is no longer the blocker, and what unblocked it was measuring the thing everyone
+had assumed.** `conduct/quota.py` reads the API's own unified rate-limit status - `allowed`,
+`allowed_warning`, `rejected`, per window, with the epoch it clears - out of the `rate_limit_event`
+that `--output-format stream-json` emits on the phase's own model call. The percentages this
+section promised for months are genuinely unreachable from here: `GET /api/oauth/usage` returns
+them and answers 403 to a `claude setup-token`, which is the only long-lived credential a headless
+server can hold. So the marker keys, `agents.quota_headroom`, the collector series and the alert
+all moved from a percentage to a status in one change, and the sentences that were about to become
+lies are true instead. See "The marker" above and `conduct/quota.py`.
+
+**What is still missing, counted rather than guessed**: the prompt and the route it takes into the
+container without touching a shell; the podman secret carrying the runner's token; the `ship`
+phase's own command; `--settings` on a command line (the file is rendered, hashed and mounted and
+named by nothing); `--strict-mcp-config` and `--setting-sources`, neither of which appears in
+either repository; a pin on `@anthropic-ai/claude-code` **and** `DISABLE_AUTOUPDATER`, because the
+CLI ships an `update` subcommand and `HOME` is a fresh tmpfs on every phase, so pinning the install
+does not pin what runs; a test that the `settings.json` -> `deny.py` exec path works, since
+everything today runs it as `python3 deny.py` and the settings file names the bare path; and wiring
+`quota.refusal()` into the two dispatch paths, which is what actually makes the fleet hold.
+
+**`conduct verify` works today and can be run by hand on any worktree**, which is deliberate: it is
+the half that had to exist before there was anything to verify, so that it was written against an
+adversary rather than around one.
 
 **`verify` is still not selectable as a tag, and the polling step DECIDED NOT TO ADD IT.**
 `global_settings.custom_tags` reads `["chromium"]` and there is no `worker__verify` row in `config`,

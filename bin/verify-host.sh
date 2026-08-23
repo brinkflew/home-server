@@ -2039,37 +2039,65 @@ if [ -z "$GREENBOOT" ]; then
 	fact agents_conduct_last_ok_at "${cd_ok:-}"
 	fact agents_conduct_age_s "${cd_age:-}" num
 
-	# THE STALENESS ARM IS THE ONE THAT MATTERS AND IT IS NOT THE OBVIOUS ONE. A
-	# fleet pacing itself against a six-hour-old window reading spends the cap
-	# rather than respecting it, and every other signal reads healthy while it
-	# does - conduct is up, phases complete, the percentage on screen is simply
-	# the last one it managed to see. So the age of the reading is graded before
-	# the reading is.
+	# A STATUS, NOT A PERCENTAGE, AND THAT IS A CORRECTION RATHER THAN A CHOICE.
+	# This block graded quota_5h_pct and quota_week_pct from the day it was
+	# written, against GET /api/oauth/usage - which does return exactly those, and
+	# which answers **403 permission_error: OAuth token does not meet scope
+	# requirement user:profile** to a `claude setup-token`, the only long-lived
+	# credential a headless server can hold. Measured from this host with the real
+	# token on 2026-08-23, before anything was built on it.
 	#
-	# NO DOLLAR CEILING, AND ITS ABSENCE IS A DECISION. The quota is a
-	# subscription session key paced against a 5-hour window and a weekly cap, so
-	# a price per token would have to be invented and would measure nothing that
-	# can stop the fleet. Percentages are the currency here.
-	q5=$(cget quota_5h_pct)
-	qw=$(cget quota_week_pct)
+	# What IS available is the API's own unified rate-limit status, emitted as a
+	# `rate_limit_event` on the phase's own model call: allowed, allowed_warning
+	# or rejected, per window, with the epoch the window clears. Account-wide,
+	# needing no second credential, and incapable of drifting from what the model
+	# saw because it IS what the model saw.
+	#
+	# THE HOLD EXPIRES BY ITSELF AND THERE IS NO STALENESS ARM ANY MORE. The old
+	# one existed because a percentage went out of date silently; a status carries
+	# `resets_at`, so the window either has rolled over or has not and the API said
+	# when. An age is still recorded because "conduct has not run a model phase in
+	# a week" is worth being able to see, but it grades nothing.
+	#
+	# NO DOLLAR CEILING, AND ITS ABSENCE IS STILL A DECISION. A price per token
+	# would have to be invented and would measure nothing that can stop the fleet.
+	q_status=$(cget quota_status)
+	q_window=$(cget quota_window)
+	q_resets=$(cget quota_resets_at)
 	q_age=$(cage quota_read_at)
-	q_worst=0
-	for q in "${q5:-0}" "${qw:-0}"; do
-		q=${q%%.*}
-		case "$q" in ''|*[!0-9]*) continue ;; esac
-		[ "$q" -le "$q_worst" ] || q_worst="$q"
-	done
-	if [ -z "$q5" ] && [ -z "$qw" ]; then
-		note agents.quota_headroom "conduct records no quota reading - nothing has spent any yet"
-	elif [ -n "$q_age" ] && [ "$q_age" -gt 3600 ]; then
-		warn agents.quota_headroom "the quota reading is ${q_age}s old, limit 3600s - conduct is pacing against a window it can no longer see, which looks exactly like a healthy fleet right up until the cap is gone"
-	elif [ "$q_worst" -ge 90 ]; then
-		warn agents.quota_headroom "quota use is ${q5:-?}% of the 5-hour window and ${qw:-?}% of the week, at or past the 90% floor conduct refuses to dispatch above - 'systemctl --user stop home-server-conduct' if it has not stopped itself"
-	else
-		ok agents.quota_headroom "quota use ${q5:-0}% of 5h, ${qw:-0}% of the week"
+	# Cleared when the window the API named has already rolled over. Same rule
+	# conduct applies, restated here rather than inferred, because the two must
+	# agree about whether the fleet is holding.
+	q_cleared=0
+	if [ -n "$q_resets" ]; then
+		q_reset_epoch=$(date -d "$q_resets" +%s 2>/dev/null || true)
+		[ -n "$q_reset_epoch" ] && [ "$(date +%s)" -ge "$q_reset_epoch" ] && q_cleared=1
 	fi
-	fact agents_quota_5h_pct "${q5:-}" num
-	fact agents_quota_week_pct "${qw:-}" num
+	case "$q_status" in
+		"")
+			note agents.quota_headroom "conduct has recorded no rate-limit status - no model phase has run yet, and there is nothing to read until one does" ;;
+		allowed)
+			ok agents.quota_headroom "the ${q_window:-model} window last reported allowed${q_age:+, ${q_age}s ago}" ;;
+		*)
+			if [ "$q_cleared" = 1 ]; then
+				ok agents.quota_headroom "the ${q_window:-model} window reported $q_status but has since cleared${q_resets:+ (at $q_resets)} - the fleet is dispatching again"
+			else
+				warn agents.quota_headroom "the ${q_window:-model} window reported $q_status${q_resets:+ and does not clear until $q_resets} - the fleet is holding, which is what it is meant to do; this is worth a look only if you did not expect the account to be near its limit"
+			fi ;;
+	esac
+	# NUMERIC FOR THE STORE, THE WORD FOR THE PERSON, which is the same split
+	# home_server_check_status already makes for pass/note/warn/fail. q_window is
+	# read only into the message above and never becomes a label: it is the
+	# forbidden-label family, by the phase_label precedent.
+	case "$q_status" in
+		"") q_rank="" ;;
+		allowed) q_rank=0 ;;
+		allowed_warning) q_rank=1 ;;
+		rejected) q_rank=2 ;;
+		*) q_rank=2 ;;
+	esac
+	fact agents_quota_rank "${q_rank:-}" num
+	fact agents_quota_cleared "$q_cleared" num
 	fact agents_quota_age_s "${q_age:-}" num
 
 	# 10800s is twice the phase scope's own RuntimeMaxSec. Past that the scope
