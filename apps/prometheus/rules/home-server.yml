@@ -620,7 +620,22 @@ groups:
         # returns the percentages and answers 403 to the only long-lived
         # credential a headless server can hold. The status is what the API emits
         # on the model call itself.
-        expr: home_server_agent_quota_status >= 2
+        #
+        # AND THE WINDOW MUST NOT HAVE CLEARED, which is not belt and braces: the
+        # status series records what the API last SAID, and it keeps saying it
+        # until the next model phase reports something else. So after a rejection
+        # expires - and it expires on its own, at a moment the API named - the
+        # gauge still reads 2 while the battery passes and conduct is dispatching
+        # again. Without the second clause this pages about a limit that came
+        # back. Caught by exercising the arm rather than by reading the rule.
+        #
+        # Both series are unlabelled, so `and` matches on the empty label set -
+        # the same note AgentPhaseStuck carries one rule down. A hold with no
+        # reset time makes the right-hand series absent and this silent; that
+        # case is covered by AgentCheckWarning, since the battery WARNs on it.
+        expr: >-
+          home_server_agent_quota_status >= 2
+          and home_server_agent_quota_resets_timestamp_seconds > time()
         for: 10m
         labels:
           severity: warning
