@@ -2111,8 +2111,17 @@ if [ -z "$GREENBOOT" ]; then
 	# secret existing is not a token that still authenticates - a setup-token can
 	# be revoked in a browser - so this is deliberately not called
 	# model_credential_valid. The live proof is a model phase running.
+	# `.UpdatedAt.Unix`, NOT `.UpdatedAt`, AND THAT IS THE WHOLE ARM. podman
+	# renders the plain field as `2026-08-23 08:01:57.298203118 +0000 UTC` - a
+	# numeric offset AND a zone name - which `date -d` rejects outright:
+	# "invalid date". The guard below is written to skip an unparseable value
+	# rather than compare an empty string, so the staleness arm read as PASS on a
+	# genuinely stale secret and could never have fired. Caught by touching .env
+	# and watching nothing happen, which is the only way this class shows up:
+	# every other arm worked, and the one the check exists for was inert.
 	cred_var=$(sed -n 's/^CLAUDE_RUNNER_OAUTH_TOKEN=//p' "$repo/.env" 2>/dev/null | tail -1)
-	cred_updated=$(podman secret inspect conduct-claude-token --format '{{.UpdatedAt}}' 2>/dev/null || true)
+	cred_updated=$(podman secret inspect conduct-claude-token --format '{{.UpdatedAt.Unix}}' 2>/dev/null || true)
+	case "$cred_updated" in ''|*[!0-9]*) cred_updated="" ;; esac
 	if [ -z "$cred_var" ]; then
 		note agents.model_credential "no CLAUDE_RUNNER_OAUTH_TOKEN in .env - the fleet has no model credential, so no model phase can run"
 		fact agents_model_credential 0 num
@@ -2120,7 +2129,7 @@ if [ -z "$GREENBOOT" ]; then
 		warn agents.model_credential "the token is in .env and no podman secret carries it - every model phase fails at 'podman run' before its container starts; run ./bin/sync-podman-secrets.sh"
 		fact agents_model_credential 0 num
 	else
-		cred_secret_epoch=$(date -d "$cred_updated" +%s 2>/dev/null || true)
+		cred_secret_epoch=$cred_updated
 		cred_env_epoch=$(stat -c %Y "$repo/.env" 2>/dev/null || true)
 		if [ -n "$cred_secret_epoch" ] && [ -n "$cred_env_epoch" ] &&
 			[ "$cred_secret_epoch" -lt "$cred_env_epoch" ]; then
