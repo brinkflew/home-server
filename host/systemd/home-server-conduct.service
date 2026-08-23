@@ -37,6 +37,13 @@ Documentation=file:/var/home-server/docs/agents.md
 # every ten minutes. Ordering is all that is wanted: conduct polls, so a control
 # plane that is down is a cycle that finds nothing, not a crash.
 After=windmill-server.service
+# THE RUNNER'S MODEL CREDENTIAL, put into podman's secret store from the rendered
+# .env before anything can dispatch a phase that needs it. Wants= is correct here
+# and is not the trap the comment below names: that one is about pulling a whole
+# service stack up behind something somebody deliberately stopped, and this is a
+# oneshot that writes one secret and exits.
+After=home-server-conduct-secret.service
+Wants=home-server-conduct-secret.service
 StartLimitIntervalSec=3600
 StartLimitBurst=20
 

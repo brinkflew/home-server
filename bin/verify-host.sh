@@ -2096,6 +2096,42 @@ if [ -z "$GREENBOOT" ]; then
 		rejected) q_rank=2 ;;
 		*) q_rank=2 ;;
 	esac
+	# --------------------------------------------------------------------------
+	# The model credential, and the one thing a podman secret cannot prove
+	# --------------------------------------------------------------------------
+	# THREE ARMS, AND THE THIRD IS WHY THIS EXISTS. That a token is in .env and
+	# that a secret of the right name exists are both cheap to check and neither
+	# is interesting on its own. What no other signal on this host can see is the
+	# secret being OLDER than the .env it came from: the phases then authenticate
+	# with the previous token while conduct paces with the new one, every
+	# container is healthy, every unit is active, and the only symptom is a model
+	# call failing for a reason that names none of this.
+	#
+	# NAMED FOR WHAT IT CAN PROVE, on agents.publish_configured's precedent. A
+	# secret existing is not a token that still authenticates - a setup-token can
+	# be revoked in a browser - so this is deliberately not called
+	# model_credential_valid. The live proof is a model phase running.
+	cred_var=$(sed -n 's/^CLAUDE_RUNNER_OAUTH_TOKEN=//p' "$repo/.env" 2>/dev/null | tail -1)
+	cred_updated=$(podman secret inspect conduct-claude-token --format '{{.UpdatedAt}}' 2>/dev/null || true)
+	if [ -z "$cred_var" ]; then
+		note agents.model_credential "no CLAUDE_RUNNER_OAUTH_TOKEN in .env - the fleet has no model credential, so no model phase can run"
+		fact agents_model_credential 0 num
+	elif [ -z "$cred_updated" ]; then
+		warn agents.model_credential "the token is in .env and no podman secret carries it - every model phase fails at 'podman run' before its container starts; run ./bin/sync-podman-secrets.sh"
+		fact agents_model_credential 0 num
+	else
+		cred_secret_epoch=$(date -d "$cred_updated" +%s 2>/dev/null || true)
+		cred_env_epoch=$(stat -c %Y "$repo/.env" 2>/dev/null || true)
+		if [ -n "$cred_secret_epoch" ] && [ -n "$cred_env_epoch" ] &&
+			[ "$cred_secret_epoch" -lt "$cred_env_epoch" ]; then
+			warn agents.model_credential "the podman secret predates the last .env render by $(( (cred_env_epoch - cred_secret_epoch) / 60 ))m - phases would authenticate with the old token while conduct paces with the new one, and nothing else here would say so; run ./bin/sync-podman-secrets.sh"
+			fact agents_model_credential 0 num
+		else
+			ok agents.model_credential "a model credential in .env and a podman secret no older than it - neither of which proves the token still authenticates"
+			fact agents_model_credential 1 num
+		fi
+	fi
+
 	fact agents_quota_rank "${q_rank:-}" num
 	fact agents_quota_cleared "$q_cleared" num
 	fact agents_quota_age_s "${q_age:-}" num
