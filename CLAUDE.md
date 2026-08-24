@@ -357,6 +357,9 @@ signal read green.
   stops taking OS security updates indefinitely while every signal reads green.
 
 ### Checks that could not see the thing they measured
+- **`conduct verify` cannot tell a change that broke the gate from a gate that was already broken**,
+  and blames the phase for both. Proved by a refusal on a test GitHub Actions calls green on the
+  identical base. The pinned base and the artifact rescue both earned themselves in the same run.
 - A check that counts the unit executing it blocks the remedy for its own condition.
 - `update.policy_count` spent three minutes a run asking every registry a local question - and read
   `$repo` several hundred lines before it was assigned, reporting "not measured".

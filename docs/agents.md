@@ -1035,6 +1035,14 @@ the prompt, before it commits. The cheap refusals that catch it getting that wro
 the reasons written there - the namespace is conduct's alone, a ref costs nothing, it is evidence
 after the fact - and a ship phase that iterates will make more of them than a `probe` ever did.
 
+**Nothing reads the base's own gate result, so `verify` blames the phase for a gate that was
+already red.** It runs `make check` on base+commit and has no measurement of the base alone - see
+`docs/known-state.md`, where the first real ship run was refused for a test GitHub Actions calls
+green on the identical base commit. The obvious fix, running the gate twice per dispatch, doubles
+the cost of every run to answer a question that is usually "yes"; the shape worth having is a
+recorded result that falls out of something already running, and nothing here runs the gate on
+`main` on a schedule.
+
 **The Windmill run form renders `task` as a single-line input.** Whether Windmill has a textarea
 format is unmeasured, and guessing a schema key is how the `continue_on_disapprove_timeout` drift
 happened. `conduct run --task-file` is the path that does not care.

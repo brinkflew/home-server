@@ -358,6 +358,25 @@ nothing points at is one nobody reads.
 
 ## Checks that could not see the thing they measured
 
+- **`conduct verify` cannot tell a change that broke the gate from a gate that was already broken,
+  and it reports both as the phase's fault.** It runs the full `make check` on base+commit in a
+  pristine tree and has no reading of the base ALONE, so the two causes are indistinguishable in the
+  only output it produces. Measured on the fleet's first real ship run, 2026-08-24: refused for
+  `e2e/tests/records/file-download.spec.ts`, which **GitHub Actions reports green on the identical
+  base commit** - including the very commit that added the test - and whose subject is a
+  `Content-Disposition` filename that a diff of one file under `api/tests/` cannot reach. The
+  approval card said the phase failed. It did not; the fleet runner and GitHub Actions disagree
+  about that test, and nothing in this design can say so. What would close it is a recorded gate
+  result for the base, and the cost is what makes it hard: re-running the gate per dispatch doubles
+  every run, so it is only cheap as a by-product of something already running.
+- **The pinned base held on its first live exposure.** `origin/main` advanced from `e2406a4f` to
+  `6268220f` while that same run was in flight, and the diff stayed measured against the base the
+  phase was dispatched with. That is the trap `run.base_sha` exists for, and it is the first time it
+  had a chance to fire.
+- **`verify.preserve` earned itself on first use.** The e2e refusal above left 4.8 MB of `trace.zip`,
+  `video.webm` and `error-context.md` beside the log, out of a tree `reconcile` would have reaped
+  two hours later. Without it the finding above would have been a one-line assertion message and the
+  disagreement with CI would have been unprovable.
 - **A CHECK THAT COUNTS THE UNIT EXECUTING IT WILL BLOCK THE REMEDY FOR ITS OWN CONDITION**, and
   `host.failed_units` did exactly that. `greenboot-healthcheck.service` is what execs
   `verify-host.sh --greenboot`, and a failed unit stays failed for the rest of the boot - so one red
