@@ -171,12 +171,19 @@ fi
 # stream-json under --print and the CLI refuses without it, which is where the
 # rate_limit_event conduct paces on comes from; --setting-sources and
 # --strict-mcp-config are what stop the branch loading its own hooks and MCP
-# servers; --tools is what disables every tool; --max-budget-usd is the only
-# ceiling anything here puts on spend. `--help` costs no model call and no
-# network.
+# servers; --tools is what names the built-in set a phase may use; --json-schema
+# is what makes the verdict a structure rather than prose; --permission-mode is
+# what lets a phase edit a file at all without a prompt nobody can answer; and
+# --max-budget-usd is the only ceiling anything here puts on spend. `--help`
+# costs no model call and no network.
+#
+# THE ONE THIS CANNOT CATCH is a flag that survives with narrower semantics -
+# --permission-mode dropping a choice, or --tools rejecting a comma list. The
+# help text names neither, so those are found by running a phase, which is why
+# `probe` and the exit 78/79/80 ladder exist in front of the expensive one.
 if help_text=$(runner claude --help 2>&1); then
 	missing=""
-	for flag in --print --output-format --verbose --settings --setting-sources 		--strict-mcp-config --tools --max-budget-usd; do
+	for flag in --print --output-format --verbose --settings --setting-sources 		--strict-mcp-config --tools --max-budget-usd --permission-mode --json-schema; do
 		printf '%s' "$help_text" | grep -q -- "$flag" || missing="$missing $flag"
 	done
 	if [ -z "$missing" ]; then
@@ -203,6 +210,8 @@ fi
 # is that THIS IMAGE'S git accepts an identity from the environment at all;
 # whether conduct passes the right one is tests/test_phase.py's question, in the
 # repository that decides it.
+# shellcheck disable=SC2016  # $(git log) must run in the CONTAINER, against the
+# repository this leg just made - expanding it here would read this checkout.
 if runner sh -c 'cd /tmp && rm -rf idt && mkdir idt && cd idt && git init -q . &&
     GIT_AUTHOR_NAME=smoke GIT_AUTHOR_EMAIL=smoke@invalid \
     GIT_COMMITTER_NAME=smoke GIT_COMMITTER_EMAIL=smoke@invalid \
