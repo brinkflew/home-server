@@ -1402,6 +1402,15 @@ recorded - subagents multiply spend under one ceiling and inherit a policy nothi
 them against - and a phase is the only unit this design can bound, price, place in a slice and
 observe. It is also what makes "Planning" a stage with a start and an end rather than a mood.
 
+**What it costs, measured rather than guessed.** The ceiling started at $2.00 and was not enough
+twice: the second attempt ran 41 turns, read 1.7 million cached tokens and spent $2.25 without
+answering - and it reached `StructuredOutput` twice before the ceiling cut it off, so the money went
+on the work rather than on a loop. It is $5.00 now, against ship's $15.00. **What made it expensive
+is worth knowing**: 27 shell calls against 3 uses of the knowledge graph, on a phase whose entire
+advantage is the graph. The MCP server had connected and offered all 37 tools; the model reached for
+grep anyway. The prompt now says which questions each answers and that running out of budget
+produces nothing at all rather than a partial plan.
+
 **It cannot write, and that is said twice on purpose.** Withholding `Write` and `Edit` is half of it;
 `policy.ALLOW_BASH_READONLY` is the other half, because `cp`, `mv` and `sed -i` are a shell away from
 anybody who only lost an editor. That is what makes sharing the ship worktree safe rather than merely

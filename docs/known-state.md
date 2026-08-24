@@ -1983,6 +1983,11 @@ answering; four had never served a single query and were deleted.
   the result event's `subtype` is the only thing that tells them apart. Not reading it meant every
   model failure reached a person as a bare exit code. Measured the expensive way: a plan phase with
   no graph fell back to reading files and spent $2.14 over 32 turns without answering.
+- **A planning phase costs more than a fifth of what doing the work costs.** $2.00 was not enough
+  twice; the second attempt had a working graph and still ran 41 turns, 1.7M cached tokens and $2.25
+  without answering. 27 shell calls against 3 uses of the knowledge graph - on a phase whose whole
+  advantage is the graph, with the MCP server connected and all 37 tools offered. **The model
+  reaching for grep is the expense**, and it is a prompt problem rather than a plumbing one.
 
 ## Windmill will not make a suspend conditional the obvious way
 
