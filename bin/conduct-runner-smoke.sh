@@ -34,6 +34,7 @@
 # ==============================================================================
 set -euo pipefail
 
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 IMAGE="${CONDUCT_RUNNER_IMAGE:-localhost/home-server/conduct-runner:next}"
 FLEET_ROOT="${CONDUCT_FLEET_ROOT:-/var/home-server/cache/conduct}"
 NET="net-conduct-smoke"
@@ -137,8 +138,24 @@ else
 fi
 
 # `claude --version` is the assertion this whole :next/:latest dance exists for.
+#
+# AND IT IS COMPARED AGAINST THE PIN, read out of the Dockerfile rather than
+# repeated here - a second literal is a second thing to forget. The pin exists
+# because five measured CLI behaviours are load-bearing (see the ARG's own
+# comment), and an image whose npm resolved something else is an image those
+# measurements no longer describe. Without this the pin is decoration: the build
+# would float exactly as before and nothing would say so.
+want_claude=$(sed -n 's/^ARG CLAUDE_CODE_VERSION=//p' \
+	"$ROOT/apps/conduct-runner/Dockerfile" 2>/dev/null | tail -1)
 if v=$(runner claude --version 2>&1); then
-	ok "claude answers: $v"
+	got_claude=${v%% *}
+	if [ -z "$want_claude" ]; then
+		bad "claude answers $got_claude, but the Dockerfile carries no ARG CLAUDE_CODE_VERSION to check it against"
+	elif [ "$got_claude" = "$want_claude" ]; then
+		ok "claude is $got_claude, which is the pin"
+	else
+		bad "claude is $got_claude but the Dockerfile pins $want_claude - the image did not build from this checkout"
+	fi
 else
 	bad "claude does not run: $v"
 fi
@@ -337,9 +354,19 @@ say "The deny hook, which fails open when it is missing"
 # The policy is conduct's artifact rather than the image's, and it was staged at
 # the top with the other mount sources. A host without /var/agents has nothing to
 # test here and says so; a host WITH it and no policy is a real fault.
+# THE COMMAND COMES OUT OF settings.json, WHICH IS THE WHOLE POINT OF THIS LEG.
+# Until 2026-08-24 every assertion below ran `python3 /opt/conduct/deny.py`, and
+# settings.json names the BARE PATH - so the shebang, the exec bit, whether the
+# read-only mount is exec-capable and whether SELinux lets container_t execute a
+# container_file_t file were all untested, on the one code path whose failure
+# mode is to fail OPEN. sha256sum passes on a file that lost its exec bit: the
+# content is perfect and the hook still never runs.
+hook_cmd=$(jq -r '[.hooks.PreToolUse[].hooks[].command] | unique | .[]' \
+	"$FLEET_ROOT/policy/settings.json" 2>/dev/null)
+
 hook_says() {
 	local label="$1" payload="$2" want="$3" got
-	got=$(printf '%s' "$payload" | runner python3 /opt/conduct/deny.py 2>/dev/null |
+	got=$(printf '%s' "$payload" | runner "$hook_cmd" 2>/dev/null |
 		python3 -c 'import json,sys
 raw = sys.stdin.read().strip()
 print(json.loads(raw)["hookSpecificOutput"]["permissionDecision"] if raw else "none")' 2>/dev/null)
@@ -353,6 +380,22 @@ print(json.loads(raw)["hookSpecificOutput"]["permissionDecision"] if raw else "n
 if [ ! -r "$FLEET_ROOT/policy/deny.py" ]; then
 	note "no policy staged at $FLEET_ROOT/policy - install conduct, or run 'conduct policy'"
 else
+	if [ -z "$hook_cmd" ]; then
+		bad "settings.json names no PreToolUse hook command - nothing installs the guardrail"
+	elif [ "$(printf '%s\n' "$hook_cmd" | wc -l)" -ne 1 ]; then
+		bad "settings.json names more than one hook command, so this leg tests only some of them:"
+		printf '%s\n' "$hook_cmd" | sed 's/^/        /'
+	else
+		ok "settings.json names one hook command: $hook_cmd"
+	fi
+	# The exec bit specifically, because it is the one thing SHA256SUMS cannot see
+	# and the one that makes the hook fail open rather than loudly.
+	if runner test -x "$hook_cmd"; then
+		ok "$hook_cmd is executable inside the container"
+	else
+		bad "$hook_cmd is NOT executable inside the container - the hook would fail OPEN"
+	fi
+
 	hook_says "the PR gate's bypass string" \
 		'{"tool_name":"Bash","tool_input":{"command":"PR_GATE_BYPASS=1 gh pr create"}}' deny
 	hook_says "a write to .claude/settings.json" \

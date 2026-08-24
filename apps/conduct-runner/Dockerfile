@@ -64,7 +64,22 @@ COPY --from=docker.io/oven/bun:1 /usr/local/bin/bun /usr/local/bin/bun
 RUN ln -sf /usr/local/bin/bun /usr/local/bin/bunx
 
 # The line the smoke test exists for.
-RUN npm install -g @anthropic-ai/claude-code \
+#
+# PINNED TO AN EXACT VERSION, NOT A DIST-TAG. Both tags float and they do not even
+# agree: `npm view` reports latest 2.1.241 against stable 2.1.231, ten patches
+# apart, so pinning to either would reintroduce exactly the drift the pin exists
+# to stop. 2.1.240 is what this image was measured with.
+#
+# WHAT A BUMP OBLIGES A PERSON TO RE-MEASURE, because none of it can be asserted
+# by a script and all of it is load-bearing:
+#   - a --settings hook whose command cannot be found lets the tool call PROCEED
+#   - a hook outranks --allowed-tools, and a deny outranks a project allow
+#   - `-p` SILENTLY ignores a settings file that fails validation
+#   - --setting-sources '' loads nothing while --settings still installs the hook
+#   - --output-format stream-json requires --verbose under --print, and refuses
+#     outright without it
+ARG CLAUDE_CODE_VERSION=2.1.240
+RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
  && npm cache clean --force
 
 # BROWSER LIBRARIES, NOT BROWSER BINARIES. @playwright/test is pinned ^1.60.0 in
@@ -105,6 +120,7 @@ ENV HOME=/tmp/home \
     UV_CACHE_DIR=/opt/uv-cache \
     BUN_INSTALL_CACHE_DIR=/opt/bun-cache \
     NPM_CONFIG_UPDATE_NOTIFIER=false \
+    DISABLE_AUTOUPDATER=1 \
     NPM_CONFIG_FUND=false \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN mkdir -p /opt/pw-browsers /opt/uv-cache /opt/bun-cache
