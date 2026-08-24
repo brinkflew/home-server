@@ -845,30 +845,139 @@ good rather than because anything was skipped. `rev-list --count` sees 1, which 
 "committed nothing" refusal keys on. One gate run, zero quota, and the whole chain from phase to
 draft pull request is exercised end to end.
 
-## What is deliberately not built yet
+## The phase with a task in it
 
-**The `ship` phase.** `hello` landed on 2026-08-24 and is the model-pipe equivalent of `probe`: the
-smallest thing that makes the call for real. It runs with `--tools ''`, so it cannot edit, cannot
-run Bash and cannot reach the worktree; it commits nothing, so it goes through `f/agents/phase` and
-never touches the approval path. What it proves is the pipe - that the podman secret authenticates,
-that the pinned CLI accepts the flag set, that a `SessionStart` hook fires under `-p`, and that
-`conduct/quota.py` meets live data. What is still to build is the phase with a task in it: the ship
-prompt, the verdict schema and whether `--json-schema` is the right enforcement, and the
-`--permission-mode` value, which `hello` deliberately does not set because `--tools ''` makes every
-mode indistinguishable.
+**`ship` was a deterministic gate run until 2026-08-24, wearing the name of the thing it stood in
+for.** Its command was `make install && make lint type-check unit-test`. Those targets have not gone
+away so much as moved inside: the model runs them now, as often as it needs, to iterate. The
+argument that makes that safe is the one the descriptor always carried - **the phase-side gate
+attests nothing**, because the tree can lie and the meaning of `make check` is agent-editable
+through `web/package.json`, so running it in the phase buys iteration and running it once in
+conduct's pristine tree buys evidence.
 
-**The quota half is no longer the blocker, and what unblocked it was measuring the thing everyone
-had assumed.** `conduct/quota.py` reads the API's own unified rate-limit status - `allowed`,
-`allowed_warning`, `rejected`, per window, with the epoch it clears - out of the `rate_limit_event`
-that `--output-format stream-json` emits on the phase's own model call. The percentages this
-section promised for months are genuinely unreachable from here: `GET /api/oauth/usage` returns
-them and answers 403 to a `claude setup-token`, which is the only long-lived credential a headless
-server can hold. So the marker keys, `agents.quota_headroom`, the collector series and the alert
-all moved from a percentage to a status in one change, and the sentences that were about to become
-lies are true instead. See "The marker" above and `conduct/quota.py`.
+**There was no route by which work could arrive.** The flow schema carried `project`, `phase`,
+`worktree` and `ref` and nothing else, and `poll.envelope` read exactly those four. A fifth field
+now carries the task, from the Windmill run form or from `conduct run --task-file`, into `prompt.md`
+in the phase's own policy directory - which means it is hashed into `SHA256SUMS` and the guard that
+was already at the head of every phase proves the phase is running **this** run's task and not the
+one left behind by whatever ran last.
 
-**That list used to be nine items long and is now one.** Recorded rather than deleted, because the
-shape of it is the useful part - every entry was a thing that would have failed silently:
+**Which phases take a task is the template's own question, and there is deliberately no list.**
+`phase.needs_task` reads `conduct/prompts/<phase>.md` for `{{TASK}}`. A second list naming them
+would drift in the silent direction - a phase added to `prompts/` and forgotten in the list gets
+dispatched with an unsubstituted marker in front of the model - and `hello`, which has a prompt and
+takes no task, is exactly the case such a list would have got wrong first.
+
+**It refuses in both directions, and the second one is why it is code.** A template wanting a task
+and given none is loud however it is handled: the model reads `{{TASK}}` and says so. A task given
+to a phase that cannot read it is **silent** - the run proceeds, the model never sees the work, and
+the only evidence is an expensive transcript of it doing something else. It is refused in
+`poll.envelope` as well as in `stage_policy`, which is not belt and braces: without the first one a
+ship step dispatches, spends fifteen minutes on `make install`, and discovers the missing task at
+the most expensive moment available.
+
+### The fleet had no git identity, and a model's first commit would have failed
+
+`/usr` is read-only so there is no system config, the runner's `HOME` is an ephemeral tmpfs so there
+is no global one, and a repo-local config would write into the very tree `conduct/verify.py` judges.
+So `git commit` would have failed with *"Please tell me who you are"* - after every minute of the
+work was already spent, and with the whole run lost, because verify refuses a phase that committed
+nothing. `probe` never surfaced it because it sidesteps it inline with `-c user.email=`, and that
+stays exactly as it is: it is the one phase that can tell a git failure apart from a model one.
+
+**All four variables or none.** git wants the committer pair as well as the author pair, and setting
+two of the four fails with the identical unhelpful message that setting none does - so a
+half-configured identity is indistinguishable from no identity. `config.GIT_IDENTITY` carries them
+and `phase.command` emits them **after** the descriptor's own env, because podman takes the last
+`-e` for a repeated name: the order is what stops a project changing who its commits are attributed
+to. `bin/conduct-runner-smoke.sh` proves the image's git accepts an identity from the environment
+at all.
+
+### An allow list, which `tests/test_policy.py` said there must never be
+
+That assertion was right for as long as every model phase ran with `--tools ''`: nothing needed
+allowing, so anything in the list could only widen. In `-p` **there is nobody to answer a prompt**,
+so a call with no allow entry is simply refused - a ship phase cannot run `make` without one and
+would burn its budget discovering that.
+
+**What survives of the old rule is the part that mattered, and both halves are asserted.** Every
+entry in `policy.ALLOW_BASH` names `Bash`, so nothing in it can reach a path at all - the
+file-writing half is governed by `--permission-mode acceptEdits` and by the refuse-derived deny
+rules. And **deny wins wherever the two overlap**, which is the CLI's own rule for PreToolUse:
+`Bash(git:*)` allowed beside `Bash(git push:*)` denied resolves the safe way round.
+
+**AND THE LIST IS NOT A BOUNDARY.** `make`, `python3`, `node` and `uv` are general-purpose
+interpreters; a Makefile target runs anything and one `python3 -c` defeats every other entry. It
+bounds typos and drift, and it makes an unusual command land in the result event's
+`permission_denials` where it is a signal worth having. The boundary is `conduct/verify.py`, on the
+host, afterwards - the same sentence `DENY_COMMAND` has always carried, and it is written into the
+module because the next reader will assume otherwise.
+
+`--permission-mode acceptEdits` is the value `hello` deliberately did not set, because `--tools ''`
+made every mode indistinguishable. `acceptEdits`, `plan` and `manual` are the measured ones;
+**`auto` and `dontAsk` have semantics stated nowhere**, and shipping one would be exactly the guess
+the flag was deferred to avoid. `bypassPermissions` is the one mode that turns `permissions.deny`
+off, `DENY_COMMAND` refuses the model for typing it, and `tests/test_model.py` asserts conduct does
+not type it either.
+
+**`--tools` names seven and omits three on purpose.** No `WebFetch` or `WebSearch`: the container
+has DNS and egress, a code task does not need the web, and `hooks/deny.py` sees a Bash call and a
+file write and nothing else - a fetch is outside what the in-container guardrail can observe at all.
+No `Task`: subagents multiply spend under one budget ceiling and inherit a policy nothing here has
+measured them against. No `NotebookEdit`: nothing in this project is a notebook.
+
+**The accepted risk is now larger than it was and is restated rather than left where it was
+written.** The model credential arrives as `--secret ...,type=env` and therefore sits in
+`/proc/1/environ` inside the container - readable by anything the phase runs, which as of this
+change includes arbitrary Bash rather than nothing at all. What bounds it is unchanged and is
+structural: the container drops every capability, mounts a read-only rootfs, sits on its own
+`isolate=true` network, holds no GitHub credential, and the token it does hold buys model calls
+against a subscription that is already paying for the phase.
+
+### The verdict carries only what git cannot measure
+
+`--json-schema` makes the phase's final message a structure: `status` (`done`/`partial`/`blocked`),
+`summary`, `reasoning`, `concerns[]`, `blocked_reason`. **The omission is the design.** Commit
+count, changed files, refused and flagged paths and the test-line delta all come out of
+`verify.inspect` on a repository the phase could not write, so a field here carrying any of them
+would put a number a reader might believe beside a number that is actually evidence.
+
+**`concerns` is the field this exists for.** A phase that half-did the work and said so is worth
+more at an approval gate than one that claims success, and there was nowhere for it to say it -
+verify reads nothing the phase reports, by design, and the card's other half is mechanical.
+
+**It is labelled where it is read**, not in a comment: the card's section says its own account,
+nothing here was verified, and the verification above read none of it. The Evidence block that
+follows still says nothing the phase reported was read, which stays true and is now visibly true.
+
+**Stored raw, parsed only on the way out.** `quota.observe` runs from a `finally` and must not
+raise, so parsing there would turn a rendering problem into a lost record. A model fallback
+retracts structured output - the pinned binary carries the string - so a plain-text answer is a
+thing that happens: the card shows it verbatim and says the schema was not followed. **An absent
+verdict renders as a line saying it is absent**, by the rule the dashboard's dead man's switch
+established - hiding a missing signal hides that it is missing.
+
+**The schema is a staged file, not an argument.** `--json-schema` takes inline JSON and no path, so
+the obvious spelling puts it on conduct's own command line where `sha256sum -c` cannot see it. It is
+staged as `verdict.json` and read with `$(cat)` inside the container instead, which puts it behind
+the digest guard that was already there.
+
+**`make install || exit $?` rather than `&&`.** With `&&` a failed install skips the model call,
+leaves no `SessionStart` sentinel, and is therefore reported as **exit 80** - the number that means
+the settings file was silently ignored. A dependency failure and a disarmed guardrail need
+completely different responses and would have worn one number.
+
+### What that list was, and why it is kept
+
+**The quota half was the last item to fall, and what unblocked it was measuring the
+thing everyone had assumed.** `conduct/quota.py` reads the API's own unified
+rate-limit status out of the `rate_limit_event` that `--output-format stream-json`
+emits on the phase's own model call, because `GET /api/oauth/usage` returns the
+percentages this section promised for months and answers 403 to a `claude
+setup-token`. See "The marker" above and `conduct/quota.py`.
+
+**It ran to nine items, then one, and is now none.** Recorded rather than deleted, because the shape
+of it is the useful part - every entry was a thing that would have failed silently:
 
 - **The prompt's route in.** It arrives on **stdin**, `< /opt/conduct/prompt.md`, so the task text
   never becomes a shell word, never reaches argv and never appears in `/proc/<pid>/cmdline`. It is
@@ -913,3 +1022,19 @@ So the lane is spare capacity and bookkeeping, `agents.worker_lanes` keeps asser
 `verify` alone - which stays worth knowing, and stays a row in Postgres rather than the quadlet -
 and the tag lands when something genuinely needs serialising at the Windmill layer rather than at
 conduct's.
+
+## What is deliberately not built yet
+
+**No gate runs after the model call, and adding one would break a good run.** `make lint` is
+`eslint . --fix` and `make format` mutates, so a gate run after the model's last commit leaves the
+tree dirty - and `verify.clean()` refuses a dirty tree. The model runs those targets itself, from
+the prompt, before it commits. The cheap refusals that catch it getting that wrong are already in
+`verify.inspect` and run before the expensive gate does.
+
+**Nothing reaps a branch** whose approval was declined or timed out. Accepted in `publish.py` for
+the reasons written there - the namespace is conduct's alone, a ref costs nothing, it is evidence
+after the fact - and a ship phase that iterates will make more of them than a `probe` ever did.
+
+**The Windmill run form renders `task` as a single-line input.** Whether Windmill has a textarea
+format is unmeasured, and guessing a schema key is how the `continue_on_disapprove_timeout` drift
+happened. `conduct run --task-file` is the path that does not care.
