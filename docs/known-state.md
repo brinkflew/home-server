@@ -1209,6 +1209,26 @@ and `(False, 'db')` under the narrow set for the runner's.
 
 ## cgroup limits, and the controller that was not delegated
 
+- **`CPUQuota` protects the host and tells the guest nothing, which made the gate 5x slower and
+  reproducibly WRONG.** `app-agents.slice` caps the fleet at `CPUQuota=400%` on a 12-core host, and
+  that half was right and deliberate. But a container is not CPU-namespaced, so `nproc` and node's
+  `os.availableParallelism()` inside a phase both read **12** while the cgroup will only ever
+  deliver **4** - and every tool that sizes a worker pool from those (vitest, playwright, esbuild,
+  tsc, any `make -j$(nproc)`) starts three times the workers the quota can run. The kernel then
+  enforces the difference by throttling all of them. Measured, same suite, same tree:
+  **`nproc=12` -> 363.54s with one test FAILED; `nproc=4` -> 69.45s, all 4,457 green**, three runs
+  each way. Three times the workers should raise the per-worker sums about threefold; they were
+  **nineteen** times higher, so each worker was also six times slower. **The cost was not the wall
+  clock**: the failure was a component spec timing out at 5000ms that takes 1.8s alone, so
+  `conduct/verify.py` refused a correct change and reported it as the phase's fault. A slow gate is
+  an annoyance; a wrong one is worse than no gate. Fixed with `AllowedCPUs=0-3` **on the slice**, so
+  the number sits three lines from the quota it must agree with rather than in the other
+  repository - and `cpuset` had to be confirmed delegated first, because that is exactly how `io`
+  was inert for months. `agents.slice_limits` reads it back as a sixth control.
+- **`--cpus=4` would NOT have fixed it and is the flag everybody reaches for.** Measured on this
+  host: `--cpus=4` gives `os.availableParallelism()` 4 and leaves `nproc` at **12**, because
+  coreutils reads the affinity mask and libuv reads the cgroup quota. `--cpuset-cpus=0-3` fixes
+  both. Anything shelling out for `nproc` keeps oversubscribing under the obvious flag.
 - **`io` is NOT delegated to the user manager by default; `cpu memory pids` are.** An undelegated
   controller is accepted silently and does nothing, so every `IOWeight=` and `IOReadBandwidthMax=`
   in `stacks/` was inert - the control aimed squarely at the cause above was the one not working.

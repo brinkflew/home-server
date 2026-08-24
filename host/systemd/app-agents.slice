@@ -63,6 +63,37 @@ MemoryHigh=3584M
 MemoryMax=4608M
 CPUWeight=30
 CPUQuota=400%
+# THE OTHER HALF OF THAT QUOTA, missing for as long as the quota existed.
+#
+# CPUQuota PROTECTS THE HOST AND TELLS THE GUEST NOTHING. A container is not
+# CPU-namespaced - docs/known-state.md already records it for Chromium and node -
+# so `nproc` and node's os.availableParallelism() inside a phase both report the
+# host's 12 while this cgroup will only ever deliver 4. Every tool that sizes a
+# worker pool from those, which is vitest, playwright, esbuild, tsc and any
+# `make -j$(nproc)`, then starts three times the workers the quota can run and
+# the kernel enforces the difference by throttling all of them.
+#
+# MEASURED ON 2026-08-24, the same web unit suite in the same tree, five runs:
+#
+#   nproc=12   4457 tests, 1 FAILED    363.54s, 340.17s   environment 1623.12s
+#   nproc=4    4457 tests, 0 failed     69.45s,  70s, 71s environment   82.62s
+#
+# FIVE TIMES FASTER AND GREEN. Three times the workers should raise those
+# per-worker sums about three times; they were nineteen times higher, so each
+# worker was also running six times slower. The pinned runs throttle twice, for
+# 57ms total.
+#
+# AND THE COST WAS NOT THE WALL CLOCK. The failure was one component spec timing
+# out at 5000ms that takes 1.8s alone, so conduct/verify.py refused a correct
+# change and reported it as the phase's fault - twice, reproducibly. A gate that
+# is slow is an annoyance; a gate that is wrong is worse than no gate.
+#
+# HERE RATHER THAN ON THE PHASE SCOPE, so this number sits three lines from the
+# quota it has to agree with instead of in conduct's descriptor in the other
+# repository, with nothing checking that the two match. Every member inherits
+# it, which is right: the Windmill units are already inside this quota, so
+# pinning changes WHERE they run rather than how much they get.
+AllowedCPUs=0-3
 IOWeight=20
 # NO LONGER THE NUMBER WITH NOTHING BEHIND IT. It was, and the comment said so
 # until a real gate run could be measured: on 2026-08-20 a full upskald gate in

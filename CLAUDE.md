@@ -587,6 +587,9 @@ signal read green.
   answered ICMP and completed TCP handshakes.
 
 ### cgroup limits, and the controller that was not delegated
+- **`CPUQuota` protects the host and tells the guest nothing.** `nproc` reads 12 inside a cgroup that
+  delivers 4, so every worker pool oversubscribes 3x - measured at 5x slower and a reproducibly
+  refused good change. `AllowedCPUs` is the half that was missing, and `--cpus` does not fix `nproc`.
 - `io` is **not** delegated to the user manager by default, so every `IOWeight=` in `stacks/` was
   inert - the control aimed at the cause above was the one not working. Verify; the failure is silence.
 - Every service quadlet carries `MemoryHigh`/`MemoryMax`; the Tdarr units add CPU and IO weights.

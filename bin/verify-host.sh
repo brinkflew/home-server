@@ -1853,10 +1853,20 @@ if [ -z "$GREENBOOT" ]; then
 		[ "$(cat "$agents_slice/cpu.max" 2>/dev/null)" != "max 100000" ] || unlimited="$unlimited CPUQuota"
 		[ "$(cat "$agents_slice/io.weight" 2>/dev/null)" != "default 100" ] || unlimited="$unlimited IOWeight"
 		[ "$(cat "$agents_slice/pids.max" 2>/dev/null)" != max ] || unlimited="$unlimited TasksMax"
+		# cpuset SPELLS UNLIMITED AS EMPTY, which is the one spelling that also
+		# means "inherited" - so cpuset.cpus is read rather than
+		# cpuset.cpus.effective, and an empty answer here is AllowedCPUs absent
+		# from the slice rather than a controller that is not delegated.
+		#
+		# IT IS THE ONE OF THE SIX WHOSE ABSENCE IS NOT A CONTAINMENT FAILURE.
+		# The other five leave the fleet unbounded; this one leaves it bounded
+		# and LYING TO ITSELF, which cost a 5x slowdown and a reproducibly
+		# refused good change before anybody looked. See the unit file.
+		[ -n "$(cat "$agents_slice/cpuset.cpus" 2>/dev/null)" ] || unlimited="$unlimited AllowedCPUs"
 		fact agents_slice_unlimited "$(printf '%s' "$unlimited" | wc -w)" num
 		fact agents_slice_memory_max "$(cat "$agents_slice/memory.max" 2>/dev/null)"
 		if [ -z "$unlimited" ]; then
-			ok agents.slice_limits "app-agents.slice is bounded on all five controls"
+			ok agents.slice_limits "app-agents.slice is bounded on all six controls, and the guest sees the CPU count it will actually get"
 		else
 			warn agents.slice_limits "app-agents.slice reads UNLIMITED for:$unlimited - the fleet is running with systemd's defaults, not host/systemd/app-agents.slice; check the unit is symlinked into ~/.config/systemd/user/ and that the controller is delegated"
 		fi
