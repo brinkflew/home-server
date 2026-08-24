@@ -366,9 +366,38 @@ nothing points at is one nobody reads.
   base commit** - including the very commit that added the test - and whose subject is a
   `Content-Disposition` filename that a diff of one file under `api/tests/` cannot reach. The
   approval card said the phase failed. It did not; the fleet runner and GitHub Actions disagree
-  about that test, and nothing in this design can say so. What would close it is a recorded gate
-  result for the base, and the cost is what makes it hard: re-running the gate per dispatch doubles
-  every run, so it is only cheap as a by-product of something already running.
+  about that test, and nothing in this design can say so. **CLOSED 2026-08-24, and the sentence that
+  used to end this entry was wrong.** It said a recorded base result was "only cheap as a by-product
+  of something already running", which assumed the gate would have to run on every dispatch. It does
+  not: the base is measured only when the head gate has ALREADY failed, and it rebuilds the same
+  worktree, so `keep_untracked` survives and `make install` is a near no-op. A passing verification
+  costs nothing at all; a failing one goes from ~14 minutes to ~20.
+- **THE BASE COMMIT WAS THE ONE THAT ADDED THE FAILING TEST**, which is the whole finding in one
+  line: `e2406a4f test(e2e): Cover the file upload and download round trip` sat directly under the
+  phase's `e4aba978 test(api): Cover the cursor pagination primitives`. A test added on `main` was
+  failing in the runner and passing in CI, and a pagination test was refused for it.
+- **The comparison is the failing `make` TARGET, and the FIRST match in the log is the one that
+  matters.** Make prints one line per level as a failure propagates outward, so `make[1]: *** [...:
+  e2e-test] Error 1` precedes `make: *** [...: check] Error 2` and the outermost is always the
+  uninformative one. Exit codes would have said `2` on both sides of every comparison; test names
+  would have been a parser per test runner, three of them, against formats nothing here controls.
+- **`None` IS NOT A TARGET AND MUST NOT MATCH ANOTHER `None`.** A gate killed by the 5400s ceiling,
+  an OOM or a container that never started leaves a log with no make failure line at all, so
+  `head_target == base_target` is True for two runs that each died of something nobody measured -
+  and it reads as agreement, on the one code path that publishes without a passing gate.
+  `dispatch.judge_base` is a pure function so that rule can be asserted without a container.
+- **Measuring the base DESTROYS the head tree, because it rebuilds the same directory.** That is
+  what makes it affordable and it inverts an ordering: the Playwright artifacts and the
+  after-the-gate clean check are both read out of the head tree first, and written the obvious way
+  round they would each come back empty and read as "nothing to report".
+- **A cached gate result is keyed on the RUNNER IMAGE as well as the base.** The toolchain, the
+  browser and the interpreters all live in that image and a timer rebuilds it, so a reading under a
+  different image answers a different question - and no version string anywhere would have said so.
+  A seven-day expiry sits on top, because `make install` resolves from the network under a lockfile
+  that did not change.
+- **This does not distinguish a flaky test from either cause.** A test that fails on head and passes
+  on base still refuses and still blames the phase. A retry would hide flakes rather than find them,
+  so there is none.
 - **The pinned base held on its first live exposure.** `origin/main` advanced from `e2406a4f` to
   `6268220f` while that same run was in flight, and the diff stayed measured against the base the
   phase was dispatched with. That is the trap `run.base_sha` exists for, and it is the first time it

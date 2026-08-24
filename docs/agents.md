@@ -310,6 +310,9 @@ staging, and `git clean -xdff` excluding only the dependency directories.
 3  sanity     base is an ancestor of head, and head is at least one commit ahead
 4  diff       REFUSE refuses; FLAG and deleted tests reach the approval card
 5  pristine   a tree built from staging, gate run there, THEN assert it is clean
+5b base       when the gate went red: artifacts and cleanliness read out of the
+              head tree FIRST, then the SAME directory rebuilt at the base and
+              the gate run again, and the failing make target compared
 6  publish    conduct pushes to agents/<worktree>-<head12> over a write deploy
               key; a person approves; Windmill's flow step opens a DRAFT PR
 ```
@@ -320,7 +323,8 @@ asked to approve an empty pull request. **Step 5's second clean check is worth
 more than step 1's**: `check-gate` runs `format` and `lint` before anything that
 only reads, `api/pyproject.toml` sets `[tool.ruff] fix = true` and both frontend
 `lint` scripts are `eslint . --fix`, so a tree dirty *after* a passing gate is a
-tree whose committed form is not the form that passed.
+tree whose committed form is not the form that passed. **It now runs after a
+FAILING gate too**, because step 6 can be reached from one.
 
 **And the phase does not run the full gate at all.** `ship` runs
 `make lint type-check unit-test` to iterate; the one full run happens in the
@@ -1023,6 +1027,119 @@ So the lane is spare capacity and bookkeeping, `agents.worker_lanes` keeps asser
 and the tag lands when something genuinely needs serialising at the Windmill layer rather than at
 conduct's.
 
+## The gate learns what the base was doing
+
+**The first live `ship` run was refused for something it did not do, twice.** Run 25 produced
+`e4aba978 test(api): Cover the cursor pagination primitives nothing tested` - one file, 91
+insertions, clean tree, exit 0, $0.716. `conduct verify` then failed on
+`e2e/tests/records/file-download.spec.ts`, which **GitHub Actions calls green on the identical base
+commit**. It refused twice, and the second refusal was correct about the gate and wrong about who to
+blame.
+
+**`git log` in that worktree is the whole finding:**
+
+```
+e4aba978 test(api): Cover the cursor pagination primitives nothing tested   <- the phase's commit
+e2406a4f test(e2e): Cover the file upload and download round trip           <- the BASE
+```
+
+The base commit is the one that **added** the failing test. verify ran `make check` on base+commit
+and had no measurement of the base alone, so a gate that was already red could only be reported as a
+change that broke it - and it was, about a pagination test that cannot reach a download suite.
+
+### The base is measured in the same directory, which is what makes it affordable
+
+A second gate run sounds like doubling the cost of every verification. It is not, for two reasons
+that are both about *when*:
+
+- **Only when the head gate has already failed.** A passing verification never reaches it, and a
+  failing one has already spent the time and produced no usable answer.
+- **The same worktree, rebuilt at the base.** `verify.pristine` takes a ref now, and
+  `keep_untracked` - `node_modules`, `api/.venv` - survives `git clean -xdff`, so the second run
+  pays the gate and a near no-op `make install` rather than the fifteen minutes it costs cold.
+  Measured: runs 26 and 27 took 12m49s and 14m19s; a failing verification now costs about twenty.
+
+**THAT REBUILD DESTROYS THE HEAD TREE, AND THAT ORDERING IS THE DESIGN.** Everything that has to be
+read out of it is read first - the Playwright artifacts, and the after-the-gate clean check. Written
+the obvious way round, both would come back empty and read as *nothing to report* rather than as
+*not measured*, which is this repository's whole failure catalogue in one line.
+
+**The clean check now runs on the failing path too**, and it is not a formality there. `check-gate`
+runs `format` and `lint --fix` before anything that only reads, so a tree dirty after the gate is a
+tree whose committed form is not the form that was tested - an argument that does not weaken when
+the gate went red, and this path can now end in a push.
+
+**The datastores are replaced between the two runs.** Reusing the head run's Postgres would let a
+row the head run wrote decide whether the base run passes, and the whole value of the measurement is
+that the two runs differ in the tree and in nothing else. `phase.setup` could not simply be called
+twice - `podman.network_create` is `check=True` and raises on a network that already exists - so the
+datastore half is `phase.datastores` now, and making `network_create` idempotent instead was refused
+because a real collision between two worktrees is worth failing on.
+
+### What the two runs are compared on
+
+**The failing `make` target, which is a make convention rather than anything this project chose.**
+Run 27's log ends:
+
+```
+make[1]: *** [Makefile:518: e2e-test] Error 1
+make:    *** [Makefile:589: check] Error 2
+```
+
+The **first** match in file order is the innermost, because make prints one line per level as the
+failure propagates outward; the outermost is always the uninformative `check`. Comparing exit codes
+instead would say `2` on both sides of every comparison, and comparing test names would be a parser
+per test runner - three of them here - maintained against output formats nothing in this repository
+controls.
+
+| base | head | what happens |
+|---|---|---|
+| green | red on X | **refuse** - "the base passes the same gate, so this is the change" |
+| red on X | red on X | **publish**, with the card saying the gate proved nothing either way |
+| red on X | red on Y | **refuse**, naming both |
+| unmeasurable | red | **refuse**, saying which of the two questions went unanswered |
+
+**`None` IS NOT A TARGET AND MUST NOT MATCH ANOTHER `None`.** A gate killed by the 5400s ceiling, an
+OOM, or a container that never started leaves a log with no make failure line in it at all - so
+`head_target == base_target` would be `True` for two runs that each died of something nobody
+measured, and it would read as agreement. `dispatch.judge_base` is a pure function precisely so that
+rule can be asserted without a container, a network, three datastores and twenty minutes.
+
+**And this does not fix a flaky test.** It distinguishes a broken base from a broken change; a test
+that fails on head and passes on base still refuses and still blames the phase. A retry would hide
+flakes rather than find them, so there is no retry.
+
+### Publishing something the gate did not measure
+
+**The gate proving nothing is not the same as the change being good, and the card says so in those
+words.** A run published on this path carries the loudest section on the card - `THE GATE WAS
+ALREADY RED ON THE BASE` - and the Evidence block stops claiming a passing gate, which it used to do
+unconditionally and which would have been false in its most important half on exactly the card where
+a reader most needs it to be true. The phone's copy says it **before** the verdict, because it
+changes what every line after it means.
+
+What stands behind such a push is what always stood behind one: a person reading the card and
+approving it, a **draft** pull request rather than an open one, and GitHub's own checks on the far
+side - which in the case that motivated all of this are green.
+
+**The gate's exit code stopped being the verification's outcome.** A run that published despite a
+base that was already red did its job, and recording it as `failed` because `make check` exited 1
+would put the fleet's own failure count out of step with what it actually did.
+
+### The answer is remembered, keyed on the image as well as the base
+
+`state.base_gate` is a cache of an expensive answer and never a schedule. **The runner image id is
+part of the key, not a column beside it**: the toolchain, the browser and the interpreters all live
+in that image and `home-server-conduct-runner-build.service` rebuilds it on a timer, so a result
+measured under a different image answers a different question and no version string anywhere would
+have said so. A seven-day expiry sits on top of that, because `make install` resolves from the
+network, which is free to serve something different under a lockfile that did not change.
+
+**A nightly gate run on `main` was the other shape and was not built.** It would answer the same
+question unconditionally, every night, about whatever `main` was at the time - which is not
+necessarily the base any given run was pinned to. On-demand-plus-cache answers it about the exact
+base, for nothing on the passing path.
+
 ## What is deliberately not built yet
 
 **No gate runs after the model call, and adding one would break a good run.** `make lint` is
@@ -1035,13 +1152,10 @@ the prompt, before it commits. The cheap refusals that catch it getting that wro
 the reasons written there - the namespace is conduct's alone, a ref costs nothing, it is evidence
 after the fact - and a ship phase that iterates will make more of them than a `probe` ever did.
 
-**Nothing reads the base's own gate result, so `verify` blames the phase for a gate that was
-already red.** It runs `make check` on base+commit and has no measurement of the base alone - see
-`docs/known-state.md`, where the first real ship run was refused for a test GitHub Actions calls
-green on the identical base commit. The obvious fix, running the gate twice per dispatch, doubles
-the cost of every run to answer a question that is usually "yes"; the shape worth having is a
-recorded result that falls out of something already running, and nothing here runs the gate on
-`main` on a schedule.
+**Why `file-download.spec.ts` disagrees between the runner and GitHub Actions is unanswered.** The
+base-gate comparison makes it stop costing a refusal, and deliberately does not diagnose it: it is
+an upskald question about a suite that passes in one container and fails in another, and the fleet's
+job was to stop reporting it as somebody's broken change.
 
 **The Windmill run form renders `task` as a single-line input.** Whether Windmill has a textarea
 format is unmeasured, and guessing a schema key is how the `continue_on_disapprove_timeout` drift

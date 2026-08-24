@@ -360,6 +360,12 @@ signal read green.
 - **`conduct verify` cannot tell a change that broke the gate from a gate that was already broken**,
   and blames the phase for both. Proved by a refusal on a test GitHub Actions calls green on the
   identical base. The pinned base and the artifact rescue both earned themselves in the same run.
+  **Closed 2026-08-24**, and the reason it looked expensive was wrong: the base is measured only
+  after the head gate has already failed, in the same rebuilt worktree. The base commit turned out
+  to be the one that added the failing test. The comparison is the failing `make` target, `None` is
+  not a target and must not match another `None`, the rebuild destroys the head tree so everything
+  is read out of it first, the cache is keyed on the runner image as well as the base - and none of
+  it distinguishes a flaky test from either cause.
 - A check that counts the unit executing it blocks the remedy for its own condition.
 - `update.policy_count` spent three minutes a run asking every registry a local question - and read
   `$repo` several hundred lines before it was assigned, reporting "not measured".
