@@ -847,9 +847,15 @@ draft pull request is exercised end to end.
 
 ## What is deliberately not built yet
 
-**The model phases themselves.** Their precondition is built - `conduct verify`, the deny hook and
-the two-tier path list all ship and are proved by planted commits rather than by a clean run - but
-nothing yet calls `claude -p`.
+**The `ship` phase.** `hello` landed on 2026-08-24 and is the model-pipe equivalent of `probe`: the
+smallest thing that makes the call for real. It runs with `--tools ''`, so it cannot edit, cannot
+run Bash and cannot reach the worktree; it commits nothing, so it goes through `f/agents/phase` and
+never touches the approval path. What it proves is the pipe - that the podman secret authenticates,
+that the pinned CLI accepts the flag set, that a `SessionStart` hook fires under `-p`, and that
+`conduct/quota.py` meets live data. What is still to build is the phase with a task in it: the ship
+prompt, the verdict schema and whether `--json-schema` is the right enforcement, and the
+`--permission-mode` value, which `hello` deliberately does not set because `--tools ''` makes every
+mode indistinguishable.
 
 **The quota half is no longer the blocker, and what unblocked it was measuring the thing everyone
 had assumed.** `conduct/quota.py` reads the API's own unified rate-limit status - `allowed`,
@@ -861,15 +867,31 @@ server can hold. So the marker keys, `agents.quota_headroom`, the collector seri
 all moved from a percentage to a status in one change, and the sentences that were about to become
 lies are true instead. See "The marker" above and `conduct/quota.py`.
 
-**What is still missing, counted rather than guessed**: the prompt and the route it takes into the
-container without touching a shell; the podman secret carrying the runner's token; the `ship`
-phase's own command; `--settings` on a command line (the file is rendered, hashed and mounted and
-named by nothing); `--strict-mcp-config` and `--setting-sources`, neither of which appears in
-either repository; a pin on `@anthropic-ai/claude-code` **and** `DISABLE_AUTOUPDATER`, because the
-CLI ships an `update` subcommand and `HOME` is a fresh tmpfs on every phase, so pinning the install
-does not pin what runs; a test that the `settings.json` -> `deny.py` exec path works, since
-everything today runs it as `python3 deny.py` and the settings file names the bare path; and wiring
-`quota.refusal()` into the two dispatch paths, which is what actually makes the fleet hold.
+**That list used to be nine items long and is now one.** Recorded rather than deleted, because the
+shape of it is the useful part - every entry was a thing that would have failed silently:
+
+- **The prompt's route in.** It arrives on **stdin**, `< /opt/conduct/prompt.md`, so the task text
+  never becomes a shell word, never reaches argv and never appears in `/proc/<pid>/cmdline`. It is
+  staged into the phase's own policy directory and hashed into `SHA256SUMS`, so the guard that was
+  already there proves it arrived intact and is *this* run's.
+- **The podman secret** shipped in `0dd9a9d` and reaches a phase as
+  `--secret conduct-claude-token,type=env,target=CLAUDE_CODE_OAUTH_TOKEN`, on a phase in
+  `model_phases` and no other.
+- **`--settings` on a command line.** The file was rendered, hashed and mounted, and named by
+  nothing; a model phase now names it.
+- **`--setting-sources ''` and `--strict-mcp-config`**, which stop the branch loading its own hooks
+  and its own MCP servers. Neither appeared in either repository.
+- **The pin and `DISABLE_AUTOUPDATER`**, both in `ce4c7c6`.
+- **The `settings.json` -> `deny.py` exec path**, tested in the smoke run and asserted on every
+  phase as exit 79.
+- **`quota.refusal()` in the two dispatch paths**, which is what actually makes the fleet hold - a
+  hold in `poll.cycle` and a refusal in `conduct run`.
+
+**Two things it did not name and should have.** `--verbose`, which is not optional: the CLI refuses
+`--output-format stream-json` under `--print` without it, so a model phase would have exited before
+its first request and `quota.py` would have parsed an empty log for ever. And **`--max-budget-usd`**,
+the one containment this design had no form of - memory, CPU, time, network reach and filesystem are
+all bounded, and nothing bounded spend.
 
 **`conduct verify` works today and can be run by hand on any worktree**, which is deliberate: it is
 the half that had to exist before there was anything to verify, so that it was written against an

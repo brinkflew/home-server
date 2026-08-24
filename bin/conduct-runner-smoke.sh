@@ -160,6 +160,34 @@ else
 	bad "claude does not run: $v"
 fi
 
+# EVERY FLAG A MODEL PHASE TYPES, ASSERTED AGAINST THE PINNED BINARY'S OWN HELP.
+# The version leg above catches an image that did not build from this checkout;
+# this catches the other half - a bump that builds cleanly and removes, renames
+# or restricts a flag conduct depends on. Without it the failure surfaces twenty
+# minutes into a real phase as an unknown-option error, on a run that has already
+# claimed a worktree and started a container.
+#
+# THEY ARE NOT INTERCHANGEABLE AND NONE IS DECORATION: --verbose is REQUIRED for
+# stream-json under --print and the CLI refuses without it, which is where the
+# rate_limit_event conduct paces on comes from; --setting-sources and
+# --strict-mcp-config are what stop the branch loading its own hooks and MCP
+# servers; --tools is what disables every tool; --max-budget-usd is the only
+# ceiling anything here puts on spend. `--help` costs no model call and no
+# network.
+if help_text=$(runner claude --help 2>&1); then
+	missing=""
+	for flag in --print --output-format --verbose --settings --setting-sources 		--strict-mcp-config --tools --max-budget-usd; do
+		printf '%s' "$help_text" | grep -q -- "$flag" || missing="$missing $flag"
+	done
+	if [ -z "$missing" ]; then
+		ok "the pinned claude accepts every flag a model phase types"
+	else
+		bad "the pinned claude does not list:$missing - a model phase would die on an unknown option"
+	fi
+else
+	bad "claude --help does not run: $help_text"
+fi
+
 # ------------------------------------------------------------------------------
 say "The three cache mounts, which are required and fail obscurely"
 # ------------------------------------------------------------------------------
