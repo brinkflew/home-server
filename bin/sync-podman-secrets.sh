@@ -17,9 +17,11 @@
 # So the value goes from .env - which render-env.sh wrote from sops, at 600 -
 # straight down a pipe. It still ends up in /proc/1/environ INSIDE the container,
 # readable by anything the phase runs including a lockfile postinstall, and that
-# is an accepted risk recorded in docs/agents.md. It is why the runner's token is
-# a DIFFERENT token from the one conduct reads the quota with: revoking one after
-# an exfiltration must not blind the other.
+# is an accepted risk recorded in docs/agents.md. There WAS a second token here
+# for exactly that reason - so revoking this one did not also blind the pacing -
+# and it stopped buying anything on 2026-08-24, when the pacing signal moved onto
+# the phase's own model call. Revoking this token now stops the phases that
+# produce the reading, so there is nothing left for a second one to keep alive.
 #
 # IDEMPOTENT, SO IT IS SAFE AT EVERY BOOT AND AFTER EVERY RENDER. `--replace`
 # needs podman >= 4.7; this host is 5.8.4, measured. Without it the sequence is
@@ -40,8 +42,6 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 env_file="$root/.env"
 
 # (secret name, variable in .env). One row per credential a container needs.
-# conduct's own token is deliberately NOT here: it is read host-side, from .env,
-# by a process that is not in a container.
 SECRETS="
 conduct-claude-token CLAUDE_RUNNER_OAUTH_TOKEN
 "
