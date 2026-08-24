@@ -348,6 +348,9 @@ signal read green.
   corrections learned by doing it wrong: pinning the booted index rather than 0, unpinning after
   verifying, WARN vs FAIL under `--greenboot`, `cleanup -r` taking two deployments, and the pending
   deployment it cannot reclaim at all.
+- **A clean `rpm-ostree db diff` does not mean a slot is free to skip.** uCore rebuilds the
+  initramfs every image build, so a perl-only diff with an identical kernel still writes 146 MB.
+  Compare the initramfs objects; the loader entry does not exist until finalization.
 
 ### The nightly OS updater can silently skip a real update
 - `rpm-ostree upgrade --check` can be wrong and `rpm-ostreed-automatic` believes it, so the host

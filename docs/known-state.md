@@ -291,6 +291,21 @@ nothing points at is one nobody reads.
     **26 MB** free until the old deployment was unpinned and `rpm-ostree cleanup -r` run. So
     unpinning after verifying is not tidying, it is what lets the next update write its kernel.
     Reproduced exactly on the 2026-08-14 reboot: 171 -> 26 -> 171 MB.
+  - **`rpm-ostree db diff` CANNOT TELL YOU WHETHER A SLOT IS NEEDED, and reading it as if it
+    could is how the bullet above gets talked out of.** On 2026-08-24 the staged deployment
+    diffed against the booted one as `perl-URI 5.35 -> 5.36` plus one added noarch package:
+    no kernel, no firmware, same `kernel-7.1.6-201.fc44` in both, and `regenerate-initramfs`
+    false on every deployment. Every visible signal said "this needs no new boot entry". The
+    initramfs was rebuilt anyway - different ostree object, different sha256, and a size
+    differing by **one byte** (133486447 against 133486446) - so the bootcsum differs and
+    finalizing it writes a full 146 MB slot into 26 MB of free space.
+    **uCore rebuilds the initramfs on every image build**, so a *content* diff of the packages
+    is simply not the question. The question is whether the two deployments' kernel and
+    initramfs are the same objects, and the only honest way to ask it is to compare them:
+    `sudo sha256sum /ostree/deploy/*/deploy/<checksum>.0/usr/lib/modules/<kver>/initramfs.img`
+    for the booted and the staged one. A staged deployment has no `/boot/loader/entries/`
+    entry yet - it is written at finalization - so the absence of a third entry proves nothing
+    either. `bin/reboot-host.sh`'s gate is right to refuse on "something is staged" alone.
   - **A low `/boot` WITH something pinned is a different finding from a low `/boot` on its own**, and
     `verify-host.sh` now distinguishes them: the first is a WARN naming the remedy, the second is a
     FAIL. Conflating them cost a false alarm on the first scripted reboot - the pin the script had

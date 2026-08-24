@@ -117,7 +117,15 @@ elif [ -z "$next_staged" ]; then
 	warn "this reboot writes no boot entry. 'rpm-ostree cleanup -r' after it reclaims the slot."
 else
 	die "/boot has only ${boot_free}M free and $next_staged is STAGED - finalizing it at
-  shutdown needs a slot. Unpin and 'rpm-ostree cleanup -r' first."
+  shutdown needs a slot. Unpin if anything is pinned, then:
+
+    sudo rpm-ostree cleanup -r     # frees a slot - AND TAKES THE STAGED UPDATE WITH IT
+    sudo rpm-ostree upgrade        # re-stage it; this does NOT happen on its own
+
+  Both lines, in that order. 'cleanup -r' removes TWO deployments when something is
+  staged, and after 2026-08-16 the next two automatic runs re-staged nothing while a
+  newer manifest sat on the registry throughout - so 'cleanup -r' alone silently costs
+  the update it was run to make room for. See docs/known-state.md."
 fi
 
 # WHAT WILL ACTUALLY BE SELECTED, asked before the typed confirmation rather than
