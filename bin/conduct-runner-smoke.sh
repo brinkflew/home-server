@@ -188,6 +188,31 @@ else
 	bad "claude --help does not run: $help_text"
 fi
 
+# A COMMIT, BECAUSE THE FLEET HAS NO GIT IDENTITY ANYWHERE ELSE. /usr is
+# read-only so there is no system config, HOME is an ephemeral tmpfs so there is
+# no global one, and writing a repo-local one would put a change into the very
+# tree conduct/verify.py judges. That leaves the four GIT_* environment
+# variables, which conduct/config.py sets and conduct/phase.py emits.
+#
+# ALL FOUR OR NONE: git wants the committer pair as well as the author pair, and
+# setting two of the four fails with the identical "Please tell me who you are"
+# that setting none does - so a half-configured identity is indistinguishable
+# from no identity, at the end of a run that has already done the work.
+#
+# The values here are the smoke test's own, deliberately. What is being asserted
+# is that THIS IMAGE'S git accepts an identity from the environment at all;
+# whether conduct passes the right one is tests/test_phase.py's question, in the
+# repository that decides it.
+if runner sh -c 'cd /tmp && rm -rf idt && mkdir idt && cd idt && git init -q . &&
+    GIT_AUTHOR_NAME=smoke GIT_AUTHOR_EMAIL=smoke@invalid \
+    GIT_COMMITTER_NAME=smoke GIT_COMMITTER_EMAIL=smoke@invalid \
+    git commit --allow-empty -q -m proof &&
+    test "$(git log -1 --format=%ae)" = smoke@invalid'; then
+	ok "git commits with only the four GIT_* variables (no config anywhere)"
+else
+	bad "git will not commit from the environment alone - a model phase cannot commit its work"
+fi
+
 # ------------------------------------------------------------------------------
 say "The three cache mounts, which are required and fail obscurely"
 # ------------------------------------------------------------------------------
