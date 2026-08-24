@@ -1229,6 +1229,40 @@ one that had just discovered the flow was dead.
   delivered, so the commit is on GitHub even when the flow that asked for it is gone - and a
   notification that did not say where would read as "the run was lost".
 
+## The loop ran, end to end, on 2026-08-24
+
+**Everything above was built for this and none of it had ever run together.** `avanserv/upskald#249`
+is a draft pull request opened by the fleet: a task typed into the Windmill run form, a model phase
+that wrote and committed it, a verification on a tree the phase could not write, a person approving
+on a phone, and a PR opened by a token conduct itself does not hold.
+
+```
+19:41  ship dispatched at base 6268220f78c2
+19:52  exit: 0 after 665s
+19:53  verify: head 53bc429883a7 (1 commit, 1 file)
+20:09  base: gate failed on e2e-test at 6268220f78c2, recorded 18:36:35Z   <- cache hit
+20:09  base: 6268220f78c2 fails on e2e-test too - this change did not break it
+20:09  pushed: agents/upskald-ship-53bc429883a7 (created)
+20:09  poll: told a person about 01a0354a (approval)
+```
+
+**The base gate is why that pull request exists.** The head gate went red, as it has on every run
+against this base, and before that morning a red gate was an automatic refusal blaming the phase.
+The cached base reading came from a measurement 90 minutes earlier, so the verification cost 15
+minutes rather than 30.
+
+**It took three ship runs to land one pull request, and neither wasted run was the fleet doing its
+job badly.** One was lost to a person answering conduct's own suspended step; one to a phase that
+backgrounded its own type-check and had no tool to read it back. Both were defects in how the fleet
+was SET UP rather than in what it did - and both are in `docs/known-state.md` now, which is the only
+reason they cost an evening once rather than an evening each time.
+
+**What that run proves and what it does not.** It proves the transport, the containment, the
+verification, the gate and the publish path work together on real work. It does not prove the model
+is reliable at the task: the same task on three runs produced one commit needing a `type: ignore`
+that the phase reported as a concern, one carrying three type errors that the phase reported as
+`done`, and one that passed. **The gate told them apart, which is the entire design.**
+
 ## What is deliberately not built yet
 
 **No gate runs after the model call, and adding one would break a good run.** `make lint` is
@@ -1239,7 +1273,9 @@ the prompt, before it commits. The cheap refusals that catch it getting that wro
 
 **Nothing reaps a branch** whose approval was declined or timed out. Accepted in `publish.py` for
 the reasons written there - the namespace is conduct's alone, a ref costs nothing, it is evidence
-after the fact - and a ship phase that iterates will make more of them than a `probe` ever did.
+after the fact - and a ship phase that iterates will make more of them than a `probe` ever did. One
+evening of it left three: `agents/upskald-ship-` at `e4aba978`, `a11d5439` and `53bc4298`, of which
+only the last became a pull request.
 
 **Why `file-download.spec.ts` disagrees between the runner and GitHub Actions is unanswered.** The
 base-gate comparison makes it stop costing a refusal, and deliberately does not diagnose it: it is

@@ -509,6 +509,13 @@ signal read green.
 - A flow is a Postgres row the UI can edit, so `serve` rewrites it from git at every start.
 - The verify lane stopped being the semaphore when the arrow inverted; conduct's lease is.
 
+### The loop closed, and the two wasted runs on the way there
+- `avanserv/upskald#249` is a draft PR the fleet opened on 2026-08-24: task in, model phase, gate on
+  a tree it could not write, a person on a phone, PR out. The base-gate cache made the verification
+  15 minutes rather than 30, and a red gate published because the base was red on the same target.
+- Three ship runs for one PR. Neither waste was the fleet working badly: one click on conduct's own
+  suspended step, and one tool granted without the tool that reads its result.
+
 ### The publish path, and two ways a killed phase never came back
 - **A report is a value, not a status**: a flow module returning `{"ok": false}` succeeds, so a
   failed gate was recorded as a green flow from the moment the transport landed.
