@@ -448,6 +448,12 @@ signal read green.
 - **The reconciler reaped a live verification 27 seconds before it finished**, because the lease's
   pid had been overwritten with the container's - covering the setup window and never the teardown
   one, on the branch that has no grace period. A hand run beside `serve` is the only way to see it.
+- **A person can answer a step that belongs to conduct and nothing on the server can stop them.**
+  Every suspend is an approval form; `user_groups_required` and `self_approval_disabled` were both
+  measured and neither binds an admin, which this one-seat workspace's only human is. The boundary
+  is one-directional by measurement, not by oversight.
+- **One dead flow job stopped the whole fleet for two hours**, because the undelivered-answer retry
+  runs unguarded at the top of the cycle, ahead of the notifications and the dispatch pass.
 
 
 ### The gate the fleet was going to trust, and six ways it was not a gate

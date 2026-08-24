@@ -1140,6 +1140,95 @@ question unconditionally, every night, about whatever `main` was at the time - w
 necessarily the base any given run was pinned to. On-demand-plus-cache answers it about the exact
 base, for nothing on the passing path.
 
+## Who answers which step, and the boundary that only existed in one direction
+
+**conduct approving its own gate has been guarded since the publish path landed. A person
+approving conduct's step was guarded by nothing at all.** The asymmetry was invisible until it cost
+a run: on 2026-08-24, nine minutes into a gate, `await_verify` was resumed by approver `avs` with no
+payload. `conduct_verify` got an empty report, raised, and the flow completed as a failure while the
+verification behind it still had fifteen minutes to run.
+
+**Windmill renders EVERY suspended step as an approval form.** conduct's own waiting steps are
+suspended steps, so each one carries an Approve button - and the summary above it read:
+
+```
+declare the wait for the verification
+[ Approve ]  [ Deny ]
+```
+
+Nothing there says whose step it is. **And the record cannot tell either**: conduct resumes with a
+token belonging to the same account, so the approver reads `avs` whichever answered.
+
+### Three layers, and the two that had to be measured are the two that failed
+
+What shipped is entirely on the human's side of the screen, because that is the only side that
+turned out to be reachable:
+
+- **The summary is the warning.** Every conduct step opens `DO NOT APPROVE - conduct answers this
+  itself` and says roughly how long it takes. The human gate opens `APPROVE THIS ONE`.
+- **A `resume_form` removes the bare button.** With one, Windmill asks for the fields before it will
+  submit. `ok` is the required field because it is exactly what conduct's report always carries, so
+  the form costs conduct nothing and cannot drift from what it sends. **The human gate keeps its
+  bare form deliberately** - it is the one click that should be easy, from a phone.
+- **The refusal names the mistake.** `conduct did not succeed: None` blamed conduct, arrived after
+  the damage and explained nothing. An empty resume and a genuine `ok: false` are told apart by
+  whether `ok` is **present**, because conduct always sets it.
+
+### Nothing on the server can separate them, and that was measured twice
+
+The obvious fix is to make the server refuse. It cannot, and both attempts were run against a
+scratch flow rather than reasoned about:
+
+| constraint | conduct's owner resume | a person clicking Approve |
+|---|---|---|
+| `user_groups_required: ["conduct-only"]`, group empty | **worked**, `resume_id: 0` | **allowed**, `resume_id: 22534` |
+| `self_approval_disabled: true` | **worked**, `resume_id: 0` | **allowed**, `resume_id: 50739` |
+
+**The two paths are different endpoints and the record shows it.** conduct resumes on
+`POST jobs/flow/resume/{id}` - `resumeSuspendedFlowAsOwner` - which bypasses both constraints and
+records `resume_id: 0`. A UI click goes through the approval path and records a non-zero one. So a
+constraint that bound the UI and not the owner endpoint would have been exactly the asymmetry
+needed.
+
+**Neither binds a workspace admin, and this workspace has one seat which is an admin.** There is no
+group `avs` can be kept out of, because being an admin is enough; and `self_approval_disabled` did
+not stop the account that started the run either. The only remaining route is a **separate Windmill
+identity for conduct** - a service user, its own token in sops, its own way to wedge the fleet when
+it expires - and that buys a guard against one accidental click. It is not worth that, and it is
+written here so the next person does not spend the afternoon measuring it again.
+
+**So the boundary stays one-directional and is now honest about it.** `poll._resume` refuses any
+module id without the `conduct_` prefix, which is real enforcement in code conduct controls. The
+other direction is a warning a person can override, and the cost of overriding it is now bounded
+rather than silent - see the undeliverable-answer path below.
+
+### An answer with nowhere to go must not be silence
+
+A flow can end underneath a running phase, which is what makes the above more than a lost click.
+The verification finished, pushed its branch, and then could not hand its report over:
+
+```
+cycle failed: POST jobs/flow/resume/...: 500 Error: parent flow job not found
+```
+
+**That retry loop sits at the top of `poll.cycle`, ahead of the notification sweep and the dispatch
+pass, and it was unguarded** - so one dead flow job stopped the fleet taking work or sending
+anything, every cycle, until `reconcile` forgot the row two hours later. The run it silenced was the
+one that had just discovered the flow was dead.
+
+- **Per-row now**, and a transient failure is left alone rather than swallowed: if the control plane
+  is really down, `windmill.suspended()` two lines below fails and the cycle fails properly.
+- **Terminal is asked, not matched.** `windmill.job(job_id)` returning a `CompletedJob` is a fact;
+  keying on `"parent flow job not found"` would couple the decision to a line number in somebody
+  else's Rust. **False on any doubt**, including on its own failure - a wrong True throws an answer
+  away, a wrong False costs one retry.
+- **`undeliverable_at`, not `resumed_at`.** Whether the answer was delivered is the one thing that
+  table exists to know. `dispatch_forget` cannot be reused either: it carries `AND payload IS NULL`
+  so that nothing can drop an answer that was computed and never handed over.
+- **And it notifies, naming the branch.** conduct pushes inside verify, *before* the answer is
+  delivered, so the commit is on GitHub even when the flow that asked for it is gone - and a
+  notification that did not say where would read as "the run was lost".
+
 ## What is deliberately not built yet
 
 **No gate runs after the model call, and adding one would break a good run.** `make lint` is

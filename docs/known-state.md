@@ -845,6 +845,45 @@ datastores out from under the base gate, and **a false "the base is red" would h
 seven days** - the one lie that makes verify publish what it should refuse. `pid` is conduct's own
 and outlives the run; `runner_pid` is the container's. Neither reader needed changing.
 
+**A PERSON CAN ANSWER A STEP THAT BELONGS TO conduct, AND NOTHING ON THE SERVER CAN STOP THEM.**
+Windmill renders every suspended step as an approval form, so conduct's own waiting steps carry an
+Approve button - and on 2026-08-24, nine minutes into a gate run, one was pressed. `conduct_verify`
+was resumed with no payload, raised `conduct did not succeed: None`, and the flow completed as a
+failure while the verification behind it still had fifteen minutes to run. The summary above that
+button read *"declare the wait for the verification"*, which says nothing about whose step it is,
+and **the record cannot tell either**: conduct resumes with a token belonging to the same account,
+so the approver reads `avs` whichever answered.
+
+**Both server-side fixes were measured on a scratch flow, and both failed.** conduct resumes on
+`POST jobs/flow/resume/{id}` - `resumeSuspendedFlowAsOwner` - and a UI click goes through the
+approval path; the two are different endpoints and the record proves it, conduct's resumes landing
+as `resume_id: 0` and a person's as a non-zero id. So a constraint binding one and not the other was
+exactly what was needed:
+
+| constraint | conduct's owner resume | a person clicking Approve |
+|---|---|---|
+| `user_groups_required`, group with no members | worked, `resume_id: 0` | **allowed**, `resume_id: 22534` |
+| `self_approval_disabled: true` | worked, `resume_id: 0` | **allowed**, `resume_id: 50739` |
+
+**Neither binds a workspace admin, and this workspace is one seat which is an admin.** There is no
+group `avs` can be kept out of, and `self_approval_disabled` did not stop the account that started
+the run. The only route left is a separate Windmill identity for conduct - a service user, a second
+token in sops, and a credential whose expiry wedges the fleet - to guard against one accidental
+click. **Declined, and written down so it is not re-measured.** What shipped is a `DO NOT APPROVE`
+summary on every conduct step, a `resume_form` so there is no bare button, and a refusal that names
+the mistake instead of blaming conduct.
+
+**ONE DEAD FLOW JOB STOPPED THE WHOLE FLEET FOR TWO HOURS, AND THE RUN IT SILENCED WAS THE ONE THAT
+FOUND IT.** The verification above finished anyway and pushed its branch, then could not deliver its
+report - `500 Error: parent flow job not found`. That retry pass sits at the TOP of `poll.cycle`,
+ahead of the notification sweep and the dispatch pass, and was unguarded, so every cycle failed
+until `reconcile` forgot the row at `REAP_AFTER_SEC`. Three things fix it and each is a rule rather
+than a patch: the loop is per-row; terminal is decided by ASKING (`type == "CompletedJob"`) rather
+than by matching a Rust error string, and is false on any doubt including its own failure; and the
+row closes into `undeliverable_at` rather than `resumed_at`, because whether an answer was delivered
+is the one thing that table exists to know. `dispatch_forget` could not be reused - it carries
+`AND payload IS NULL` precisely so nothing can drop a computed answer.
+
 **It is a hand run that exposes this, and only a hand run can.** `serve` reconciles and verifies in
 one process, so it cannot reap a lease it is itself holding - but `docs/agents.md` explicitly tells a
 reader to run `conduct run` by hand while `serve` is looping, and that is two processes with one
