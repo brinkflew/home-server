@@ -1945,3 +1945,62 @@ answering; four had never served a single query and were deleted.
 - **A one-word reply costs about $0.12** because the system prompt is ~29,000 cache-creation tokens
   on every run. There is no such thing as a cheap model phase, which is what makes a spend floor a
   number rather than a gesture.
+
+## What a phase is given, and the flags that decide it
+
+**Measured 2026-08-25, against the pinned CLI, on the runner image itself.**
+
+- **`--setting-sources` has three values and they do three different things.** `''` loads no skills
+  and no `CLAUDE.md` at all; `user` loads `$HOME/.claude/{skills,CLAUDE.md}`; `project` loads the
+  BRANCH's, and its hooks with it. The entry above said `''` "drops the project's skills" and left
+  it there - `user` is the arm nobody had tried, and it is the one that makes a container's own
+  `HOME` a place to put them. Safe here only because that HOME is an ephemeral tmpfs the image
+  creates empty, so `user` has nothing of the branch's to find.
+- **`--model` unset means the token's default, and the default was NOT the workstation's.** A probe
+  read back `claude-sonnet-5` while every interactive session was on Opus. A pin whose absence is
+  silent, and the largest single difference in output quality nobody had measured.
+- **A mount is not access.** `Read` and `Glob` are confined to the working directory, so a
+  read-only mount outside it can be listed by `ls` and not opened by the tools the prompt tells the
+  model to use. Four of five `permission_denials` on the first live run were this, and the run
+  still answered correctly - by finding a way round, which is what makes it the kind of defect a
+  passing test hides. `--add-dir` declares it.
+- **rtk's `PreToolUse` hook answers `updatedInput` and no `permissionDecision` at all**, so it
+  rewrites and cannot permit. Worth measuring before shipping any third-party hook: one answering
+  `allow` bypasses the permission system, which is the half this design calls stronger than a hook
+  precisely because it spawns no process.
+- **Allowing rtk is allowing everything.** `rtk proxy <cmd>` runs anything, so `Bash(rtk:*)` is
+  `Bash(*)`. That costs no capability - `python3 -c` already did - but it empties
+  `permission_denials`, which was the only signal saying the model had reached for something new.
+  **Silence there is now expected and is not evidence of anything.**
+- **A cold `code-review-graph` build is 12 seconds and 38 MB** on 725 files, and `--data-dir` keeps
+  it out of the worktree - which matters because `git clean -xdff` in the verification tree would
+  delete it on every run.
+- **The graph stores ABSOLUTE PATHS, so one data directory per project does not work.** Sharing it
+  between worktrees of the same repository - same commits, same files - is refused, naming a file
+  from the other tree. It refuses loudly, which is the only reason this cost one run rather than a
+  fortnight of a phase navigating a different tree's code. Per worktree, and pay the 38 MB.
+- **A phase that hit `--max-budget-usd` exits non-zero exactly like a broken `make install`**, and
+  the result event's `subtype` is the only thing that tells them apart. Not reading it meant every
+  model failure reached a person as a bare exit code. Measured the expensive way: a plan phase with
+  no graph fell back to reading files and spent $2.14 over 32 turns without answering.
+
+## Windmill will not make a suspend conditional the obvious way
+
+**Measured 2026-08-25 on a scratch flow, both directions, after two wrong answers.**
+
+- **`skip_if` on a module disables that module's `suspend` WHATEVER the predicate evaluates to.**
+  Proved with a literal `false`: the module ran, reported `Success`, the suspend never armed and the
+  flow completed. A human gate built this way could only ever publish and never ask - the exact
+  inverse of a gate, arrived at through the only spelling that reads correct.
+- **`skip_if` on the module that WAITS does not prevent the wait**, which is the other half of the
+  same misreading. A suspend belongs to the module it precedes, so both ends were tried.
+- **A `branchone` DOES contain a suspend, in a sub-job.** The parent reads `InProgress` with
+  `branch_chosen`, `windmill.current_module()` returns `None`, and the suspended step lives under a
+  different job id - so conduct's discovery, notification and resume paths would all need to learn
+  about nesting.
+- **`stop_after_if` is what works**, survives the round trip with no drift, and needs no change to
+  conduct at all: the flow either stops before the gate or reaches the gate exactly as before.
+- **`user_auth_required: true` makes `jobs/flow/resume` fail** with "Approvals for logged in users
+  is an enterprise only feature". The UI path works and the owner endpoint does not - so conduct was
+  ALREADY unable to answer the human gate, by a second mechanism underneath the `conduct_` prefix
+  guard that nobody had found.

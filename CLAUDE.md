@@ -516,6 +516,29 @@ signal read green.
 - Three ship runs for one PR. Neither waste was the fleet working badly: one click on conduct's own
   suspended step, and one tool granted without the tool that reads its result.
 
+### What a phase is given, and the flags that decide it
+- **`--setting-sources` has three values and does three different things**: `''` loads no skills and
+  no `CLAUDE.md`, `user` loads the container's own ephemeral HOME, `project` loads the branch's - and
+  its hooks. Only one of the three is safe here, and it is not the one that was set.
+- **`--model` unset meant Sonnet** while every workstation session was on Opus, and nothing said so.
+- A mount is not access: `Read` and `Glob` are confined to the working directory, so a declared
+  `--add-dir` is what makes a read-only mount openable. The first live run answered correctly anyway,
+  by finding a way round.
+- rtk's hook answers `updatedInput` and never a permission decision - but `Bash(rtk:*)` is `Bash(*)`,
+  so `permission_denials` is empty from now on and that silence is not evidence.
+- A cold knowledge-graph build is 12s and 38 MB - but **the graph stores absolute paths**, so it is
+  per WORKTREE and not per project; sharing it is refused, loudly, naming the other tree's files.
+- **A phase that hit `--max-budget-usd` exits non-zero exactly like a broken `make install`.** Only
+  the result event's subtype tells them apart, and nothing read it.
+
+### Windmill will not make a suspend conditional the obvious way
+- **`skip_if` disables that module's suspend whatever the predicate evaluates to** - proved with a
+  literal `false` - so a gate built with it can only publish, never ask. On the waiting module it
+  does not prevent the wait. A `branchone` hides the suspend in a sub-job where `current_module()`
+  reads `None`. `stop_after_if` is what works, and needs no change to conduct at all.
+- **`user_auth_required: true` makes the owner resume endpoint fail as enterprise-only**, so conduct
+  was already unable to answer the human gate by a mechanism nobody had found.
+
 ### The publish path, and two ways a killed phase never came back
 - **A report is a value, not a status**: a flow module returning `{"ok": false}` succeeds, so a
   failed gate was recorded as a green flow from the moment the transport landed.

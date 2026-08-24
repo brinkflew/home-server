@@ -1263,6 +1263,247 @@ is reliable at the task: the same task on three runs produced one commit needing
 that the phase reported as a concern, one carrying three type errors that the phase reported as
 `done`, and one that passed. **The gate told them apart, which is the entire design.**
 
+## A phase that was given what a workstation session is given
+
+**The fleet's first pull request was written by a phase with none of the project's
+context.** It ran with `--setting-sources ''`, `--strict-mcp-config` and seven tools: none of
+upskald's eleven skills, not its `CLAUDE.md`, none of the 148 memory files the workstation has
+written about that codebase, and - measured on 2026-08-25 and news to everybody - **not even the
+same model**. With `--model` unset the CLI takes the token's default, which a probe caught as
+`claude-sonnet-5` while every workstation session was on Opus. The fleet had been running a
+different model from the one its output was being judged against, and no file said so.
+
+### The flag has three values and only one of them is safe
+
+`--setting-sources` was measured against the pinned CLI rather than read out of the documentation,
+because what it does is not what its name suggests:
+
+| value | `CLAUDE.md` | `$HOME/.claude/skills` | the branch's `.claude/` |
+|---|---|---|---|
+| `''` | no | no | no |
+| `user` | **yes**, from `$HOME/.claude/CLAUDE.md` | **yes** | no |
+| `project` | yes, the branch's | no | **yes, and its hooks run** |
+
+`project` is the one that must never appear. An untrusted workspace's `permissions.allow` entries
+are ignored already, but its **hooks still run**, and that asymmetry is the whole reason the flag
+was set to `''` in the first place.
+
+**`user` is safe for a reason specific to this design rather than a general one.** The container's
+`HOME` is an ephemeral tmpfs at `/tmp/home`, created empty by the image's entrypoint, holding
+exactly what three lines of shell copy into it out of a read-only mount. There is no user
+`settings.json` in the container for `user` to find.
+
+### Everything it is given comes from the mirror, not the worktree
+
+`phase.stage_policy` reads the skills and `CLAUDE.md` out of **conduct's mirror at the pinned base**
+and stages them into `/opt/conduct/project/`, which is mounted read-only. That is the same argument
+that put the policy there: **instructions a phase can rewrite mid-run are not instructions.** They
+go through the same `SHA256SUMS` as everything else in that directory, so a stale or truncated skill
+file is exit 78 before the phase does any work.
+
+It forced one reordering. `stage_policy` now runs **after** `prepare_worktree` and `pinned_base`,
+because it cannot read a base nothing has resolved yet. Staged earlier it would ship one run's
+instructions with another run's tree, silently.
+
+**Eight of eleven skills, and the three that are absent are absent for a reason.** `pr` opens a pull
+request with a credential the container does not hold, and `next-task` and `groom-task` are nothing
+but `mcp__odoo-mcp__` calls. A skill whose first instruction will be refused costs a turn and a
+confused verdict.
+
+**The project's `CLAUDE.md` and conduct's addendum are one file**, concatenated, because that is what
+a workstation session actually has: one merged memory, not two documents disagreeing about which
+applies. The addendum goes last so it wins, and it says so in its first paragraph. It exists because
+upskald's own `CLAUDE.md` actively misleads a phase - its first section is about MCP tools, and until
+the graph shipped the container had none.
+
+### The memory is the one thing no repository can restore
+
+148 files, about a megabyte, written continuously by workstation sessions and in no git repository
+at all. `bin/sync-agent-assets.sh` rsyncs it to `$FLEET_ROOT/memory/<project>` and the phase mounts
+it **read-only** - which is not tidiness. **A phase that could write to the memory would be writing
+the next phase's instructions**, which is the one way an agent in this design could reach past the
+end of its own run.
+
+**The mount was not enough, and the first live run is what said so.** Every answer came back correct
+and `permission_denials` said why that was luck: four of the five were `Read` and `Glob` against
+`/opt/conduct/memory`. Claude Code confines those tools to the working directory, so a directory that
+is mounted and not declared is one the model can see in an `ls` and cannot open - and the addendum
+was telling it to read files it would then be denied. `--add-dir` is what declares it, and it is safe
+here for the same reason `--mcp-config` is: what it names is conduct's, and the bind mount is `:ro`,
+so a write fails at the kernel whatever the tool layer decides.
+
+**The failure mode is silence**, because the sync is a script somebody runs rather than a timer: the
+mount stays, the files stay, and they quietly describe a codebase from a month ago.
+`agents.memory_age` is what makes that loud, and conduct puts the age on the approval card.
+
+### rtk, and the signal it costs
+
+A 9.8 MB `static-pie` binary, so the workstation's copy runs unchanged in a Debian trixie container -
+measured with `file`, not assumed. It is mounted over the read-only rootfs rather than baked, so
+there is no image rebuild and the phase runs byte-for-byte the same rtk the workstation does.
+
+**Its hook was measured before it shipped**, because a `PreToolUse` hook answering `allow` bypasses
+the permission system outright and `permissions.deny` is the half this design calls stronger. It
+answers `updatedInput` and no decision at all, so it rewrites and never permits.
+
+**What it costs is a signal, and that is written down rather than discovered.** `ALLOW_BASH` needs
+`Bash(rtk:*)` or every rewritten command is refused - and rtk proxies arbitrary commands, so that one
+entry is `Bash(*)`. Capability was never bounded by that list (one `python3 -c` saw to that), but
+`permission_denials` was how the fleet learned the model had reached for something new. **Expect it
+to be empty from now on, and do not read the silence as safety.**
+
+**`deny.py` now inspects a string that is not always the string that runs.** rtk rewrites after
+deny.py has looked. The rewrites are mechanical proxies of the same command so this is theoretical
+rather than live, but the disclaimer at the head of `DENY_COMMAND` says it, because the boundary it
+points at - `conduct/verify.py`, on the host, afterwards - is unchanged and is what actually holds.
+
+### The knowledge graph is conduct's server, not the branch's
+
+`--strict-mcp-config` is exactly as it was and `.mcp.json` is still in `REFUSE_DEFAULT`; what changed
+is that conduct supplies **one** server, at a version conduct pinned. `uvx code-review-graph==2.3.8`,
+because a floating name is a package that changes under a run with nothing in `git diff` - the same
+argument the Dockerfile makes for the CLI.
+
+It is built **once before the model call**, not per edit as the workstation does: in a container that
+would be a `uvx` spawn on every `Edit`. Cold build measured at **12 seconds** and 38 MB, into a
+`--data-dir` outside the worktree so `git clean -xdff` in the verification tree cannot take it.
+
+**One data directory per WORKTREE, and the first live run is what taught that.** Per project was the
+obvious economy - same repository, same commits, one build amortised - and it is wrong, because
+**the graph stores absolute paths**. A graph built while the cwd was `.../worktrees/upskald-hello`
+is a graph about that directory, and `code-review-graph` refuses to update it from another one,
+naming a file it holds. It refuses *loudly*, which is the only reason that cost one run rather than
+a fortnight of a phase navigating a different tree's code. `|| true`, because a graph that failed to build must degrade to
+Grep - which is what the skills already say to do - and must never fail a phase that has not started.
+**That flag did exactly what it is for and is also what made the above expensive**: the plan phase
+started with no graph, fell back to reading files, and spent its whole budget doing it - 32 turns,
+$2.14, no answer. A degradation that costs a run is still the right trade against a phase that
+cannot start, but it is a degradation and the card now says so.
+
+**Which is how the second thing surfaced.** A phase that hit `--max-budget-usd` exits non-zero
+identically to one whose `make install` failed, and the two want completely different responses: a
+ceiling to raise or a task to split, against a tree to fix. The result event has named it all along
+- `error_max_budget_usd` - and nothing read it, so every model failure reached a person as a bare
+exit code. `quota.why_it_stopped` translates it, and an unknown subtype is still reported: the
+catalogue is a translation, never a filter.
+
+**It is a new accepted risk**, recorded beside the existing one: `uvx` executes a PyPI package inside
+a container that holds the model credential in `/proc/1/environ`. The version pin and the mounted
+`UV_CACHE_DIR` bound it; the egress allowlist named above is what would close it.
+
+## The plan is made by a phase that cannot write
+
+A task used to go straight to a phase with an editor open, which is the one part of a workstation
+session the fleet had not copied: the reading and the deciding happened *with* the ability to change
+things, in the same twenty minutes, under the same budget.
+
+**A separate phase rather than a subagent.** `Task` stays off `--tools` for the reason already
+recorded - subagents multiply spend under one ceiling and inherit a policy nothing here has measured
+them against - and a phase is the only unit this design can bound, price, place in a slice and
+observe. It is also what makes "Planning" a stage with a start and an end rather than a mood.
+
+**It cannot write, and that is said twice on purpose.** Withholding `Write` and `Edit` is half of it;
+`policy.ALLOW_BASH_READONLY` is the other half, because `cp`, `mv` and `sed -i` are a shell away from
+anybody who only lost an editor. That is what makes sharing the ship worktree safe rather than merely
+cheap. **It is still not a boundary** - `python3` is on the list - and what actually makes the plan
+phase safe is that nothing it produces is trusted: the plan is text handed to the next phase, and
+`prepare_worktree` resets the tree before that phase starts.
+
+**The plan rides the run row, not the flow.** `quota.observe` already stores a model's final message
+there, so a plan needed no column and no new plumbing - but it did need `last_verdict` to learn about
+it. That function's docstring already predicted this: the filter existed "so that stays true the day
+anything else writes a row between the two", and `plan` is that day. Without it, a ship phase that
+died before answering would put its plan on the approval card labelled as the verdict.
+
+Both directions of `{{PLAN}}` raise, exactly like `{{TASK}}`. A phase wanting a plan and given none
+reads a literal marker and improvises; a plan given to a template with nowhere to put it is dropped
+and the phase runs anyway - **that is the silent one**, and it is why this is code rather than a
+convention.
+
+## The tracker, and the one thing it must never be able to do
+
+A flow run carries an Odoo task id. conduct reads the title and the acceptance criteria out of it,
+renders them into the phase's prompt, and moves the task **Pending -> Planning -> Implementation ->
+Review** as the run progresses.
+
+**conduct is the only thing here that talks to Odoo.** The workstation reaches it through an MCP
+server and a phase deliberately does not: that would put a second credential in a container that
+already holds the model token in `/proc/1/environ`, and it would make moving a task something a model
+decides rather than something the pipeline does.
+
+**Never past Review, and never backwards out of it.** `odoo.move` refuses any target that is not one
+of the three stages the fleet owns, and refuses to touch a task already in Review or Closed. What
+happens after a review is a person's, and re-running a flow must not quietly undo it. Stages are
+resolved **by name, every time** - a hardcoded id is what went stale last time.
+
+**Two failures that look alike are treated as opposites, and the line between them is the point.**
+Reading the work is not bookkeeping: a phase whose task could not be fetched has nothing to do, so
+the step refuses before a container starts. Moving a task between stages *is* bookkeeping, and a
+tracker that is down must never throw away twenty minutes of work that already happened - so every
+stage failure becomes a line on the card and nothing else. **An unset `ODOO_URL` is a rollout rather
+than a fault**, the same distinction `WINDMILL_CONDUCT_TOKEN` already draws.
+
+**Review is moved by a pass in the poll cycle rather than by the flow.** `publish_pr` holds the only
+write credential in the workspace and its whole defence is that it contains no logic worth attacking,
+so an Odoo write in there would weaken the one module that has to stay boring. conduct remembers the
+job in a `publication` row instead and asks Windmill whether it finished - which works on both paths,
+because the flow's result carries the pull request either way. **That pass runs after the deliver
+pass and guards every row on its own**: one bad row at the top of a cycle stopped the whole fleet for
+two hours on 2026-08-24.
+
+**Follow-ups are filed only once the pull request is open, capped at five.** A task invented by a run
+nobody accepted is litter in somebody else's backlog, and the tracker is the one place here where
+litter outlives the run that made it. They land in Backlog rather than Pending: Pending means
+somebody looked at it and decided it was ready, and nothing here has done that.
+
+## A green run opens its own pull request
+
+Six clauses, **every one measured by conduct on a tree the phase could not write**: the descriptor's
+switch, a gate that passed in the pristine tree, nothing flagged, no test file gone and no test lines
+lost, no executable git state left behind, and a verdict of `done`. Fail any one and a person sees
+exactly the gate they saw before, and **the card names the clause that sent it to them** - a person
+being asked should not have to work out which measurement did it.
+
+**`concerns` deliberately does not gate.** The prompt tells the model an empty list is a real answer
+and an invented one is not; making an honest concern cost the run its autonomy teaches it to report
+none, which destroys the one field the verdict exists for.
+
+**A base-red run does not qualify**, and that is worth restating because it makes the feature look
+inert: upskald's `main` fails `e2e-test` in this runner today, so almost nothing will publish itself
+until that is fixed. The branch is still pushed and a person is still asked; all that changes is who
+opens the pull request.
+
+### `stop_after_if` is the mechanism, and it was the third one tried
+
+Measured on a scratch flow on 2026-08-25, because the obvious answer is wrong in a way nothing warns
+about:
+
+- **`skip_if` on the human gate disables that module's `suspend` whatever the predicate evaluates
+  to.** Proved with a literal `false`: the module still ran, the suspend never armed, and the flow
+  went straight through to the end. A `skip_if` gate could only ever publish and never ask.
+- **`skip_if` on the module that *waits* does not prevent the wait.**
+- **A `branchone` does contain a suspend, but in a SUB-JOB** where the parent reads `InProgress` and
+  `windmill.current_module()` returns `None` - so it would mean teaching conduct's whole discovery
+  path about nesting for one conditional.
+
+`stop_after_if` on a `publish_auto` module in front of the gate does it, drift-clean, and **nothing
+about conduct's discovery changes**: the module that suspends is still `publish_pr`, still
+unprefixed, still what `poll._resume` refuses to answer. The `conduct_` prefix boundary is exactly
+where it was; what changed is that some runs no longer have a human step for it to guard. The cost is
+two instances of the publish script, both rendered from one constant in git and told apart by a
+static argument.
+
+**The blast radius is one draft pull request.** conduct holds a deploy key with no REST surface,
+`publish.push` refuses any branch outside `agents/`, the pull request is always a draft, and
+upskald's auto-merge arms on a label or a `/merge` comment that this flow applies neither of. Nothing
+on this path can reach `main`.
+
+**And there was already a second lock nobody knew about.** `user_auth_required: true` on
+`await_human` makes `jobs/flow/resume` fail with *"Approvals for logged in users is an enterprise
+only feature"*. The UI path works - a person approved through it on 2026-08-24 - but the owner
+endpoint cannot, so conduct was structurally unable to answer that step by a mechanism underneath the
+prefix guard entirely.
+
 ## What is deliberately not built yet
 
 **No gate runs after the model call, and adding one would break a good run.** `make lint` is
@@ -1284,4 +1525,20 @@ job was to stop reporting it as somebody's broken change.
 
 **The Windmill run form renders `task` as a single-line input.** Whether Windmill has a textarea
 format is unmeasured, and guessing a schema key is how the `continue_on_disapprove_timeout` drift
-happened. `conduct run --task-file` is the path that does not care.
+happened. `conduct run --task-file` is the path that does not care. `odoo_task` makes this matter
+less: the work now arrives as a task id and the prose comes from the tracker.
+
+**Nothing checks whether the plan was followed.** verify measures the diff against the base and
+reads nothing either model wrote, which is the property the whole gate rests on - so a ship phase
+that ignored its plan entirely produces exactly the same evidence as one that followed it. The plan
+is on the card for a person to compare; there is no mechanical version of that and it is not obvious
+there should be.
+
+**The memory is synced by hand.** `bin/sync-agent-assets.sh` runs from the workstation because that
+is where both of the things it ships live, and nothing runs it on a schedule. `agents.memory_age`
+turns the resulting silence into a warning after seven days, which is a detector rather than a fix.
+
+**`agents.tracker_configured` asks whether the credential is present and never whether Odoo
+answers.** An hourly POST to a third party would put that party's uptime in the path of this
+battery, which is the same reason `routes.ntfy` sits behind `--routes`. A revoked API key therefore
+shows up as a line on an approval card and not as a check going amber.
