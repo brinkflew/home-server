@@ -1048,6 +1048,7 @@ if [ -z "$GREENBOOT" ]; then
 	upd_since=$(sed -n 's/^deferring_since=//p' "$upd_state" 2>/dev/null | tail -1)
 	upd_defer_at=$(sed -n 's/^last_defer_at=//p' "$upd_state" 2>/dev/null | tail -1)
 	upd_ran_at=$(sed -n 's/^last_run_at=//p' "$upd_state" 2>/dev/null | tail -1)
+	upd_allowed_at=$(sed -n 's/^last_allowed_at=//p' "$upd_state" 2>/dev/null | tail -1)
 	upd_unknown_at=$(sed -n 's/^last_unknown_at=//p' "$upd_state" 2>/dev/null | tail -1)
 	case "$upd_defers" in ''|*[!0-9]*) upd_defers=0 ;; esac
 	upd_since_d=""
@@ -1059,6 +1060,11 @@ if [ -z "$GREENBOOT" ]; then
 	if [ -n "$upd_ran_at" ]; then
 		upd_epoch=$(date -d "$upd_ran_at" +%s 2>/dev/null)
 		[ -z "${upd_epoch:-}" ] || upd_ran_h=$(( ( $(date +%s) - upd_epoch ) / 3600 ))
+	fi
+	upd_allowed_h=""
+	if [ -n "$upd_allowed_at" ]; then
+		upd_epoch=$(date -d "$upd_allowed_at" +%s 2>/dev/null)
+		[ -z "${upd_epoch:-}" ] || upd_allowed_h=$(( ( $(date +%s) - upd_epoch ) / 3600 ))
 	fi
 	fact update_playback_defers "${upd_defers:-}" num
 	fact update_playback_deferred_at "${upd_defer_at:-}"
@@ -1085,7 +1091,32 @@ if [ -z "$GREENBOOT" ]; then
 	# streak left behind by a gate that itself stopped running explains nothing
 	# and would turn this into the silencer it exists to avoid, so a stale
 	# last_run_at falls through to the helper and its blunter verdict.
-	if [ -n "$upd_since_d" ] && [ -n "$upd_ran_h" ] && [ "$upd_ran_h" -le 26 ]; then
+	# A SUCCESSFUL RUN ERASES ITS OWN EVIDENCE, WHICH IS THE SECOND SKIP REASON AND
+	# THE ONE THE ARM BELOW COULD NOT SEE. The deferral above is not the only thing
+	# bin/update-when-idle.sh refuses for: once a run is allowed, it suppresses the
+	# LATER ATTEMPTS OF THE SAME NIGHT for six hours, and
+	# host/systemd/podman-auto-update.timer.d fires at 00:00, 01:00 and 02:00. So a
+	# night that updates is a night that then skips twice - and a skip clears
+	# ExecMainExitTimestamp exactly as the block above describes.
+	#
+	# Measured on 2026-08-24: allowed at 00:08:21, Finished at 00:09:40, then
+	# "the update already ran" at 01:01:33 and again at 02:08:09. From 01:01 onward
+	# check_timer_run reported the update had NEVER run, on a host that had updated
+	# fifty minutes earlier. Every night that works looks like this; the check was
+	# green only in the gap between the run and the first suppression.
+	#
+	# GRADED ON last_allowed_at, WHICH IS THE DURABLE RECORD AND WAS ALREADY BEING
+	# WRITTEN - the script has recorded it all along and nothing read it. That is
+	# the rule this repository already holds for every automated job: a unit that
+	# exits 0 is not a record, because a reboot and now a skip both wipe it.
+	#
+	# IT COMES FIRST BECAUSE IT IS THE STRONGEST EVIDENCE. A fresh last_allowed_at
+	# says the update ran, which answers this check outright; a stale one falls
+	# through to the deferral arm, which explains WHY it has not, and then to the
+	# helper's blunter verdict when nothing explains it.
+	if [ -n "$upd_allowed_h" ] && [ "$upd_allowed_h" -le 26 ]; then
+		ok update.podman_run "the container update ran ${upd_allowed_h}h ago - the later attempts of that night skip themselves for six hours, and a skip clears ExecMainExitTimestamp, so the unit's own timestamps say 'never run' on a night that worked"
+	elif [ -n "$upd_since_d" ] && [ -n "$upd_ran_h" ] && [ "$upd_ran_h" -le 26 ]; then
 		if [ "$upd_since_d" -lt 2 ]; then
 			ok update.podman_run "the container update was deferred ${upd_since_d}d ago, $upd_defers attempt(s) - somebody was watching Jellyfin. A skip clears ExecMainExitTimestamp, so this is a deferral and not a stopped timer"
 		else
