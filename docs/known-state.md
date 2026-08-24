@@ -826,6 +826,30 @@ and the refusal is only in captured stderr. Proved to be environment-specific ra
 test: `database_is_local` returns `(True, '127.0.0.1')` for the workstation's URL under both sets,
 and `(False, 'db')` under the narrow set for the runner's.
 
+**THE RECONCILER REAPED A LIVE VERIFICATION, 27 SECONDS BEFORE IT FINISHED**, and `conduct/dispatch.py`'s
+own module docstring names the hazard it walked into. That docstring says the lease is claimed with
+*conduct's* pid rather than the phase's, because building the network and three datastores takes a
+minute or two and a lease with a dead pid looks stale to the reconciler. Twelve lines later,
+`set_pid` **overwrote** it with the container's. So the setup window was covered and the teardown
+window never was: from the moment a gate process exits until the run row closes, the lease pointed at
+a dead pid - and that branch of `reconcile.run` has **no `REAP_AFTER_SEC` grace at all**, deliberately,
+because a stale lease is what makes everything under it an orphan.
+
+Measured 2026-08-24 on a live run, not reasoned about: at 17:49:49 it released the lease, tore down
+the network and datastores and deleted the worktree, on a verification that finished at 17:50:16. It
+did no damage **only because everything after the gate reads staging and the database rather than the
+tree**. The window had been seconds; the base-gate measurement had just widened it to minutes -
+`preserve` copying 6 MB of artifacts, the clean check, the tree rebuild and the datastore
+recreation all sit between the two gate runs. Ninety seconds earlier it would have torn the
+datastores out from under the base gate, and **a false "the base is red" would have been cached for
+seven days** - the one lie that makes verify publish what it should refuse. `pid` is conduct's own
+and outlives the run; `runner_pid` is the container's. Neither reader needed changing.
+
+**It is a hand run that exposes this, and only a hand run can.** `serve` reconciles and verifies in
+one process, so it cannot reap a lease it is itself holding - but `docs/agents.md` explicitly tells a
+reader to run `conduct run` by hand while `serve` is looping, and that is two processes with one
+database between them.
+
 
 ## The gate the fleet was going to trust, and six ways it was not a gate
 

@@ -445,6 +445,9 @@ signal read green.
   `REDIS_URL` must name logical database 1, or e2e isolation collapses with every test still passing.
 - A guard keying on "is the database on loopback" refuses inside a namespace, where the address is a
   service name. Its own comment names the premise a phase runner breaks.
+- **The reconciler reaped a live verification 27 seconds before it finished**, because the lease's
+  pid had been overwritten with the container's - covering the setup window and never the teardown
+  one, on the branch that has no grace period. A hand run beside `serve` is the only way to see it.
 
 
 ### The gate the fleet was going to trust, and six ways it was not a gate
