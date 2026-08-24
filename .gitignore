@@ -48,3 +48,8 @@ node_modules/
 dist/
 .vite/
 
+
+# Claude Code worktrees: a checkout of THIS repository, made by a session for
+# isolation. Tracking one adds a gitlink that no clone can resolve, and `git add
+# -A` picks it up silently.
+.claude/worktrees/
