@@ -347,12 +347,23 @@ the package manifests, `pyproject.toml`, the tool configs, the lockfiles,
 ### The hook, and being honest about what it buys
 
 `conduct/hooks/deny.py` is copied into the fleet root at dispatch, mounted
-read-only at `/opt/conduct`, and named by an inline `--settings` payload
-alongside a `permissions.deny` list. Three things were measured before it was
-written, because the documentation is ambiguous on all three: **a `--settings`
-hook and a project hook both run** on the same matcher; **a `deny` in
-`--settings` blocks** a command the project settings tried to allow; and **a
-missing hook command fails open**, which is why none of this is the boundary.
+read-only at `/opt/conduct`, and named by a `settings.json` written beside it -
+a path rather than inline JSON, because a `--settings` path that does not exist
+exits 1 loudly where inline JSON that fails validation does not. Three things
+were measured before it was written, because the documentation is ambiguous on
+all three: **a `--settings` hook and a project hook both run** on the same
+matcher; **a `deny` in `--settings` blocks** a command the project settings tried
+to allow; and **a missing hook command fails open**, which is why none of this is
+the boundary.
+
+**The directory is per worktree, and that is recent.** It was one shared
+`cache/conduct/policy` until 2026-08-24, which was harmless while everything in
+it was per-project and identical across runs. It stopped being harmless the
+moment it started carrying a **prompt**: one directory then means "phase A runs
+phase B's task", silently, and this file tells you to run `conduct run` by hand
+while `serve` is looping. `conduct policy` still stages the shared copy, because
+`bin/conduct-runner-smoke.sh` has to have something to mount on a host where no
+phase has ever run.
 
 `permissions.deny` is the stronger half and should carry any rule expressible as
 a pattern, because **it spawns no process and so cannot fail open**. The hook
@@ -385,7 +396,22 @@ asymmetry to remember.
 **The mount is asserted before any work.** `sha256sum -c /opt/conduct/SHA256SUMS`
 runs ahead of the phase command and exits 78 if the policy did not arrive,
 arrived stale, or arrived truncated - because the failure it would otherwise
-produce is no failure at all.
+produce is no failure at all. The prompt is covered by the same digest, so the
+guard also proves it arrived intact and is *this* run's rather than the one left
+behind by whatever ran last.
+
+**And the digest is not enough on its own, which is what exit 79 is for.**
+`sha256sum` proves the bytes. It cannot prove the file is still *executable*,
+that its shebang resolves, that a read-only mount permits exec, or that SELinux
+lets `container_t` run a `container_file_t` file - and every one of those failing
+produces the same nothing as a missing mount, because the hook never runs and the
+tool call proceeds. So every phase pipes an empty payload through
+`/opt/conduct/deny.py` and asserts a deny before it starts. Empty stdin, because
+`deny.py` already refuses it by design - *"a call we could not see"* - so the
+whole preflight is one line with no JSON quoted through two layers of shell. It
+runs on `check` and `probe` too, deliberately: those cost nothing and run far
+more often, so a broken exec path should be found there rather than twenty
+minutes into a model phase.
 
 ### The GitHub credential is two credentials, and the runner holds neither
 
