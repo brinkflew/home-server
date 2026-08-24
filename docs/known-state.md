@@ -884,6 +884,35 @@ row closes into `undeliverable_at` rather than `resumed_at`, because whether an 
 is the one thing that table exists to know. `dispatch_forget` could not be reused - it carries
 `AND payload IS NULL` precisely so nothing can drop a computed answer.
 
+**A HALF-GRANTED TOOL COST A WHOLE RUN, AND THE PHASE REPORTED SUCCESS.** `--tools` named `Bash`
+and not `BashOutput`. The Bash tool offers `run_in_background`, a gate run takes minutes, so a ship
+phase backgrounded `make lint type-check` - and then had no first-class way to read the result, so
+it never did:
+
+```
+make -C ... lint type-check   ->  "Command running in background with ID bopas403w"
+...  BashOutput never called, bopas403w never read  ...
+git add api/tests/api/test_pagination.py && git commit
+```
+
+The commit carried three `basedpyright` `reportCallIssue` errors and the phase answered
+**`status: done` with an empty `concerns` list**. `verify` refused it in 91 seconds - `type-check`
+runs before `e2e-test`, so the failure came early and the base gate was a cache hit. Adding
+`BashOutput` grants nothing new: it reads the output of a Bash call the model already made and that
+`hooks/deny.py` already saw. **The lesson generalises past this tool** - granting a capability
+without granting the thing that observes its result is a grant that fails silently and expensively.
+
+**AND THE VERDICT IS ONLY AS GOOD AS THE PHASE'S OWN KNOWLEDGE, WHICH IS WHY NOTHING READS IT.** An
+earlier run of the IDENTICAL task added the `# type: ignore[call-arg]` that basedpyright wants and
+reported it as a concern; this one omitted it and claimed none. Same task, same model, same prompt,
+opposite self-assessment - and the only thing that told them apart was a gate run on a tree neither
+phase could write.
+
+**A REFUSAL FOR THE RIGHT REASON, PROVED BY THE COMPARISON REFUSING TO EXCUSE IT.** Head failed
+`type-check`; the base is red on `e2e-test` and not on `type-check`. Different targets, so the base
+did not account for it and the change was correctly blamed - which is the row of that table that
+protects the fleet from publishing its own mistakes under cover of somebody else's.
+
 **It is a hand run that exposes this, and only a hand run can.** `serve` reconciles and verifies in
 one process, so it cannot reap a lease it is itself holding - but `docs/agents.md` explicitly tells a
 reader to run `conduct run` by hand while `serve` is looping, and that is two processes with one

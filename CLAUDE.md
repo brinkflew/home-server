@@ -454,6 +454,9 @@ signal read green.
   is one-directional by measurement, not by oversight.
 - **One dead flow job stopped the whole fleet for two hours**, because the undelivered-answer retry
   runs unguarded at the top of the cycle, ahead of the notifications and the dispatch pass.
+- **Granting `Bash` without `BashOutput` is a grant that fails silently**: a phase backgrounded its
+  own type-check, could not read it, committed three type errors and answered `done` with no
+  concerns. The same task on an earlier run reported the exact issue as a concern.
 
 
 ### The gate the fleet was going to trust, and six ways it was not a gate
