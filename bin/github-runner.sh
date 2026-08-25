@@ -244,8 +244,17 @@ preflight() {
 	# fraction of a second against a tree the lane already owns, and the state it
 	# repairs is exactly the state a hand-run `mkdir` or a restored backup
 	# leaves behind.
-	podman unshare chown -R 1000:1000 "$LANE_ROOT" 2>/dev/null ||
-		die 3 "cannot chown $LANE_ROOT into the container's user namespace - 'podman unshare chown -R 1000:1000 $LANE_ROOT' is what a lane needs to write its own home"
+	# THE SUBDIRECTORIES, NOT THE ROOT, AND THAT DISTINCTION IS THE WHOLE OF IT.
+	# Chowning $LANE_ROOT itself hands the directory to the container's mapped
+	# subuid - and takes it away from `core`, which is this script. The mint body
+	# and the just-in-time configuration are both written by THIS process, so the
+	# lane root has to stay ours. Measured on the first live lane: every mint
+	# failed with "no response", because `jq > $LANE_ROOT/.mint.json` had been
+	# refused and curl was posting a file that did not exist.
+	for d in home toolcache storage runner tmp; do
+		podman unshare chown -R 1000:1000 "$LANE_ROOT/$d" 2>/dev/null ||
+			die 3 "cannot chown $LANE_ROOT/$d into the container's user namespace - a lane cannot write its own home without it"
+	done
 
 	# THE LANE'S NETWORK IS CREATED ONCE AND KEPT, unlike conduct's per-phase
 	# ones. There is nothing per-job about it, and agents.runner_isolation's own
@@ -384,7 +393,7 @@ cleanup() {
 	log "stopping"
 	[ -n "$cname" ] && podman rm -f "$cname" >/dev/null 2>&1
 	[ -n "$runner_id" ] && delete_runner "$runner_id"
-	rm -f "$jitfile"
+	podman unshare rm -f "$jitfile" 2>/dev/null
 	marker_write 0
 	exit 0
 }
@@ -471,8 +480,14 @@ while [ "$stopping" = 0 ]; do
 	esac
 
 	runner_id=$(http_body "$resp" | jq -r '.runner.id // empty' 2>/dev/null)
-	http_body "$resp" | jq -r '.encoded_jit_config // empty' > "$jitfile" 2>/dev/null
-	chmod 0600 "$jitfile" 2>/dev/null
+	# WRITTEN THROUGH `podman unshare`, because the runner tree belongs to the
+	# container's mapped subuid and this process does not. `tee` rather than a
+	# redirect for the same reason a redirect cannot work: the shell opens the
+	# target BEFORE unshare runs, as `core`, and is refused. The value travels on
+	# stdin either way, so it is in no argument vector.
+	http_body "$resp" | jq -r '.encoded_jit_config // empty' |
+		podman unshare tee "$jitfile" >/dev/null 2>&1
+	podman unshare chmod 0600 "$jitfile" 2>/dev/null
 
 	if [ ! -s "$jitfile" ]; then
 		consecutive_failures=$(( consecutive_failures + 1 ))
@@ -651,7 +666,7 @@ while [ "$stopping" = 0 ]; do
 	else
 		log "could not remove registration $runner_id"
 	fi
-	rm -f "$jitfile"
+	podman unshare rm -f "$jitfile" 2>/dev/null
 	cname=""
 	runner_id=""
 
