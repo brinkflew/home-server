@@ -431,7 +431,17 @@ say "Containment"
 probe() {
 	local label="$1" host="$2" port="$3" want="$4"
 	local rc=0 err=""
-	err=$(runner timeout 6 bash -c "exec 3<>/dev/tcp/$host/$port" 2>&1 >/dev/null) || rc=$?
+	# `sh -c "timeout ..."` AND NEVER `timeout` DIRECTLY, because the entrypoint
+	# execs its arguments and `timeout` would become PID 1. GNU timeout puts its
+	# child in a new process group unless --foreground is given, and as PID 1 that
+	# fails - so it returns **125**, its own "timeout itself failed" code, with
+	# nothing on stderr. Measured: `timeout 6 true` as the container command is
+	# 125, and the identical call one shell deeper is 0.
+	#
+	# IT LOOKED EXACTLY LIKE A CONTAINMENT FINDING. Four edges reported rc 125,
+	# which this function correctly refuses to read as either dropped or refused -
+	# and the cause was inside the probe rather than anywhere near the network.
+	err=$(runner sh -c "timeout 6 bash -c 'exec 3<>/dev/tcp/$host/$port'" 2>&1 >/dev/null) || rc=$?
 	err=$(printf '%s' "$err" | tr '\n' ' ' | cut -c1-160)
 	case "$want:$rc" in
 		dropped:124)   ok "$label is dropped (rc 124)" ;;
