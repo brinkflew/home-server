@@ -431,17 +431,24 @@ say "Containment"
 probe() {
 	local label="$1" host="$2" port="$3" want="$4"
 	local rc=0 err=""
-	# `sh -c "timeout ..."` AND NEVER `timeout` DIRECTLY, because the entrypoint
-	# execs its arguments and `timeout` would become PID 1. GNU timeout puts its
-	# child in a new process group unless --foreground is given, and as PID 1 that
-	# fails - so it returns **125**, its own "timeout itself failed" code, with
-	# nothing on stderr. Measured: `timeout 6 true` as the container command is
-	# 125, and the identical call one shell deeper is 0.
+	# `--foreground` IS LOAD-BEARING AND IS NOT ABOUT TERMINALS. GNU timeout
+	# normally puts its child in a NEW PROCESS GROUP so it can signal the whole
+	# group; as pid 1 that call fails, and timeout then returns **125** - its own
+	# "timeout itself failed" code - with nothing on stderr at all. The entrypoint
+	# execs its arguments, so timeout is pid 1 here.
+	#
+	# WRAPPING IT IN A SHELL DOES NOT HELP, WHICH IS THE PART THAT MISLED.
+	# `sh -c 'timeout ...'` with a SINGLE command execs it, so timeout is still
+	# pid 1 and still returns 125. A first measurement suggested otherwise only
+	# because it happened to be written `timeout 6 true; echo rc=$?` - the second
+	# command suppresses the exec optimisation, and that is the whole difference.
+	# Measured in one container, same flags: bare 125, `sh -c` single command 125,
+	# `--foreground` 0.
 	#
 	# IT LOOKED EXACTLY LIKE A CONTAINMENT FINDING. Four edges reported rc 125,
 	# which this function correctly refuses to read as either dropped or refused -
 	# and the cause was inside the probe rather than anywhere near the network.
-	err=$(runner sh -c "timeout 6 bash -c 'exec 3<>/dev/tcp/$host/$port'" 2>&1 >/dev/null) || rc=$?
+	err=$(runner timeout --foreground 6 bash -c "exec 3<>/dev/tcp/$host/$port" 2>&1 >/dev/null) || rc=$?
 	err=$(printf '%s' "$err" | tr '\n' ' ' | cut -c1-160)
 	case "$want:$rc" in
 		dropped:124)   ok "$label is dropped (rc 124)" ;;

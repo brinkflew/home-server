@@ -751,6 +751,11 @@ signal read green.
   the tool-cache mount hid the baked Python), **`cp -a` carries the MCS categories** so the next
   container cannot read what it was given, **`core` cannot `rm` a lane** without `podman unshare`,
   and **`rootless_storage_path` under `[storage]`** is the key that is read - `graphroot` is not.
+- **`timeout` as pid 1 returns 125 with nothing on stderr**, so four by-IP containment probes
+  reported they had proved nothing and the cause was inside the probe. **A shell wrapper does not
+  fix it**: `sh -c 'timeout ...'` with a single command EXECS it. `--foreground` is what works, and
+  a first measurement pointed the other way only because it happened to have a second command
+  after the `;`.
 - **A ceiling is not usage, and reading it as one nearly cost a second slice.** app-agents reserves
   4,608M and its 30-day median is **957 MB**, p90 1,455 MB, with a phase in flight 6.9% of the time.
   `-p AllowedCPUs=` works on a transient SCOPE as well as a slice - measured, `nproc` reads 2.
