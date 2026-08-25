@@ -2458,3 +2458,26 @@ nothing was wrong with the key, the ref, the branch name or the remote.
   the tracker and two pairs were one task each, differing by "API" and by "response" - which a
   case-folded title comparison cannot see. Word sets, merged when one contains the other; over-merging
   loses a follow-up nobody wrote down twice, under-merging litters a backlog for ever.
+
+## A backlog is a corpus, and the parent task is in it
+
+- **Nothing ever asked the tracker whether a follow-up already existed.** `_merge_follow_ups`
+  deduplicates the two sources of ONE run against each other and stops there, so a task re-run after
+  a failure re-files everything it filed the first time, and a follow-up duplicating a task a PERSON
+  wrote was never checked at all. Same litter, different door.
+- **The rule survives a wider corpus; the LENGTH at which it is trusted does not.** Measured over the
+  905 open non-epic tasks in project 17, the bare word-set subset rule collides 9 times and every
+  invention is one shape - `Public status page` inside `Include the public API in SLOs and on the
+  status page`, `Audit Logs` inside `Retain audit logs at least twelve months`. Short, epic-ish
+  titles swallowing real work. At a floor of four distinguishing words **on both sides** it collides
+  3 times and all three are genuine duplicates. The dangerous direction is the short EXISTING title
+  eating a long candidate, so a floor on the candidate alone would have left the failure in place.
+- **A follow-up's own parent task is a false positive, and only a live run showed it.** With 1266
+  `Cap the size of a request body` back in Pending, a candidate of that name matched the task that
+  asked for it. A follow-up is deferred work FROM its task, the parent is usually the shortest
+  phrasing of the subject, and every narrower follow-up is therefore a superset of it.
+- **A tracker search that fails must file anyway.** The asymmetry inverts the one `_merge_follow_ups`
+  reasons from: a duplicate in Backlog is something a person deletes, a finding dropped because a
+  search timed out is gone. The note is what stops the degradation being silent.
+- **The cap has to apply to what SURVIVES the dedup.** Applied first, three already-open titles spend
+  three of the five slots and a genuine sixth is never reached.

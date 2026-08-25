@@ -588,6 +588,14 @@ signal read green.
   writing a body, only the right one; and two phases naming one finding differ by a word, which a
   case-folded title comparison cannot see.
 
+### A backlog is a corpus, and the parent task is in it
+- Nothing ever asked the tracker whether a follow-up already existed, so a re-run re-filed its own
+  follow-ups and a duplicate of a task a PERSON wrote was never checked at all.
+- The subset rule survives a wider corpus; the length at which it is trusted does not. Measured over
+  905 open tasks: 9 collisions bare, 3 at a four-word floor on BOTH sides, and all three real.
+  Epics are dropped, and a follow-up's own parent task is a false positive only a live run showed.
+- A tracker search that fails must file anyway and say so, and the cap applies to what survives.
+
 ### A failed flow is unrecoverable and almost nothing in it is
 - A Windmill `CompletedJob` is terminal, but the plan, the commits, the report and the review all
   survive - so a resume is a NEW flow run that skips the three model phases conduct recorded as

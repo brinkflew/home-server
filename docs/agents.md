@@ -1717,9 +1717,11 @@ cannot be fetched has nothing to do. By the review and the squash the commits ex
 passed on them, so those steps fall back to the task text conduct recorded on the run row when it
 dispatched the phase that did the work, and say so.
 
-**Follow-ups are merged from two phases and filed once.** The plan's triage and the dev phase's
-verdict both name follow-ups, and both are looking at the same findings - so they are deduplicated by
-title, capped at five, and filed only after a pull request exists. A declined run still files nothing.
+**Follow-ups are merged from two phases, checked against the tracker, and filed once.** The plan's
+triage and the dev phase's verdict both name follow-ups, and both are looking at the same findings -
+so they are deduplicated against each other by word set, then against every open task in the project,
+then capped at five, and filed only after a pull request exists. A declined run still files nothing.
+**The cap applies to what survives the dedup**, not to what was asked for.
 
 ### What the reviewing phase is allowed to run, and the one command that lies
 
@@ -1943,6 +1945,44 @@ the other. Exact, untuned, and matched to the shape this actually takes. The asy
 settles the direction: over-merging loses a follow-up nobody had written down twice anyway, and
 under-merging puts a duplicate in a backlog for ever - the one place here where litter outlives what
 made it.
+
+### A backlog is a corpus, and neither the parent nor an epic belongs in it
+
+`_merge_follow_ups` deduplicates the two sources of **one run** against each other. It has never
+asked Odoo what already exists, so a task re-run after a failure re-filed everything it filed the
+first time, and a follow-up duplicating a task **a person** had written was never checked at all.
+`odoo.open_titles()` closes that: every open task as `(id, title)`, excluded by `state` rather than
+by stage name, because stage names are a person's to rename and that module already refuses to
+remember any of them.
+
+**The rule is the same; the corpus is what changes the arithmetic.** Five candidates from two phases
+describing one change is a place where a bare subset test is exact and cheap. Nine hundred tasks is
+not. Measured over the 905 open non-epic tasks, the bare rule collides **9 times**, and everything it
+invents is one shape: `Public status page` inside `Include the public API in SLOs and on the status
+page`, `Audit Logs` inside `Retain audit logs at least twelve months`. Short, epic-ish titles
+swallowing real work.
+
+**Two exclusions, and a floor, each earned separately:**
+
+- **The Epics stage is dropped.** An epic is a container and is named like one, which is exactly the
+  title half a backlog is a superset of.
+- **A floor of four distinguishing words, on BOTH sides.** At four the rule collides **3 times across
+  905 titles and all three are genuine duplicates**, two of them the 1577/1580 and 1578/1581 pairs
+  the fleet filed itself. The dangerous direction is the short EXISTING title swallowing a long
+  candidate, so testing only the candidate's length would have left the failure the measurement
+  found. Three in nine hundred is what makes comparing against a whole backlog safe at all; the test
+  for the floor fails when the floor is removed.
+- **The source task is not in its own corpus.** Found by running the deployed check against the live
+  tracker rather than by reading it: with 1266 `Cap the size of a request body` back in Pending, a
+  candidate of that name matched it. A follow-up is deferred work FROM its task and shares that
+  task's vocabulary by construction - and the parent is usually the SHORTEST phrasing of the subject,
+  which makes every narrower follow-up a superset of it. The relationship is already recorded;
+  `odoo.follow_up` writes "Filed by the agent fleet while working on task N" into the body.
+
+**A failed search files anyway, and says so.** The asymmetry runs the other way from the one
+`_merge_follow_ups` reasons from: a duplicate in Backlog is something a person deletes, and a finding
+dropped because a search timed out is gone. The tracker must never be able to stop the fleet, and
+that includes stopping it quietly - so the note is what keeps the degradation visible.
 
 ## What is deliberately not built yet
 
