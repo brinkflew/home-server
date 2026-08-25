@@ -485,8 +485,18 @@ while [ "$stopping" = 0 ]; do
 	# redirect for the same reason a redirect cannot work: the shell opens the
 	# target BEFORE unshare runs, as `core`, and is refused. The value travels on
 	# stdin either way, so it is in no argument vector.
+	# THE CHOWN IS NOT OPTIONAL AND 0600 IS WHY. `podman unshare` maps `core` to
+	# container uid 0, so `tee` creates this file owned by container ROOT - and
+	# the runner is uid 1000. At 0600 it is then unreadable by the only process
+	# that needs it, and the failure arrives inside the container as
+	#   cat: .jitconfig: Permission denied
+	#   An error occurred: Not configured. Run config.(sh/cmd) to configure...
+	# which reads as a runner that was never configured rather than as a file
+	# mode. Measured by hand, because --log-driver=none means a lane never shows
+	# it. Group 0 because that is the runner's primary group - see the Dockerfile.
 	http_body "$resp" | jq -r '.encoded_jit_config // empty' |
 		podman unshare tee "$jitfile" >/dev/null 2>&1
+	podman unshare chown 1000:0 "$jitfile" 2>/dev/null
 	podman unshare chmod 0600 "$jitfile" 2>/dev/null
 
 	if [ ! -s "$jitfile" ]; then
