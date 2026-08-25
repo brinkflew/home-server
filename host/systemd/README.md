@@ -24,7 +24,8 @@ systemctl --user enable --now home-server-promote.timer home-server-verify.timer
                               home-server-reboot.timer home-server-metrics.timer \
                               home-server-dashboard-build.timer home-server-seeding.timer \
                               home-server-search.timer home-server-conduct-runner-build.timer \
-                              home-server-agents-update.timer home-server-mirror-update.timer
+                              home-server-agents-update.timer home-server-mirror-update.timer \
+                              home-server-github-runner-build.timer
 
 # TWO UNITS HERE ARE SERVICES RATHER THAN TIMERS, so they are enabled on their
 # own line. conduct is long-running - it polls - rather than something a clock
@@ -48,6 +49,28 @@ systemctl --user enable --now home-server-conduct.service
 # graph by a .container that names it; nothing references conduct-runner, so
 # without this line the phase runner does not exist until the first Saturday.
 systemctl --user start home-server-conduct-runner-build.service
+
+# THE SAME ONE-TIME START, FOR THE SAME REASON, and with a worse consequence if
+# it is skipped. No .container references the CI runner image either, so on a
+# fresh host it does not exist - and a lane's preflight then exits 4 on every
+# attempt until the first Saturday, which the start limit turns into a unit
+# sitting in `failed`. It takes longer than the phase runner's: a Fedora base,
+# a dnf transaction including a browser dependency set, and a smoke test that pulls
+# three service images through the NESTED engine on a cold store.
+systemctl --user start home-server-github-runner-build.service
+
+# THE CI LANES ARE INSTANCES OF A TEMPLATE, so they are enabled by name rather
+# than by the glob above - the glob links the template file, which cannot be
+# started on its own. Two lanes, because host/systemd/app-ci.slice owns CPUs 4-7
+# and each lane takes half; bin/github-runner.sh refuses a third rather than
+# silently sharing a pair.
+#
+# THEY WILL NOT START UNTIL GITHUB_RUNNER_PAT AND GITHUB_RUNNER_GROUP_ID ARE SET
+# and that is deliberate - a lane exits 3 naming the variable rather than
+# registering into the organisation's Default group, which every public
+# repository can see. See .env.sample and docs/ci.md.
+systemctl --user enable --now home-server-github-runner@1.service \
+                              home-server-github-runner@2.service
 ```
 
 **`/var/agents` IS A SECOND CHECKOUT AND IT IS NOT MADE BY ANY OF THIS.** conduct's
@@ -234,6 +257,9 @@ symlinks, so there is no copy step. Only `daemon-reload` is needed.
 | `home-server-agents-update` | Pulls `/var/agents` nightly at 04:50 and restarts conduct only if it was already running. `--ff-only`, so a checkout that has diverged is refused rather than merged - and `agents.checkout_drift` reports it within the hour. Nothing is built: conduct is stdlib-only, so there is no venv to rebuild and no lockfile to drift. |
 | `home-server-conduct-secret` | Copies the runner's model credential out of the rendered `.env` into podman's secret store, over **stdin** - the only route that puts it in neither argv nor a second file on disk. `Environment=` on a quadlet is printed in full by `systemctl --user show -p Environment`, and `--secret` from a file needs the plaintext at a second path. Measured afterwards: the value reaches the container and `podman inspect` shows neither it, nor the target variable's name, nor anything in `.Config.Secrets`. Inside the container it is still in `/proc/1/environ`, which is why the runner's token is a **different** token from the one conduct reads the quota with. `agents.model_credential` warns when the secret is OLDER than the `.env` it came from - the state nothing else here can see, because the phases keep working and authenticate as the wrong credential. |
 | `home-server-mirror-update` | Fetches each project's mirror from GitHub nightly at 04:40, ten minutes ahead of the checkout pull so a refresh runs on code that was already deployed. **The mirror is not a cache**: `avanserv/upskald` is private and the phase runner may hold no GitHub credential in any form, so a container cannot clone it; the base every diff is measured against has to come from a repository the phase cannot write; and one host-side copy is what pins base and worktree to the same moment. It runs over a **second** read-only deploy key and passes `-F /dev/null`, because the `Host github.com` block above pins `IdentitiesOnly` to the other one - and GitHub answers a valid key for the wrong repository with `repository not found`. `agents.mirror_fresh` reads `FETCH_HEAD`'s mtime, since a mirror that quietly stopped moving is indistinguishable from one nothing has pushed to until verify refuses three days later. See `conduct/mirror.py`. |
+| `home-server-github-runner-build` | Rebuilds the GitHub Actions CI runner image weekly and **verifies it before a job can be stranded on it**. Same three-step shape as the phase runner's - build, `bin/github-runner-smoke.sh`, then `podman tag :next :latest` - and the same property that nothing else builds this image, so a fresh host needs the one-time start above. What its smoke test does that the phase runner's does not is prove the image can run CONTAINERS: a nested rootless pull, a published port answering on `localhost`, and a service container reaching `healthy`. That last one is not fussiness. Podman drives healthchecks with transient systemd timers, there is no systemd inside a container, and GitHub's runner waits on health status in a loop with **no retry cap** - so without `apps/github-runner/scripts/podman-healthcheck-loop.sh` a `services:` job holds a lane for the default 360 minutes with the container running, the service serving, and nothing on this host reporting anything wrong. See `apps/github-runner/Dockerfile`. |
+| `home-server-github-runner@` | **A template, one instance per CI lane**, enabled by name because the glob above links the template rather than an instance. Each lane mints a single-use just-in-time runner identity on the `avanserv` organisation, runs exactly one job in a `podman run --rm` container under a transient scope in `app-ci.slice`, and repeats. The organisation PAT never enters the container - it reaches `curl` on stdin, so it is not in argv either - and `bin/github-runner-smoke.sh` asserts its absence from `/proc/1/environ` rather than assuming it. **The loop is in the script, not in `Restart=`**: a finished job is a process exit, so letting systemd cycle it would make a completed job and a crash indistinguishable and put a busy lane into `failed` for having done its work. A non-zero exit therefore always means something a restart cannot fix, and the exit code says which - 3 configuration, 4 missing image, 5 credential rejected, 6 bad runner group. See `bin/github-runner.sh` and `docs/ci.md`. |
+| `app-ci.slice` | **The second cgroup ceiling, and not a unit that runs anything.** Both CI lanes, their drivers and the image build join it. Sized against a measurement rather than against the other slice's ceiling, which is what makes two slices fit on a 15.8 GB host: `app-agents.slice` reserves 4,608M but its 30-day median use is **957 MB**, its p90 1,455 MB, and a phase is in flight **6.9%** of the time. `AllowedCPUs=4-7` here is only half the answer - the slice value alone would give *both* lanes `nproc=4` and put eight workers on four cores, so `bin/github-runner.sh` pins each lane scope to half of it and a job sees 2. Assert it by its effect: `ci.slice_limits` reads all six controls back out of the cgroup, because a `Slice=` naming a slice with no unit file silently gets systemd's defaults. See `host/systemd/app-ci.slice`. |
 | `podman-auto-update.service.d` | **Not a unit of ours - a drop-in over podman's**, and now three files. `10-` makes the `ExecStartPost=` image prune non-fatal, so a disk reclaim that could be skipped for a night cannot mark the unit that updates eighteen containers as failed. It could and did: on 2026-08-17 and 2026-08-18 `podman auto-update` exited 0, every container updated, and the unit reported failure because the prune hit a leftover build container and exited 125. The condition itself is now measured by `containers.storage_orphans`, which is what makes this a correction and not a silencer. `20-` runs `bin/pre-update-snapshot.sh` as `ExecStartPre=` with **no** `-` prefix, so a failed database snapshot aborts the update rather than leaving the rollback with nothing to restore. `30-` runs `bin/update-when-idle.sh` as `ExecCondition=`, which skips the run - without failing the unit - while somebody is watching Jellyfin. |
 | `podman-auto-update.timer.d` | **Also a drop-in over podman's**, and the reason the symlink loop above had to learn `*.timer.d`. Podman ships `OnCalendar=daily`, one attempt at ~00:00-00:15 and no second chance for a day. That is fine for an unconditional update and wrong for a gated one, so this replaces it with three attempts at 00:00, 01:00 and 02:00 UTC - 02:00 to 04:00 local, the quietest band there is. The `OnCalendar=` empty assignment is load-bearing for the same reason `10-`'s is: systemd appends to a list directive unless it is cleared first. |
 

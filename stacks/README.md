@@ -135,18 +135,20 @@ stale local base image for ever while succeeding in four seconds.
 | `caddy.build` | `home-server-caddy-build.timer` | Sat 22:00 | It compiles Caddy with xcaddy to add `caddy-dns/gandi`, and Caddy does not release daily. The build is also the safety net: an upstream release that will not compile against the DNS module fails there, while the running proxy keeps serving. |
 | `dashboard.build` | `home-server-dashboard-build.timer` | nightly 23:00 | **Its input is the checkout, not an upstream release**, and `dist/` is not committed - so this timer is also the deploy path. A `git pull` touching `apps/dashboard/src/` deploys nothing until it runs. A weekly cadence would mean a commit taking up to seven days to appear, silently. |
 | `conduct-runner.build` | `home-server-conduct-runner-build.timer` | Sat 21:00 | **The odd one out in three ways.** It tags `:next` rather than `:latest`, because `npm install -g @anthropic-ai/claude-code` succeeds against a broken release where `xcaddy` does not - so `bin/conduct-runner-smoke.sh` is the gate and the timer promotes only on a pass. It carries **no `AutoUpdate=`**, because no container references it: `conduct` runs it as `podman run --rm` from the host. And **nothing else ever builds it** - the other two are pulled into the dependency graph by a `.container` that names them, so `Persistent=true` is what makes a fresh host build this one at all. |
+| `github-runner.build` | `home-server-github-runner-build.timer` | Sat 20:00 | **`conduct-runner.build`'s shape, with a deadline behind it.** Same three oddities - `:next` plus a smoke gate, no `AutoUpdate=`, and nothing else ever building it - because `curl \| tar` of a runner tarball succeeds against a release that cannot run here just as `npm install -g` does. What is different is that this image's contents EXPIRE: GitHub enforces a minimum runner version and a runner below it stops being given jobs, with the symptom a job that queues for ever while the runner shows online. That is not what this cadence defends against, and believing it was would be the mistake - the lane's runner tree is writable so the runner updates *itself*, and this timer refreshes the SEED a new lane starts from plus the Fedora base under it. `ci.runner_version` grades what is on disk in a lane, never this image's `ARG`. Weekly rather than nightly for the reason its sibling gives: the build is over a gigabyte with a dnf transaction and a runner download, and a nightly build whose smoke fails is a nightly `failed` unit. |
 
 The first two deliberately do **not** restart their container. The build is the check - `xcaddy`
 compiles for one, `vue-tsc` type-checks for the other - so a bad commit fails at build time while
 the previous image keeps serving. The nightly `podman-auto-update` run is what swaps them, and
 `Notify=healthy` is what rolls back an image that will not come up.
 
-**`conduct-runner.build` restarts nothing either, and for a different reason: there is nothing to
-restart.** It has no container and no `AutoUpdate=`, so neither counting check sees it -
-`update.policy_count` greps `AutoUpdate=` out of `stacks/*/*.container` and `containers.units_active`
-iterates `*.container` and `*.pod`. Its safety net is not the compiler and not `Notify=healthy`; it
-is that `conduct` resolves `:latest` at the moment it starts a phase, and only a passing smoke moves
-that tag.
+**`conduct-runner.build` and `github-runner.build` restart nothing either, and for a different
+reason: there is nothing to restart.** Neither has a container or an `AutoUpdate=`, so neither
+counting check sees them - `update.policy_count` greps `AutoUpdate=` out of `stacks/*/*.container`
+and `containers.units_active` iterates `*.container` and `*.pod`. Their safety net is not the
+compiler and not `Notify=healthy`; it is that the thing which runs them resolves `:latest` at the
+moment it starts a container, and only a passing smoke moves that tag. A phase or a job already in
+flight finishes on the image it started with, and the next one picks the new one up.
 
 **Old images survive the nightly prune.** The shipped `podman-auto-update.service` runs
 `podman image prune -f` afterwards, but a superseded image keeps its repository digest and so is not

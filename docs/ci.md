@@ -1,0 +1,496 @@
+# Continuous integration on this host
+
+`docs/agents.md`'s sibling. That file is the hosting for the coding-agent fleet; this is the
+hosting for GitHub Actions. They share a host, a design language and most of their traps, and
+where they differ it is written down here rather than left to be inferred.
+
+Added 2026-08-24.
+
+## What this is
+
+Two **lanes**. Each is a `systemd --user` process that mints a single-use GitHub Actions runner
+identity, starts one container, lets that container run exactly one job, tears the registration
+down, and does it again. The lanes are `home-server-github-runner@1.service` and `@2`; the driver
+is `bin/github-runner.sh`; the image is built here from `apps/github-runner/Dockerfile`.
+
+```
+tier 0  systemd --user, unconfined_t   home-server-github-runner@<n>   may fork podman
+tier 1  container_t, uid0 -> core      github-runner (--rm)            the runner, one job
+tier 2  inside tier 1's own userns     postgres / redis / mailpit      the job's services:
+```
+
+The middle row is where the difference from `docs/agents.md` lives. A phase runner executes
+model-authored code and needs no container runtime; a CI lane executes whatever is in a pull
+request and **must** have one, because `avanserv/upskald` uses `services:` in four jobs and
+GitHub's runner implements those by shelling out to `docker`. So there is a nested rootless podman
+inside the lane, and tier 2 is inside tier 1's user namespace rather than beside it.
+
+**The host's podman socket is not reachable from any of it.** That is the same fact the whole
+three-tier design in `docs/agents.md` rests on - `container_t -> unconfined_t :
+unix_stream_socket connectto` is DENY under enforcing SELinux - and it is why the thing that
+forks podman is a plain user unit rather than a quadlet.
+
+## Scope: the organisation, and why not the account
+
+Registration is at **organisation** level, on `avanserv`, into a **runner group scoped to
+selected repositories**. One registration covers every repository the group can see.
+
+`brinkflew/*` is out of scope and cannot be brought in. GitHub has no account-level self-hosted
+runners - only repository, organisation and enterprise - so a personal repository would need a
+registration of its own, per repository. That is a different design.
+
+**The group is not the Default group, and `bin/github-runner.sh` refuses to start without being
+told which one it is.** `avanserv` holds nineteen repositories and three are public
+(`vsx-antigravity-quota`, `vsx-avanserv-theme`, `dialog`). A self-hosted runner reachable from a
+public repository executes fork pull-request code on this host, as `core`, which owns
+`/var/home-server` and every credential in it. Defaulting to group 1 would have made the safe
+configuration the one somebody has to remember; refusing makes it the only one that starts.
+
+### Organisation state this repository cannot see
+
+Two settings live in GitHub's UI, are not in git, and nothing here can restore them. They are
+written down because that is the only thing that can be done about them.
+
+1. **The runner group is scoped to selected repositories, and "Allow public repositories" is
+   off.** If a repository in the group is ever made public, that decision has to be revisited in
+   the same breath.
+2. **The token is a fine-grained PAT with exactly one permission** - Organization permissions ->
+   Self-hosted runners -> Read and write. An organisation may require fine-grained tokens to be
+   approved before they work at all, and an unapproved one answers 403, which reads as a
+   permissions bug rather than as a pending request.
+
+## The lane lifecycle
+
+```
+preflight (once)   config, image, lane dirs, net-ci-<n>, seed the runner tree
+loop:
+  hold             lane 2 only, while a conduct phase is in flight
+  gc               if the lane is over its disk budget
+  reap             offline registrations this lane left behind
+  mint             POST /orgs/<org>/actions/runners/generate-jitconfig
+  run              systemd-run --scope ... podman run --rm ... run.sh --jitconfig
+  poll             every 30s: busy? idle past the ceiling?
+  teardown         DELETE the registration, delete the config, count the job
+```
+
+**The loop is in the script rather than in `Restart=`, and that is the whole design of the unit
+file.** A finished job is a process exit, so letting systemd cycle the lane would make a completed
+job and a crash indistinguishable: `StartLimitBurst` would be counting successful work, and a busy
+afternoon would put a lane into `failed` for having done its job. With the loop in the script,
+`Restart=` only ever fires when the driver itself died, which is always a fault.
+
+That makes the exit code meaningful, and it is classified rather than uniform:
+
+| Exit | Meaning |
+|---|---|
+| 2 | the lane argument is not 1 or 2 |
+| 3 | configuration missing or empty |
+| 4 | the image does not exist |
+| 5 | GitHub rejected the credential - 401 or 403 |
+| 6 | GitHub rejected the request - 422, almost always a bad runner group |
+| loop | 429, 5xx, DNS, a timeout - anything a later attempt could survive |
+
+The middle four are **states, not events**. Retrying them is how a lane spins for ever minting
+registrations against a rate limit. An unset token must not look like a fault and a revoked one
+must not look like health - the same distinction `docs/agents.md` draws for conduct's token.
+
+## The credential
+
+**The PAT never enters the container.** The lane holds a token that can register runners on the
+organisation; it uses that to mint a just-in-time configuration - single use, one job, that
+organisation - and hands the container only that.
+
+**Even the header stays out of argv.** `-H "Authorization: Bearer $PAT"` puts the token in
+`/proc/<pid>/cmdline`, readable by anything on this host running as `core`. It goes to `curl` over
+stdin instead, the same idiom `bin/sync-podman-secrets.sh` uses for the model credential.
+
+**It is deliberately NOT a podman secret**, and that is the inverse of the argument that script
+makes. A podman secret exists to get a value *into* a container without it appearing on a unit's
+`Environment=` or at a second path on disk. This value must never get into a container at all, so
+making it a secret would build the route it must not have.
+
+**A workflow step can read its own JIT credential**, and that is inherent to every self-hosted
+runner in existence: the runner writes `.runner` and `.credentials` to disk from it before it does
+anything else. What bounds it is that the identity is single-use, scoped to "take one job from
+this organisation", and dies with the container - and that the thing which mints more of them is
+not there. `bin/github-runner-smoke.sh` asserts that absence with one line rather than assuming
+it.
+
+## The nested engine, and the timer that does not exist
+
+**Podman drives healthchecks with transient systemd timers.** On this host that is visible:
+`systemctl --user list-timers` shows one hash-named timer per healthchecked container,
+twenty-five of them. There is no systemd session inside a container, so `podman create
+--health-cmd` only **warns**, the service starts and genuinely serves, and
+`.State.Health.Status` stays `starting` for ever.
+
+**That is a six-hour hang, not a cosmetic defect.** GitHub's runner waits on exactly that field
+before it will run a job's steps, in a loop with **no retry cap**, and `avanserv/upskald` sets
+`timeout-minutes:` on none of its jobs - so the default 360 minutes applies. One pull request
+would hold both lanes for the afternoon while every signal on this host read green: the container
+running, the service serving, no unit failed, nothing unhealthy.
+
+`apps/github-runner/scripts/podman-healthcheck-loop.sh` is what closes it - `podman healthcheck run` per
+container, at the interval that container declared, which is what the timer would have done.
+Podman's own retry, start-period and failing-streak logic all live inside that subcommand, so the
+loop decides *when* and nothing else.
+
+**The interval is honoured rather than guessed, and the direction of the guess is the point.** A
+workflow's `--health-retries 5 --health-interval 10s` gives postgres fifty seconds to come up.
+Polling every second would spend those five retries in five seconds and mark a healthy database
+`unhealthy` before it had finished starting - and the runner **fails a job** on unhealthy. So an
+interval that cannot be parsed falls back to thirty seconds, not to one: too long merely makes a
+job wait, too short fails it.
+
+**The obvious alternative fix is worse than doing nothing.** Stripping the health flags in the
+shim makes `.Config.Healthcheck` empty, the runner's wait returns immediately, and the job races
+Postgres's startup instead - trading a reliable hang for an intermittent failure.
+
+### Three more things the nested engine needs
+
+- **A short name must resolve.** A workflow writes `image: postgres:16-alpine`, unqualified,
+  because Docker resolves that to Docker Hub. Podman refuses a short name with no search list, and
+  a job log calls that a bad image reference. `apps/github-runner/registries.conf`.
+- **The graph root must be a host bind mount.** Native overlay cannot stack on the outer
+  container's own overlay rootfs, so an inner store on the container filesystem silently falls
+  back to `vfs` - every layer a full copy, at every pull, for ever, with nothing saying why. `/var`
+  is XFS with `ftype=1` (measured), so the lane's own directory works. The smoke test asserts the
+  driver is not `vfs`.
+- **`/dev/net/tun` lands as group 0**, and the nested namespace loses that. Measured inside a
+  rootless container here: `/dev/fuse` is `crw-rw-rw-` and any uid can open it, `/dev/net/tun` is
+  `crw-rw---- 65534 0`. See the containment section below for why the answer is the runner's
+  primary gid and not a chmod.
+- **The lane's mounts mask what the image put there.** An empty `$HOME` bind mount hid the base
+  image's own engine configuration (`stat /home/runner/.config: no such file or directory`, and
+  then a socket that never binds), and the tool-cache mount hid the baked Python. Both are seeded
+  at start-up from paths the mounts do not cover - `/etc/containers` and
+  `/opt/hostedtoolcache-seed`.
+- **`cp -a` carries the SELinux MCS categories** of whichever container did the copying, so the
+  next container - with a different pair - cannot read what it was given:
+  `ls: cannot open directory '/opt/hostedtoolcache/Python': Permission denied`, on a directory
+  plainly present and owned by the right uid. `cp -rp` inherits the destination's label instead.
+  Both the tool-cache seed and the runner-tree seed do this.
+- **`core` cannot delete a lane from outside the namespace.** Everything under it belongs to the
+  subuid container uid 1000 maps to, so the disk reclaim and the smoke test's cleanup both use
+  `podman unshare rm -rf`. A plain `rm` produces a wall of `Permission denied` and leaves the
+  budget un-reclaimed while reporting nothing.
+
+## Containment: what it keeps, and what it gives up
+
+Read off a live phase container while a `ship` phase was running:
+
+```
+CapDrop=[CAP_CHOWN ... CAP_SETGID CAP_SETUID ...]  readonly=true  [no-new-privileges]
+```
+
+**A nested podman cannot run inside that**, and the profile it does need was arrived at by
+bisecting one flag at a time on this host rather than copied from a guide. The whole of it:
+
+```
+--cap-add=SYS_ADMIN
+--security-opt label=type:container_engine_t
+--security-opt unmask=ALL
+--device /dev/fuse --device /dev/net/tun
+```
+
+on top of podman's **default** capability set, with SELinux enforcing and the default seccomp
+profile. Each was added because something specific refused, and the refusals are worth keeping
+because none of them names the flag that fixes it:
+
+| Missing | What it says |
+|---|---|
+| `container_engine_t` | ``crun: mount `devpts` to `dev/pts`: Permission denied`` |
+| `unmask=ALL` | ``crun: mount `tmpfs` to `proc/acpi`: Permission denied`` |
+| `SYS_ADMIN` | `crun: sethostname: Operation not permitted` |
+| `/dev/net/tun` | `pasta failed: Failed to open() /dev/net/tun` |
+
+**`unmask=ALL` is about locked mounts, not about masking.** The outer container's own `/proc`
+masking is inherited by a nested mount namespace and cannot be overmounted from inside it, so an
+inner container cannot lay its own tmpfs over `/proc/acpi`. The cost is that a lane sees
+`/proc/kcore`, `/proc/acpi` and `/sys/firmware`; reading kcore needs `CAP_SYS_RAWIO`, which is not
+granted, so the exposure is bounded.
+
+**`SYS_ADMIN` is the largest concession and it is what `services:` costs.** Capabilities in a
+nested user namespace are bounded by the outer set, so a nested container cannot have what the
+lane does not - and a detached inner container sets its own hostname in its own UTS namespace.
+With it, `--read-only` stops being a boundary and becomes hygiene, since `mount -o remount,rw /`
+becomes possible. What that reaches is the job's own ephemeral overlay, which the job can already
+write through `$HOME`, `/tmp` and the runner tree, so the loss is smaller than the flag sounds -
+but it is the widest capability there is and it is here because the alternative is that
+`services:` does not work at all.
+
+**It is still a long way from `--privileged`**: SELinux enforcing under a purpose-built type, the
+default seccomp profile, no host path mounted, and no container socket of the host's reachable.
+
+**Why the runner is uid 1000 with primary gid 0**, rather than container root: a nested engine
+started by an unprivileged user gets a user namespace of its own, which is what keeps the outer
+capability set to podman's default instead of everything. Rootful podman in the container walks a
+different chain - `setns`, then a read-only `/proc/sys`, then `cgroup.subtree_control`, then a
+`proc` mount - that ends at `--privileged`.
+
+**Gid 0 is not decoration and cost an hour to find.** `/dev/net/tun` arrives group-0 only, and
+group 0 inside a rootless container *is* host group `core`, which the host's udev rule grants. But
+the NESTED user namespace maps its own gid 0 to the runner's outer gid - so with gid 1000 the
+nested pasta loses that access and fails to open a device the outer process can read perfectly
+well. Primary gid 0 carries it through. It is the same uid-arbitrary/gid-0 convention OpenShift
+uses, for a related reason.
+
+**The chmod that looks like the obvious fix is silently impossible.** `/dev/net/tun` is owned by
+an uid that is not mapped into the container's namespace, so container root is not its owner and
+`CAP_FOWNER` does not reach it; `chmod` returns EPERM. Written as `chmod ... || true` - which is
+how it was written first - it fails invisibly and the only symptom is pasta refusing, two layers
+away. `bin/github-runner-smoke.sh` now opens the device rather than listing it.
+
+**`--security-opt label=disable` is forbidden, and the reason is sharper than the house rule.**
+`core` is `unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023`, so that flag would run the
+lane as `unconfined_t` - SELinux containment not weakened but *gone*, and the one denial the
+whole design rests on no longer applying. `vfs` is an acceptable fallback for the graph driver;
+this is not an acceptable fallback for anything.
+
+**What does not move**, and what `bin/github-runner-smoke.sh` asserts:
+
+- no host podman or docker socket, at its usual path *or any other* - the smoke test also requires
+  `docker info` to report the lane's own graph root, because the path check alone would still pass
+  if somebody later mounted the host's socket somewhere else;
+- no `config/`, no `/mnt/media`, and **no path under `cache/conduct/`**;
+- a per-lane `isolate=true` network, the slice ceiling, the per-lane cpuset, `--pids-limit`,
+  `--log-driver=none`, `--no-healthcheck` on the outer container, and the bare
+  `io.home-server.ephemeral` label.
+
+**The smoke test's containment legs are deliberately not `bin/conduct-runner-smoke.sh`'s.** Two of
+those - "the root filesystem rejects a write" and "no container socket is visible" - are things a
+lane half-violates on purpose. Copying that script and deleting the legs that no longer hold would
+have produced a gate whose name promised more than it checked, which is this repository's named
+failure. They are replaced, not removed.
+
+## Capacity
+
+**The 4,608M on `app-agents.slice` is a ceiling, not usage**, and that is what makes two slices
+fit on a 15.8 GB host. Read out of this host's own 30-day store on 2026-08-24:
+
+| Measurement | Value |
+|---|---|
+| `home_server_agent_slice_memory_bytes` median | **957 MB** |
+| the same, p90 | **1,455 MB** |
+| the same, 30-day max | 3,584 MB - which *is* `MemoryHigh`, so it is page cache being reclaimed |
+| `home_server_agent_phase_in_flight` mean | **0.069** - a phase runs 6.9% of the time |
+| `node_memory_MemAvailable_bytes` median | **11,279 MB** |
+| the same, p1 / min | 9,645 MB / 6,886 MB |
+
+The fleet is idle 93% of the time holding about a gigabyte. Overcommitting ceilings is already the
+house style, and `app-agents.slice` says why: twenty-four quadlets declare 34.5 GiB against
+15.5 GiB of RAM and it works, because the peaks do not coincide.
+
+| Level | MemoryHigh | MemoryMax | CPUs |
+|---|---|---|---|
+| lane scope | 2816M | 3584M | `4-5` / `6-7` |
+| `app-ci.slice` | 5632M | 6656M | `4-7` |
+
+The per-lane limits **bind before the slice does** - two lanes at 3,584M is 7,168M against the
+slice's 6,656M - so the slice squeezes them rather than the kernel picking a victim by badness
+across the whole subtree.
+
+**The cpuset is per lane and not only per slice.** `AllowedCPUs=4-7` on the slice alone would give
+*both* lanes `nproc=4` and put eight workers on four cores - the defect `app-agents.slice`
+measured at 5x (340-364s with one spurious failure at `nproc=12`, against 69-71s green at
+`nproc=4`), at half the magnitude. Verified that a scope property works at all, which is a
+different question from a slice property:
+
+```
+systemd-run --user --scope -p AllowedCPUs=4-5 --quiet -- nproc   ->  2
+```
+
+**Stated honestly: 4-7 is not exclusive.** No other unit here pins a cpuset, so ffmpeg, Jellyfin
+and the Tdarr nodes float across all twelve and will take these four whenever they are free.
+`nproc=2` is the truth about the quota, not a promise about the hardware.
+
+**And honestly about speed**: `upskald` fans out to about eight parallel jobs, including a
+three-shard e2e matrix. Two lanes on four shared cores will be slower in wall-clock than
+GitHub-hosted. The win is cost, control, and running the gate on the same kernel and the same
+ceilings the agent fleet already uses.
+
+## Accepted risks, recorded rather than left implicit
+
+- **A lane has unrestricted egress**, like a phase runner and for the same reason: `bun install`,
+  `uv sync` and `actions/checkout` do not work without it. `isolate=true` blocks bridge-to-bridge
+  traffic, so Caddy's 443 and Jellyfin's 8096 time out from a lane, but the internet and **the
+  rest of the LAN** are reachable. `bin/github-runner-smoke.sh` probes the router and **records
+  whatever it finds as a note rather than grading it** - nothing on this host had ever probed
+  another LAN device, and the honest answer, whichever it is, should not block a promotion.
+- **The persistent caches are a cross-job channel.** The bun, uv, Playwright and nested-image
+  caches are what make a second run cheap, and they are also the one thing that survives between
+  two jobs from two different pull requests. That is accepted in a private repository with trusted
+  contributors. The mitigation if it stops being acceptable is per-repository cache roots, not a
+  bigger warning.
+- **A job runs as `core` once removed.** Container uid 0 is `core`, and although the runner drops
+  to uid 1000 inside, an escape from the outer container is an escape to the account that owns
+  `/var/home-server`. Bounded by who can open a pull request on a repository in the runner group.
+- **The lane's caches are NOT the fleet's.** This is the one that would be tempting to
+  "simplify": the two images want the same bun, uv and Playwright caches, and sharing them would
+  let a workflow poison the gate that decides whether a phase's change is good. `mirrors/` is
+  worse, because `git clone --local` hardlinks its object store. The smoke test asserts the
+  separation.
+
+## Observability
+
+A lane is invisible to every other reader on this host, and that is why `docs/observability.md`'s
+usual answers do not apply. The container carries `io.home-server.ephemeral`, so
+`bin/collect-metrics.py` skips it - correct, because its name carries a timestamp that never
+repeats and the network series would accumulate under an unbounded label in a 400-day store. The
+consequence is that a **wedged lane produces no series, no failed unit and no unhealthy
+container**. Work just queues on GitHub's side, where nothing here is looking. That is the
+Windmill-worker shape exactly.
+
+So the lane's own marker is the signal: `~/.cache/home-server/ci-state-<n>`, one file per lane
+because a whole-file rewrite needs a single owner, in `conduct-state`'s format and under its
+contract - **omitted is not zero**, because the collector drops a sample that does not parse.
+
+`bin/verify-host.sh` grows a `ci` section - nine checks, **WARN or NOTE and never FAIL**, on the
+Agents section's charter: `bin/reboot-host.sh` refuses to act on a host this battery calls
+unhealthy, and nothing a CI lane does wrong is fixed by a reboot.
+
+`ci.runner_version` is the only one with a **deadline** rather than a threshold. GitHub enforces a
+minimum runner version and a runner below it stops being given jobs - the symptom is a job that
+queues for ever while the runner shows online and idle. It grades **what is on disk in a lane**,
+never the image's `ARG`: a JIT configuration carries no `disableUpdate`, so the runner updates
+itself into the lane's writable tree and legitimately runs ahead of the seed. That writable tree
+is also what stops the update failing, the runner exiting, and the lane minting a fresh
+registration on every pass.
+
+The collector's family is `home_server_ci_*` while the battery's facts are `github_runner_*`. That
+asymmetry is deliberate: `ci_*` facts would be shadowed by the collector's prefix and fail
+`bin/lint-repo.sh` leg 9 - which is the *good* outcome, because a duplicate sample whose values
+disagree rejects the whole scrape, and the battery is hourly while the collector runs every 30
+seconds, so the two would disagree by construction.
+
+**`agents.runners_leaked` counts CI containers too**, because it filters on the ephemeral label
+alone. Its ceiling stayed at 7200s and its message widened to name both fleets - a lane's scope
+carries `RuntimeMaxSec=5400` and its driver tears an idle registration down at 1800s, so a healthy
+lane cannot reach it. That is precisely why the idle timeout is not an optimisation.
+
+## Gates
+
+`bin/reboot-when-staged.sh` refuses while a lane says `job_in_flight=1` **and** its heartbeat is
+under 300 seconds - the flag survives its writer being killed, and a stale flag vetoing reboots
+indefinitely is "the host silently stops taking OS security updates" from a third direction.
+
+It gives way after the **second refusal of a morning**, the count idiom the phase gate uses rather
+than the encoder's age idiom, and the pricing is the argument: a killed CI job costs one
+`gh run rerun` against a branch GitHub still holds, where a killed transcode costs an hour of GPU
+time. **It is slightly worse than a killed phase and the code says so**: GitHub does not re-queue
+a job whose ephemeral runner disappeared, so a person has to press the button, where conduct's
+reconciler reclaims a phase with nobody involved.
+
+`bin/reboot-host.sh` **warns rather than vetoes** - a person is reading that output. It reports
+both fleets, because a pre-flight naming a CI job while staying silent about a conduct phase would
+read as "nothing else is running", and a reader would be entitled to draw that conclusion.
+
+**`bin/update-when-idle.sh` gets nothing, deliberately.** The lane is not a quadlet, has no
+`AutoUpdate=` label and no unit for the nightly container update to touch; the prune removes only
+dangling images and `:latest` is tagged. A CI arm there would be a refusal that has never had
+anything to refuse - the exact shape where a check that cannot fire looks identical to one that
+works.
+
+## Making a repository use it
+
+`runs-on:` is the whole of it, and the opt-in is one Actions variable rather than an edit per job:
+
+```yaml
+runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
+```
+
+with `vars.CI_RUNNER` set to `["self-hosted","home-server"]`.
+
+**The point is the escape hatch.** During a host outage, changing one variable in the GitHub UI
+moves every job back to `ubuntu-latest` in seconds, with no pull request and no merge to a `main`
+that is not branch protected.
+
+**Never label a lane `ubuntu-latest`.** It looks like the zero-edit way to move everything at once
+and it is a trap: GitHub falls back to a hosted runner only when no runner with that label is
+*connected*, so the same workflow would silently alternate between a hosted Ubuntu image and a
+two-core container depending on whether a lane happened to be registered at that instant - flaky,
+environment-dependent, and near-impossible to attribute from a job log. It would also capture
+`release-please`, `auto-merge` and `pr-recap`, stalling merges behind CI.
+
+**Two workflows stay hosted on their own merits.** `auto-merge.yml`'s header argues that "PR-head
+code never runs here, so carrying a write token is safe", and it mints a GitHub App token; that is
+reasoning about the workflow, not about the runner. `release-please.yml` is the same shape.
+
+**Cache keys collide, and the poisoning runs both ways.** Every key in `upskald`'s
+`setup-toolchains` composite is `...-${{ runner.os }}-...`, and `runner.os` is `Linux` on hosted
+and self-hosted alike. `~/.cache/prek` holds hook environments with **absolute interpreter paths**
+and `~/.cache/ms-playwright` holds browsers built against a specific glibc - so a self-hosted run
+can break the next *hosted* run, and nothing in the workflow can see it. A lane discriminator
+belongs in those keys in the same pull request that moves the first job.
+
+**One workflow change that is not `runs-on:`.** `e2e-tests` runs `bunx playwright install
+--with-deps chromium`, and `--with-deps` shells out to `sudo apt-get` - impossible on a read-only
+rootfs and, without it, a WAN download on every job. The image bakes `playwright install-deps
+chromium` for exactly this reason. Drop `--with-deps`, and prove that one-line diff on
+`ubuntu-latest` first, in its own pull request, before the runner exists.
+
+Suggested order, because it puts the cheap failures first: the compute-heavy jobs with no
+`services:` (`pre-commit`, `scripts-tests`, `web-checks`, `web-build`); then `api-checks`, the
+first single-service job; then `e2e-tests`, only once a shard has been measured to fit. `ai-review`
+stays hosted - it needs the Anthropic credential, and this host's rule is that a model credential
+reaches exactly one container, which is the phase runner.
+
+## Commands
+
+```bash
+systemctl --user status home-server-github-runner@1        # a lane
+journalctl --user -u home-server-github-runner@1 -f
+cat ~/.cache/home-server/ci-state-1                        # what it thinks it is doing
+systemctl --user list-units --type=scope | grep ci-lane    # a job in flight
+
+systemctl --user start home-server-github-runner-build.service   # build, smoke, promote
+GITHUB_RUNNER_IMAGE=localhost/home-server/github-runner:next \
+  ./bin/github-runner-smoke.sh                             # the gate, by hand
+
+podman ps --filter label=io.home-server.ephemeral          # lanes and phases together
+cat /sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/app-ci.slice/memory.peak
+
+gh api /orgs/avanserv/actions/runners \
+  --jq '.runners[]|{name,status,busy}'                     # what GitHub thinks exists
+gh api /orgs/avanserv/actions/runner-groups                # group ids, for GITHUB_RUNNER_GROUP_ID
+```
+
+## What is proved, and what is not
+
+**Proved on this host, against a real build of this image**, by running
+`bin/github-runner-smoke.sh` from a staging copy:
+
+- every binary a workflow shells out to; libicu, lttng and libmagic; git 2.55.0;
+- the seeded runner tree matching the Dockerfile's `ARG`, and the pin being upstream's latest;
+- **Python 3.13.15 in the tool cache with its `.complete` marker**, so `actions/setup-python`
+  resolves 3.13 without the network and `upskald` needs no change;
+- all five lane mounts writable and **not tmpfs**, asserted by filesystem type, on xfs;
+- the rootfs rejecting a write;
+- **the nested engine starting, on `overlay` and not `vfs`, and pulling an UNQUALIFIED short
+  name** - which is what every `services:` block writes;
+- **a detached nested container starting and running**, which is the `services:` case itself;
+- egress to `api.github.com` from an `isolate=true` network;
+- neither host container socket visible, `docker info` reporting the lane's own graph root, no
+  `config/`, no `/mnt/media`, no `cache/conduct/`, and **no `GITHUB_RUNNER_PAT` in
+  `/proc/1/environ`**.
+
+**SELinux is not the obstacle it was expected to be.** The `newuidmap` refusal that sank the
+Ubuntu base was reproduced with `semodule -DB` - dontaudit off - and logged **no AVC at all**.
+`virt_sandbox_use_fusefs` and `container_modify_selinux_labels` are both still **off** and neither
+is needed; `container_use_devices` was already on. Nothing about this design required a boolean
+change.
+
+**Not yet proved, and none of it can be settled from a workstation:**
+
+- **A full green smoke run.** The last recorded run had the nested engine working and the four
+  by-IP containment probes still returning rc 125 - which the probe deliberately refuses to read
+  as either "dropped" or "refused". It now prints podman's own message, which is what the next run
+  will say.
+- **That `podman-docker` satisfies the runner's own `docker` call sequence** end to end, and that
+  a service container reaches `healthy` through
+  `apps/github-runner/scripts/podman-healthcheck-loop.sh` rather than sitting at `starting`.
+- **That `fromJSON(vars.CI_RUNNER || '[...]')` is accepted in `runs-on:`.** One throwaway workflow
+  before touching `ci.yml`.
+- **A real job**, which is the only thing that proves the whole chain.
+- **Every memory and CPU number in `host/systemd/app-ci.slice`.** That file says so itself and
+  asks to be rewritten from `memory.peak` and `pids.peak` after the first e2e shard.

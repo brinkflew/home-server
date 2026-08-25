@@ -179,6 +179,51 @@ else
 	printf '\n  booted  %s\n  staged  %s\n' "$booted" "$staged"
 fi
 
+# ------------------------------------------------------------------------------
+# Work a reboot would destroy, reported rather than refused
+# ------------------------------------------------------------------------------
+# THE ATTENDED PATH DELIBERATELY WARNS WHERE bin/reboot-when-staged.sh REFUSES.
+# That script is unattended and has to decide on its own; here a person is
+# reading the output and is allowed to reboot anyway, having been told. The
+# unattended gate's escalation exists precisely so that a refusal cannot become
+# permanent, and this line exists so that a deliberate reboot is not uninformed.
+#
+# IT COVERS BOTH FLEETS, AND REPORTING ONLY ONE WOULD HAVE BEEN WORSE THAN
+# REPORTING NEITHER. This was added for the CI lanes on 2026-08-24; conduct's
+# phases were never mentioned here at all, and a pre-flight that names a CI job
+# while staying silent about a phase reads as "nothing else is running". A
+# reader would be entitled to draw that conclusion and it would be wrong.
+#
+# BELIEVED ONLY WHILE THE HEARTBEAT IS FRESH, for the reason the unattended gate
+# gives at length: either marker's in-flight flag survives its writer being
+# killed, and a stale flag would report work that finished hours ago.
+# shellcheck disable=SC2016  # this runs on the SERVER, so $HOME and the rest must not expand here
+mid_flight=$(sshq '
+	now=$(date +%s)
+	fresh() {
+		[ -n "$1" ] || return 1
+		e=$(date -d "$1" +%s 2>/dev/null) || return 1
+		[ -n "$e" ] && [ "$(( now - e ))" -le 600 ]
+	}
+	m=$HOME/.cache/home-server/conduct-state
+	if [ "$(sed -n "s/^phase_in_flight=//p" "$m" 2>/dev/null | tail -1)" = 1 ] &&
+	   fresh "$(sed -n "s/^heartbeat_at=//p" "$m" 2>/dev/null | tail -1)"; then
+		printf "a conduct phase "
+	fi
+	for l in 1 2; do
+		c=$HOME/.cache/home-server/ci-state-$l
+		if [ "$(sed -n "s/^job_in_flight=//p" "$c" 2>/dev/null | tail -1)" = 1 ] &&
+		   fresh "$(sed -n "s/^heartbeat_at=//p" "$c" 2>/dev/null | tail -1)"; then
+			printf "CI lane %s " "$l"
+		fi
+	done
+' 2>/dev/null)
+
+if [ -n "${mid_flight// /}" ]; then
+	warn "mid-flight, and a reboot kills it: $mid_flight"
+	warn "  a phase is reclaimed by conduct's reconciler on the way back up; a CI job is NOT re-queued by GitHub and needs 'gh run rerun --failed'"
+fi
+
 if [ -n "$DRY" ]; then
 	# The index is derived here too, so a dry run proves the derivation works
 	# against the current deployment list rather than only claiming it would.

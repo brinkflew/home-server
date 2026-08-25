@@ -53,6 +53,7 @@ are load-bearing and several were paid for in outages.
 | `docs/dashboard.md` | the Vue application, its five sources, and what it may and may not assert |
 | `docs/repo-conventions.md` | `config/` vs `apps/`, how a file reaches a container, ASCII, `bin/lint-repo.sh` |
 | `docs/agents.md` | the three tiers, the marker contract, the phase invocation, and what must never travel to ntfy |
+| `docs/ci.md` | the two CI lanes, the nested container engine, the credential that never enters a container, and what a lane may reach |
 | `docs/known-state.md` | the seventy-four conclusions from auditing the running host |
 
 **What stays here is what has to be known BEFORE touching anything**: what this is, how a change
@@ -721,6 +722,50 @@ signal read green.
   hooks; `--permission-mode bypassPermissions` is the supported spelling of the bypass.
   `--setting-sources ''` loads nothing while `--settings` still installs the hook, and a hook
   outranks `--allowed-tools`. `-p` silently ignores a settings file that fails validation.
+
+### A runner that cannot be contained the way a phase runner is, and a health status nobody sets
+- **Podman drives healthchecks with transient systemd timers, and a container has no systemd**, so
+  `--health-cmd` only warns and the status stays `starting` for ever - while GitHub's runner waits
+  on it with NO RETRY CAP and upskald sets `timeout-minutes:` on zero jobs. A six-hour hang with the
+  container running, the service serving and nothing on this host reporting anything wrong. The fix
+  is a poll loop; polling FASTER than the declared interval fails a healthy postgres instead.
+- **An engine old enough to ship in an LTS cannot run a container here; a newer one can with almost
+  nothing.** Ubuntu 24.04's podman 4.9.3 refuses with `newuidmap: write to uid_map failed` - every
+  range in the map, `CAP_SETUID` present, and NO AVC even with `semodule -DB`. podman 5.8.4 does it
+  with DEFAULT capabilities and SELinux enforcing, so the base is `quay.io/podman/stable`, whose
+  own user already has subuid ranges that fit a rootless outer container. `setup-python`'s
+  Ubuntu-only assets are closed by baking Python into `RUNNER_TOOL_CACHE`.
+- **Four flags, bisected, and none of the refusals names the one that fixes it**:
+  `container_engine_t` (not `label=disable`, which runs as `unconfined_t` and removes SELinux
+  entirely), `unmask=ALL` (locked mounts, not masking), `--cap-add=SYS_ADMIN` (a detached container
+  sets its own hostname; this makes `--read-only` hygiene rather than a boundary), `/dev/net/tun`.
+- **A one-command probe and the real workload took different code paths** - an interactive
+  `podman run alpine echo ok` needs no tap device and a DETACHED one does, which is every
+  `services:` block. **`/dev/net/tun` is group-0 and the NESTED namespace loses that**, so the
+  runner's PRIMARY gid must be 0; the chmod that looks like the fix returns EPERM and, written
+  `|| true`, fails invisibly.
+- **`--read-only` breaks the runner before podman is involved** - `--jitconfig` is written to disk as
+  `.runner`/`.credentials` and read back for a label. The writable tree is also what stops a mint
+  storm, because a JIT config carries no `disableUpdate`.
+- **A lane's bind mounts mask what the image put under them** ($HOME hid the engine's own config,
+  the tool-cache mount hid the baked Python), **`cp -a` carries the MCS categories** so the next
+  container cannot read what it was given, **`core` cannot `rm` a lane** without `podman unshare`,
+  and **`rootless_storage_path` under `[storage]`** is the key that is read - `graphroot` is not.
+- **A ceiling is not usage, and reading it as one nearly cost a second slice.** app-agents reserves
+  4,608M and its 30-day median is **957 MB**, p90 1,455 MB, with a phase in flight 6.9% of the time.
+  `-p AllowedCPUs=` works on a transient SCOPE as well as a slice - measured, `nproc` reads 2.
+- **`agents.runners_leaked` filters on the ephemeral label alone, so it now watches two fleets.**
+  The number stayed at 7200 and the message widened; raising it for CI would have blinded it for the
+  agent fleet on a threshold neither owns. Creating a lane's network from the driver keeps `net-ci-*`
+  out of `agents.runner_isolation`'s stack list, and the whole change out of `topology.ts`.
+- **`bin/reboot-host.sh` said nothing about work in flight at all**, so adding only the CI half would
+  have read as "nothing else is running". A killed CI job is NOT re-queued by GitHub, unlike a phase.
+- **Noble already has a uid-1000 user, and three package names differ**: `liblttng-ust1t64`,
+  `libmagic1t64`, and `containers-common` is `golang-github-containers-common`. A workflow's
+  `image: postgres:16-alpine` is an unqualified short name podman refuses without a search list.
+- **Cache keys are shared between hosted and self-hosted runners** (`runner.os` is `Linux` on both),
+  so a self-hosted run can break the next HOSTED one. Labelling a lane `ubuntu-latest` is a trap:
+  the fallback keys on whether a runner is CONNECTED, so a workflow silently alternates environments.
 
 ## Target architecture
 

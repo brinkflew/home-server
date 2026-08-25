@@ -1946,6 +1946,248 @@ answering; four had never served a single query and were deleted.
   on every run. There is no such thing as a cheap model phase, which is what makes a spend floor a
   number rather than a gesture.
 
+## A runner that cannot be contained the way a phase runner is, and a health status nobody sets
+
+Added 2026-08-24, building the CI lanes. Everything here was measured on this host unless it says
+otherwise, and three of them were nearly shipped as assumptions.
+
+- **Podman drives healthchecks with transient systemd timers, and there is no systemd inside a
+  container.** Visible on this host: `systemctl --user list-timers` shows twenty-five hash-named
+  timers, one per healthchecked container, firing at the intervals the quadlets declare. Inside a
+  container `podman create --health-cmd` only WARNS, the service starts and genuinely serves, and
+  `.State.Health.Status` stays `starting` for ever.
+
+  **That is a six-hour hang rather than an error, and every signal on this host reads green while
+  it happens.** GitHub's runner waits on exactly that field before running a job's steps, in a loop
+  with NO RETRY CAP - it exits only on a status change - and `avanserv/upskald` sets
+  `timeout-minutes:` on **zero** of its jobs across all seven workflows, so the default 360 minutes
+  applies. The container is running, the service is serving, no unit is failed and nothing is
+  unhealthy. `apps/github-runner/scripts/podman-healthcheck-loop.sh` is the fix: `podman healthcheck run` per
+  container, at the interval that container declared.
+
+  **The interval has to be honoured rather than guessed, and the safe direction is LONG.** A
+  workflow's `--health-retries 5 --health-interval 10s` gives postgres fifty seconds; polling every
+  second spends those retries in five and marks a healthy database `unhealthy` before it has
+  started - and the runner FAILS a job on unhealthy. An unparseable interval therefore falls back
+  to thirty seconds, not to one.
+
+  **The obvious alternative fix is worse than doing nothing.** Stripping the health flags in the
+  docker shim empties `.Config.Healthcheck`, the runner's wait returns immediately, and the job
+  races Postgres's startup - trading a reliable hang for an intermittent failure.
+
+  The template itself is fine: `podman inspect --format="{{if .Config.Healthcheck}}{{print
+  .State.Health.Status}}{{end}}" node-exporter` returns `healthy`, rc 0. Only the timer is missing.
+
+- **`--cap-drop=ALL`, `no-new-privileges` and `--read-only` do not merely sit awkwardly with nested
+  podman - they forbid it, by three independent mechanisms.** `newuidmap`/`newgidmap` are
+  setuid-root, so `no-new-privileges` makes them inert, and a multi-line `uid_map` needs
+  `CAP_SETUID` in the parent namespace anyway; without it the inner engine gets a single-ID map and
+  `postgres:16-alpine` (uid 70) and `redis:7-alpine` (uid 999) cannot even be extracted. This
+  host's default seccomp profile ERRNOs `setns` unless the container holds `CAP_SYS_ADMIN` - read
+  out of `/usr/share/containers/seccomp.json` - and rootless podman joins an existing user
+  namespace via `setns` for every command after the first, so the failure is LATE AND INCONSISTENT:
+  `docker create` may work and `docker inspect` then fail.
+
+  **`--security-opt label=disable` is not the answer and the reason is sharper than the house
+  rule.** `core` is `unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023`, so that flag runs the
+  container as `unconfined_t` - SELinux containment is not weakened, it is gone, and
+  `container_t -> unconfined_t : unix_stream_socket connectto` stops applying at all. That is a far
+  larger concession than the `label=level:s0` idea this file already records as measured-and-
+  rejected. A `vfs` graph driver is an acceptable fallback; this is not.
+
+- **`--read-only` breaks the runner before podman is involved.** `--jitconfig` is not held in
+  memory: the runner base64-decodes it and writes `.runner`, `.credentials` and
+  `.credentials_rsaparams` into its own root, then reads `.runner` back to derive the label it tags
+  every container and network with. So the runner tree must be writable, per lane.
+
+  **That writable tree is also what stops a mint storm.** A just-in-time configuration carries no
+  `disableUpdate`, so the runner WILL self-update; on a read-only tree that fails, the runner exits,
+  the driver mints a fresh registration and it repeats - which is the `Restart=always` "never comes
+  to rest" trap wearing new clothes, against a 5,000/hour rate limit.
+
+- **The subuid range inside a rootless container is 0..65535, not 100000..165535.** Rootless podman
+  on the host maps a container's uid 0 to `core` and uids 1..65536 to core's own subuid range, so
+  the conventional `100000:65536` written into a container's `/etc/subuid` is entirely outside the
+  valid space and `newuidmap` refuses with `Invalid argument` - an error naming neither the file
+  nor the reason.
+
+- **`/dev/fuse` and `/dev/net/tun` land differently inside a rootless container, and only one of
+  them is usable by a non-root user.** Measured:
+
+  ```
+  crw-rw-rw-  65534 65534  /dev/fuse       <- any uid inside can open it
+  crw-rw----  65534     0  /dev/net/tun    <- group 0 only
+  ```
+
+  The nested engine needs the tap device to give its containers a network at all, and a runner
+  running as uid 1000 cannot open a 0660 root-group node. The entrypoint therefore starts as
+  container root, chmods that node inside the container's own `/dev` tmpfs, and drops with
+  `setpriv`. Adding the user to group 0 instead would have granted group-0 access to every
+  root-owned file in the image to buy one device.
+
+- **Native overlay cannot stack on the outer container's own overlay rootfs**, so a nested graph
+  root on the container filesystem silently falls back to `vfs` - every layer a full copy, at every
+  pull, for ever, reported nowhere but `podman info`. It works; it is just several times slower to
+  start a service, which reads as "CI is slow" rather than as a misconfiguration. `/var` is XFS
+  with `ftype=1`, so the lane's own bind mount keeps the driver on `overlay`, and
+  `bin/github-runner-smoke.sh` asserts that rather than hoping.
+
+- **A scope property is a different question from a slice property, and this one works.**
+  `systemd-run --user --scope -p AllowedCPUs=4-5 --quiet -- nproc` prints **2**. Cpuset delegation
+  was already proved for a slice by `app-agents.slice`; that it also applies to a transient scope is
+  what lets each lane see the cores it will actually get, rather than both lanes reading the slice's
+  four and putting eight workers on them.
+
+- **A ceiling is not usage, and reading it as one nearly cost a second slice.** `app-agents.slice`
+  reserves 4,608M, which against a worst-observed `MemAvailable` of 9,715 MB looks like there is no
+  room for CI at all. The store says otherwise: median agent-slice memory **957 MB**, p90 1,455 MB,
+  and a phase in flight **6.9%** of the time, against a median `MemAvailable` of 11,279 MB. The
+  30-day maximum is 3,584 MB, which is exactly `MemoryHigh` - page cache being reclaimed, the design
+  working, not pressure. Overcommitting ceilings is the house style and `app-agents.slice` says why;
+  what makes it safe here is that the driver holds the SECOND lane while a phase is in flight.
+
+- **`agents.runners_leaked` filters on `io.home-server.ephemeral` alone, so it now watches two
+  fleets.** A CI lane must carry that label - without it the 30-second collector mints network
+  series under a name that never repeats, into a 400-day store. The 7200s ceiling stayed and the
+  message widened: a lane's scope carries `RuntimeMaxSec=5400` and its driver tears an idle
+  registration down at 1800s, so a healthy lane cannot reach it. **Raising the number to make room
+  for CI would have blinded the check for the agent fleet too**, on a threshold neither fleet owns -
+  which is why the idle teardown is not an optimisation.
+
+- **`agents.runner_isolation` derives the stack networks from `stacks/common/*.network`**, which is
+  a positive reason to create a lane's network from the driver rather than as a quadlet: `net-ci-*`
+  then stays out of that list, a lane is not misread as a phase runner on a stack segment, and
+  `topology.ts`, `paths.ts`, `update.policy_count` and `containers.units_active` all stay out of the
+  change. `stacks/infra/conduct-runner.build` documents that invisibility as a property to rely on.
+
+- **`bin/reboot-host.sh` said nothing at all about work in flight, and adding only the CI half would
+  have been worse than adding neither.** The unattended gate has refused on a conduct phase since it
+  was written; the attended one never mentioned it. A pre-flight that names a CI job while staying
+  silent about a phase reads as "nothing else is running", and a reader would be entitled to draw
+  that conclusion. It now warns on both, and warns rather than refuses because a person is reading
+  the output.
+
+- **A killed CI job is not a killed phase, and the escalation comment prices it honestly.** GitHub
+  does NOT re-queue a job whose ephemeral runner disappeared - somebody runs `gh run rerun --failed`
+  - where conduct's reconciler reclaims a phase on the way back up with nobody involved. Still
+  minutes, still far cheaper than another week on an unapplied image, so the same "give way after
+  the second refusal of a morning" shape holds. It is not free, and the code says so.
+
+- **A CONTAINER ENGINE OLD ENOUGH TO SHIP IN AN LTS CANNOT RUN A CONTAINER HERE, AND A NEWER ONE
+  CAN WITH ALMOST NOTHING.** The image was Ubuntu 24.04 first, chosen so `actions/setup-python`
+  could resolve its Ubuntu-specific assets. Its podman is **4.9.3**, and as an unprivileged user
+  inside a rootless outer container it refuses with
+
+      newuidmap: write to uid_map failed: Operation not permitted
+
+  with every requested range inside the outer namespace's own map, with `CAP_SETUID` present, with
+  `newuidmap` setuid-root on a rootfs mounted `rw`, and - checked with `semodule -DB` so dontaudit
+  could not hide it - **with no AVC logged at all**. Running the inner engine as container-root
+  instead walks a chain of refusals (`setns`, then a read-only `/proc/sys`, then
+  `cgroup.subtree_control`, then a `proc` mount) that ends at `--privileged`.
+
+  **podman 5.8.4 does it with podman's DEFAULT capabilities and SELinux enforcing.** So the base is
+  `quay.io/podman/stable` - Fedora 44, which is what uCore is built from, so it is the same podman
+  the host runs rather than a second opinion. What that costs is one thing, and it is closed by
+  baking Python into `RUNNER_TOOL_CACHE`, which `actions/setup-python` checks before it downloads
+  anything.
+
+  **The base's own user is the right one to keep.** It has `podman` at uid 1000 with
+  `/etc/subuid` ranges that FIT inside a rootless outer container - `1:999` and `1001:64535`,
+  under 65536 and stepping over uid 1000 itself. A hand-written `runner:100000:65536` is entirely
+  outside the map and `newuidmap` refuses with `Invalid argument`.
+
+- **Three Fedora package names are not what they are called on Debian**: `libmagic1t64` is
+  `file-libs`, `liblttng-ust1t64` is `lttng-ust`, and `liberation-fonts` does not exist at all
+  (`liberation-sans-fonts` does). And `playwright install-deps` supports Debian and Ubuntu ONLY -
+  on Fedora it exits without installing anything, so the chromium set has to be named by hand.
+
+
+- **The containment a nested engine needs, bisected one flag at a time.** Four additions on top of
+  podman's DEFAULT capability set, with SELinux enforcing and the default seccomp profile - and not
+  one of the refusals names the flag that fixes it:
+
+      container_engine_t   crun: mount `devpts` to `dev/pts`: Permission denied
+      unmask=ALL           crun: mount `tmpfs` to `proc/acpi`: Permission denied
+      --cap-add=SYS_ADMIN  crun: sethostname: Operation not permitted
+      --device /dev/net/tun  pasta failed: Failed to open() /dev/net/tun
+
+  **`label=type:container_engine_t`, NEVER `label=disable`**, which is what podman's own
+  documentation reaches for: `core` is `unconfined_u:unconfined_r:unconfined_t`, so that flag runs
+  the container as `unconfined_t` - SELinux containment not weakened but GONE. `container_engine_t`
+  is container-selinux's purpose-built type for exactly this and keeps enforcement.
+
+  **`unmask=ALL` is about LOCKED MOUNTS, not about masking.** The outer container's own `/proc`
+  masking is inherited by a nested mount namespace and cannot be overmounted from inside it.
+
+  **`SYS_ADMIN` makes `--read-only` hygiene rather than a boundary**, since `mount -o remount,rw /`
+  becomes possible. What it reaches is the job's own ephemeral overlay, which the job can already
+  write through `$HOME`, `/tmp` and the runner tree - so the loss is smaller than the flag sounds,
+  and it is the price of `services:` working at all.
+
+- **A ONE-COMMAND PROBE AND THE REAL WORKLOAD TOOK DIFFERENT CODE PATHS.** An interactive
+  `podman run --rm alpine echo ok` inside a lane succeeds with no tap device, which read as proof
+  that podman 5 needed none. A DETACHED container - which is every `services:` block - does not:
+  `pasta failed: Failed to open() /dev/net/tun`. The cheap probe was not the test.
+
+- **`/dev/net/tun` arrives group-0 only, and the NESTED namespace loses that access.** Group 0
+  inside a rootless container IS host group `core`, which the host's udev rule grants - so the
+  outer runner can open the node. But a nested user namespace maps its own gid 0 to the runner's
+  OUTER gid, so with gid 1000 the nested pasta cannot open a device the outer process reads
+  perfectly well. **Primary gid 0** carries it through; it is the uid-arbitrary/gid-0 convention
+  OpenShift uses.
+
+  **The chmod that looks like the obvious fix is silently impossible**: the node is owned by an uid
+  that is not mapped into the namespace, so container root is not its owner and `CAP_FOWNER` does
+  not reach it - `chmod` returns EPERM. Written as `chmod ... || true`, which is how it was written
+  first, it fails INVISIBLY and the only symptom is pasta refusing two layers away.
+
+- **A lane's bind mounts mask what the image put underneath them.** An empty `$HOME` hid the base
+  image's own engine configuration - `stat /home/runner/.config: no such file or directory`, then a
+  socket that never binds - and the tool-cache mount hid the baked Python while the smoke test
+  reported `nothing is in /opt/hostedtoolcache/Python` against an image that demonstrably had it.
+  Anything a mount covers has to be seeded at start-up from a path it does not.
+
+- **`cp -a` CARRIES THE SELINUX MCS CATEGORIES** of whichever container did the copying, because
+  `-a` implies `--preserve=all` and that includes the context. The next container, with a different
+  pair, then cannot read what it was given: `ls: cannot open directory ...: Permission denied` on a
+  directory plainly present and owned by the right uid. Measured as
+  `container_file_t:s0:c676,c800` on the copy against `container_file_t:s0` on the mount around it.
+  `cp -rp` inherits the destination's label instead.
+
+- **`core` cannot delete a lane from outside the namespace.** Everything under it belongs to the
+  subuid container uid 1000 maps to, so a plain `rm -rf` produces a wall of `Permission denied` and
+  leaves a disk budget un-reclaimed while reporting nothing. `podman unshare rm -rf` is the form.
+
+- **`rootless_storage_path` is the key that is read, and `graphroot` alone is not** - and it goes
+  under `[storage]`, not `[storage.options]`. In the wrong table podman warns, names the key and
+  the file, and then carries on with its default anyway, so the error that FOLLOWS is a permission
+  denial about a path nobody chose. Read the first line, not the loudest one.
+
+- **A fixed `--name` on a probe container is a false containment finding.** A container still
+  terminating from a previous leg collides with the next and podman exits **125**, which the
+  by-IP probe correctly refuses to read as either dropped or refused - and which was reported as
+  four separate containment failures for one cause. The probe now prints podman's own message,
+  because an arm that says "this proves nothing" and cannot say why sends whoever reads it to
+  reproduce the run by hand.
+- **A workflow's `image: postgres:16-alpine` is an UNQUALIFIED short name**, because that is what
+  Docker resolves. Podman refuses a short name with no search list, and a job log reports that as a
+  bad image reference rather than as a missing `registries.conf`. Every `services:` block in every
+  repository will be written this way, because that is what GitHub's documentation shows.
+
+- **Cache keys are shared between hosted and self-hosted runners, and the poisoning runs both
+  ways.** `upskald`'s keys are all `...-${{ runner.os }}-...` and `runner.os` is `Linux` on both.
+  `~/.cache/prek` holds hook environments with ABSOLUTE interpreter paths and `~/.cache/ms-playwright`
+  holds browsers built against a specific glibc - so a self-hosted run can break the next HOSTED
+  run, and nothing in the workflow can see it happen.
+
+- **Labelling a lane `ubuntu-latest` is the zero-edit trap.** GitHub falls back to a hosted runner
+  only when no runner with that label is CONNECTED, so the same workflow silently alternates between
+  a hosted Ubuntu image and a two-core container depending on whether a lane happened to be
+  registered at that instant - flaky, environment-dependent, and near-impossible to attribute from a
+  job log. It would also capture `release-please`, `auto-merge` and `pr-recap`, stalling merges
+  behind CI.
+
 ## What a phase is given, and the flags that decide it
 
 **Measured 2026-08-25, against the pinned CLI, on the runner image itself.**

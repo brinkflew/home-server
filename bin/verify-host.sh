@@ -2275,13 +2275,25 @@ if [ -z "$GREENBOOT" ]; then
 	# parse. 7200s is RuntimeMaxSec plus slack - a runner past it outlived the
 	# scope that was supposed to kill it, which is a different fault from a slow
 	# phase and is what agents.phase_stuck above covers instead.
+	#
+	# IT FILTERS ON THE LABEL ALONE, AND SINCE 2026-08-24 THAT IS TWO FLEETS.
+	# A CI lane carries io.home-server.ephemeral by necessity - without it the
+	# 30-second collector would mint network series under a name that never
+	# repeats - so this check sees `ci-*` containers as well as `conduct-*` ones.
+	#
+	# THE NUMBER STAYS 7200 AND THE MESSAGE WIDENED, which is the deliberate half.
+	# A lane's scope carries RuntimeMaxSec=5400 and its driver tears an idle
+	# registration down at 1800s, so a healthy lane cannot reach this ceiling -
+	# which is precisely why bin/github-runner.sh's idle timeout is not an
+	# optimisation. Raising the number to "make room" for CI would have blinded
+	# the check for the agent fleet too, on a shared threshold neither fleet owns.
 	leaked=$(podman ps --filter label=io.home-server.ephemeral \
 		--format '{{.Names}} {{.StartedAt}}' 2>/dev/null |
 		awk -v now="$(date +%s)" -v max=7200 \
 			'$2 ~ /^[0-9]+$/ && now - $2 > max {printf " %s", $1}')
 	fact agents_runners_leaked "$(printf '%s' "$leaked" | wc -w)" num
 	if [ -n "$leaked" ]; then
-		warn agents.runners_leaked "ephemeral container(s) past their scope's ceiling:$leaked - the transient scope is meant to kill a runner at RuntimeMaxSec and these outlived it; 'podman rm -f' them, then look at why conduct's reconciler did not"
+		warn agents.runners_leaked "ephemeral container(s) past their scope's ceiling:$leaked - the transient scope is meant to kill one at RuntimeMaxSec and these outlived it; 'podman rm -f' them, then look at why nothing reclaimed them. TWO FLEETS CARRY THIS LABEL: a conduct-* name is conduct's reconciler, a ci-* name is bin/github-runner.sh - see docs/ci.md"
 	else
 		ok agents.runners_leaked "${eph_n:-0} ephemeral container(s), none past its scope's ceiling"
 	fi
@@ -2507,6 +2519,306 @@ if [ -z "$GREENBOOT" ]; then
 	else
 		fact agents_publish_configured 1 num
 		ok agents.publish_configured "a push key at mode $pk_mode with no passphrase, and a pull-request token in the workspace - neither of which proves either one still authenticates"
+	fi
+
+	# --------------------------------------------------------------------------
+	# Continuous integration. The CI lanes, their ceiling and their containment.
+	# --------------------------------------------------------------------------
+	# WARN OR NOTE, NEVER FAIL, on the Agents section's charter and for the same
+	# reason: bin/reboot-host.sh refuses to act on a host this battery calls
+	# unhealthy, and nothing a CI lane does wrong is fixed by a reboot. A lane
+	# that has stopped taking jobs must never be why an OS security update does
+	# not get applied.
+	#
+	# THE LANES ARE INVISIBLE TO EVERY OTHER READER ON THIS HOST, and that is why
+	# this section has to exist rather than being covered by the container
+	# checks. A lane carries io.home-server.ephemeral, so bin/collect-metrics.py
+	# skips it - correct, because its name never repeats and the series would
+	# accumulate under an unbounded label in a 400-day store. The consequence is
+	# that a wedged lane produces no series, no failed unit and no unhealthy
+	# container. That is the Windmill-worker trap exactly: work just queues. So
+	# the lane's own marker is the signal, and these checks read it.
+	say ci "Continuous integration"
+
+	ci_lanes_enabled=""
+	ci_lanes_failed=""
+	ci_lanes_active=0
+	for l in 1 2; do
+		u="home-server-github-runner@$l.service"
+		[ "$(systemctl --user is-enabled "$u" 2>/dev/null)" = enabled ] || continue
+		ci_lanes_enabled="$ci_lanes_enabled $l"
+		case "$(systemctl --user is-active "$u" 2>/dev/null)" in
+			active) ci_lanes_active=$((ci_lanes_active + 1)) ;;
+			*)      ci_lanes_failed="$ci_lanes_failed $l" ;;
+		esac
+	done
+	fact github_runner_lanes_active "$ci_lanes_active" num
+	fact github_runner_lanes_failed "$(printf '%s' "$ci_lanes_failed" | wc -w)" num
+
+	if [ -z "$ci_lanes_enabled" ]; then
+		note ci.lanes_alive "no CI lane is enabled - this host runs no self-hosted GitHub Actions jobs"
+	elif [ -z "$ci_lanes_failed" ]; then
+		ok ci.lanes_alive "$ci_lanes_active CI lane(s) enabled and active"
+	else
+		# A LANE COMES TO REST RATHER THAN LOOPING, which is the whole point of
+		# the start limit on that unit, so `failed` here is a deliberate end
+		# state and the driver's exit code says which. 3 is configuration, 4 is
+		# a missing image, 5 is a credential GitHub rejected, 6 is a bad runner
+		# group. None of them is fixed by waiting.
+		warn ci.lanes_alive "CI lane(s)$ci_lanes_failed are not active - read 'systemctl --user status home-server-github-runner@<n>' for the exit code: 3 configuration, 4 missing image, 5 credential rejected, 6 bad runner group. A lane comes to rest deliberately rather than retrying a state a restart cannot fix."
+	fi
+
+	# --------------------------------------------------------------------------
+	# The markers.
+	# --------------------------------------------------------------------------
+	# READ FROM THE FILES THE DRIVERS WRITE, one per lane, because a whole-file
+	# rewrite needs a single owner and two drivers sharing one file is a race
+	# that loses samples silently.
+	ci_hb_worst=""
+	ci_jobs_today=0
+	ci_in_flight=0
+	ci_job_age=""
+	ci_disk_worst=""
+	ci_disk_lane=""
+	ci_version=""
+	ci_markers=0
+	for l in 1 2; do
+		m="${HOME:-/var/home/core}/.cache/home-server/ci-state-$l"
+		[ -f "$m" ] || continue
+		ci_markers=$((ci_markers + 1))
+
+		hb=$(sed -n 's/^heartbeat_at=//p' "$m" 2>/dev/null | tail -1)
+		if [ -n "$hb" ]; then
+			hb_e=$(date -d "$hb" +%s 2>/dev/null)
+			if [ -n "${hb_e:-}" ]; then
+				hb_age=$(( $(date +%s) - hb_e ))
+				if [ -z "$ci_hb_worst" ] || [ "$hb_age" -gt "$ci_hb_worst" ]; then
+					ci_hb_worst="$hb_age"
+				fi
+			fi
+		fi
+
+		jt=$(sed -n 's/^jobs_today=//p' "$m" 2>/dev/null | tail -1)
+		case "$jt" in ''|*[!0-9]*) ;; *) ci_jobs_today=$((ci_jobs_today + jt)) ;; esac
+
+		if [ "$(sed -n 's/^job_in_flight=//p' "$m" 2>/dev/null | tail -1)" = 1 ]; then
+			ci_in_flight=$((ci_in_flight + 1))
+			js=$(sed -n 's/^job_started_at=//p' "$m" 2>/dev/null | tail -1)
+			if [ -n "$js" ]; then
+				js_e=$(date -d "$js" +%s 2>/dev/null)
+				if [ -n "${js_e:-}" ]; then
+					ja=$(( $(date +%s) - js_e ))
+					if [ -z "$ci_job_age" ] || [ "$ja" -gt "$ci_job_age" ]; then
+						ci_job_age="$ja"
+					fi
+				fi
+			fi
+		fi
+
+		dm=$(sed -n 's/^lane_disk_mb=//p' "$m" 2>/dev/null | tail -1)
+		case "$dm" in
+			''|*[!0-9]*) ;;
+			*) if [ -z "$ci_disk_worst" ] || [ "$dm" -gt "$ci_disk_worst" ]; then
+					ci_disk_worst="$dm"; ci_disk_lane="$l"
+				fi ;;
+		esac
+
+		rv=$(sed -n 's/^runner_version=//p' "$m" 2>/dev/null | tail -1)
+		[ -n "$rv" ] && ci_version="$rv"
+	done
+
+	fact github_runner_jobs_today "$ci_jobs_today" num
+	fact github_runner_job_in_flight "$ci_in_flight" num
+	fact github_runner_job_age_s "${ci_job_age:-}" num
+	fact github_runner_disk_mb "${ci_disk_worst:-}" num
+	fact github_runner_heartbeat_age_s "${ci_hb_worst:-}" num
+
+	if [ "$ci_markers" -eq 0 ]; then
+		note ci.heartbeat "no CI lane has written a marker - none has run yet"
+	elif [ -z "$ci_hb_worst" ]; then
+		warn ci.heartbeat "a CI lane marker exists with no parseable heartbeat_at - the driver wrote it and something truncated it"
+	elif [ "$ci_hb_worst" -le 300 ]; then
+		ok ci.heartbeat "every CI lane wrote its marker within ${ci_hb_worst}s"
+	else
+		# THE POLL IS 30 SECONDS, so 300 is ten missed rounds - a driver wedged
+		# mid-call rather than a slow one. A lane whose unit is active while its
+		# marker has gone stale is the shape nothing else on this host can see.
+		warn ci.heartbeat "the stalest CI lane marker is ${ci_hb_worst}s old against a 30s poll - the unit may be active while the driver is wedged; read 'journalctl --user -u home-server-github-runner@<n>'"
+	fi
+
+	# A JOB PAST TWICE ITS SCOPE'S CEILING, which mirrors agents.phase_stuck. The
+	# scope carries RuntimeMaxSec=5400 and is supposed to kill a lane at it, so
+	# this is "the thing that should have stopped it did not" rather than "a slow
+	# job", which are different faults with different fixes.
+	if [ "$ci_in_flight" -eq 0 ]; then
+		ok ci.job_stuck "no CI job in flight"
+	elif [ -z "$ci_job_age" ]; then
+		ok ci.job_stuck "$ci_in_flight CI job(s) in flight"
+	elif [ "$ci_job_age" -le 10800 ]; then
+		ok ci.job_stuck "$ci_in_flight CI job(s) in flight, oldest ${ci_job_age}s"
+	else
+		warn ci.job_stuck "a CI job has been in flight ${ci_job_age}s, past twice its scope's RuntimeMaxSec - the transient scope was meant to kill it and did not; 'systemctl --user list-units --type=scope' and look for ci-lane-*"
+	fi
+
+	# The lane's own budget, so the driver's own garbage collection is visible
+	# before it has to act rather than only after.
+	if [ -z "$ci_disk_worst" ]; then
+		note ci.lane_disk "no CI lane has reported its disk use yet"
+	elif [ "$ci_disk_worst" -le 20480 ]; then
+		ok ci.lane_disk "the largest CI lane holds ${ci_disk_worst}MB of its 20480MB budget"
+	else
+		warn ci.lane_disk "CI lane $ci_disk_lane holds ${ci_disk_worst}MB, over its 20480MB budget - the driver clears work, tmp and the nested image store at the top of its next cycle, so this clears itself unless the budget is simply too small"
+	fi
+
+	# --------------------------------------------------------------------------
+	# The ceiling, read out of the cgroup.
+	# --------------------------------------------------------------------------
+	# THE FAILURE THIS EXISTS FOR IS SILENCE, and it is the same one
+	# agents.slice_limits was written for. A `Slice=` naming a slice with no unit
+	# file does NOT fail - systemd instantiates it with defaults - so a symlink
+	# that was never made produces lanes that start, stay healthy, stay fully
+	# observed and are contained by nothing at all.
+	#
+	# READ BACK OUT OF THE CGROUP, never `systemctl --user show`: that reports
+	# what the unit file SAYS, which is the half that was never in doubt.
+	ci_slice="/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/app.slice/app-ci.slice"
+	if [ ! -d "$ci_slice" ]; then
+		fact github_runner_slice_unlimited ""
+		note ci.slice_limits "app-ci.slice has no running members - nothing to contain yet"
+	else
+		ci_unlimited=""
+		[ "$(cat "$ci_slice/memory.max" 2>/dev/null)" != max ] || ci_unlimited="$ci_unlimited MemoryMax"
+		[ "$(cat "$ci_slice/memory.high" 2>/dev/null)" != max ] || ci_unlimited="$ci_unlimited MemoryHigh"
+		[ "$(cat "$ci_slice/cpu.max" 2>/dev/null)" != "max 100000" ] || ci_unlimited="$ci_unlimited CPUQuota"
+		[ "$(cat "$ci_slice/io.weight" 2>/dev/null)" != "default 100" ] || ci_unlimited="$ci_unlimited IOWeight"
+		[ "$(cat "$ci_slice/pids.max" 2>/dev/null)" != max ] || ci_unlimited="$ci_unlimited TasksMax"
+		# cpuset SPELLS UNLIMITED AS EMPTY, and it is the one of the six whose
+		# absence is not a containment failure but a correctness one: without it
+		# a lane reads the host's 12 cores from a cgroup that delivers two, and
+		# app-agents.slice measured that at 5x slower with a reproducibly
+		# refused good change.
+		[ -n "$(cat "$ci_slice/cpuset.cpus" 2>/dev/null)" ] || ci_unlimited="$ci_unlimited AllowedCPUs"
+		fact github_runner_slice_unlimited "$(printf '%s' "$ci_unlimited" | wc -w)" num
+		if [ -z "$ci_unlimited" ]; then
+			ok ci.slice_limits "app-ci.slice is bounded on all six controls, and a lane sees the CPU count it will actually get"
+		else
+			warn ci.slice_limits "app-ci.slice reads UNLIMITED for:$ci_unlimited - the lanes are running with systemd's defaults, not host/systemd/app-ci.slice; check the unit is symlinked into ~/.config/systemd/user/ and that the controller is delegated"
+		fi
+	fi
+
+	# --------------------------------------------------------------------------
+	# Containment.
+	# --------------------------------------------------------------------------
+	# THE SAME TWO ARMS agents.runner_isolation HAS, over the net-ci-* prefix.
+	# The live by-IP proof is bin/github-runner-smoke.sh, for that check's stated
+	# reason: an hourly create-and-destroy would be the leak it is looking for.
+	ci_nets=$(podman network ls --format '{{.Name}}' 2>/dev/null | grep '^net-ci-' || true)
+	ci_unisolated=""
+	for cn in $ci_nets; do
+		[ "$(podman network inspect "$cn" --format '{{index .Options "isolate"}}' 2>/dev/null)" = true ] ||
+			ci_unisolated="$ci_unisolated $cn"
+	done
+	ci_stack_nets=$(for nf in "$repo"/stacks/common/*.network; do
+		[ -e "$nf" ] || continue
+		basename "$nf" .network
+	done)
+	ci_strays=""
+	for ec in $(podman ps --filter label=io.home-server.ephemeral --format '{{.Names}}' 2>/dev/null | grep '^ci-' || true); do
+		for sn in $ci_stack_nets; do
+			podman inspect "$ec" --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' 2>/dev/null |
+				grep -qw "$sn" && ci_strays="$ci_strays $ec:$sn"
+		done
+	done
+	fact github_runner_networks "$(printf '%s\n' "$ci_nets" | grep -c . || true)" num
+	fact github_runner_strays "$(printf '%s' "$ci_strays" | wc -w)" num
+	if [ -n "$ci_strays" ]; then
+		warn ci.runner_isolation "a CI lane is attached to a stack network:$ci_strays - a workflow can reach the services that segment holds, which is the one edge this tier exists to prevent"
+	elif [ -n "$ci_unisolated" ]; then
+		warn ci.runner_isolation "CI network(s) without isolate=true:$ci_unisolated - netavark does not inherit Docker's inter-bridge isolation, so those bridges are fully routable to every other one"
+	elif [ -n "$ci_nets" ]; then
+		ok ci.runner_isolation "$(printf '%s\n' "$ci_nets" | grep -c .) CI network(s), all isolate=true, and no lane on a stack segment"
+	else
+		note ci.runner_isolation "no net-ci-* network exists, so no lane has ever started - the live by-IP proof is bin/github-runner-smoke.sh"
+	fi
+
+	# The same one-line label check agents.fleet_root_label makes, and the same
+	# caveat: inheritance is what makes the tree correct, so the root is the only
+	# place the answer can change, and a restorecon undoes it silently.
+	ci_root="${DOCKER_VOLUME_CACHE:-/var/home-server/cache}/github-runner"
+	if [ ! -d "$ci_root" ]; then
+		fact github_runner_root_label ""
+		note ci.fleet_root_label "$ci_root does not exist yet - no lane has been prepared"
+	else
+		cr_type=$(stat -c %C "$ci_root" 2>/dev/null | cut -d: -f3)
+		fact github_runner_root_label "${cr_type:-}"
+		if [ "$cr_type" = container_file_t ]; then
+			ok ci.fleet_root_label "the CI lane root is container_file_t, so a lane can read the tree it was given"
+		else
+			warn ci.fleet_root_label "the CI lane root is ${cr_type:-unlabelled}, not container_file_t - every lane will fail on a permission error naming SELinux nowhere; fix with 'chcon -R -t container_file_t $ci_root', and note a restorecon will undo it again"
+		fi
+	fi
+
+	# --------------------------------------------------------------------------
+	# The runner version, which is the only check here with a deadline.
+	# --------------------------------------------------------------------------
+	# GITHUB ENFORCES A MINIMUM RUNNER VERSION. A runner too far below it stops
+	# being given jobs, and the symptom is a job that queues for ever while the
+	# runner shows online and idle - nothing here fails, nothing is unhealthy,
+	# and no unit is inactive.
+	#
+	# IT GRADES THE LANE'S TREE, NEVER THE IMAGE'S ARG. A just-in-time
+	# configuration carries no disableUpdate, so the runner updates ITSELF into
+	# the lane's writable tree and legitimately runs ahead of the seed the image
+	# ships. Grading the image would report a problem that does not exist and
+	# miss the one that does.
+	#
+	# THE COMPARISON IS MADE WEEKLY BY THE SMOKE TEST, not here. Asking
+	# api.github.com hourly for a number that moves monthly is the mistake
+	# update.policy_count already made in another direction; the smoke test is
+	# already talking to that host and writes the answer down.
+	ci_latest_file="$ci_root/.runner-version-latest"
+	ci_latest=$(sed -n 's/^runner_version_latest=//p' "$ci_latest_file" 2>/dev/null | tail -1)
+	ci_checked=$(sed -n 's/^runner_version_checked_at=//p' "$ci_latest_file" 2>/dev/null | tail -1)
+	ci_checked_age=""
+	if [ -n "$ci_checked" ]; then
+		ck_e=$(date -d "$ci_checked" +%s 2>/dev/null)
+		[ -z "${ck_e:-}" ] || ci_checked_age=$(( ( $(date +%s) - ck_e ) / 86400 ))
+	fi
+	fact github_runner_version_check_age_d "${ci_checked_age:-}" num
+
+	if [ -z "$ci_version" ] && [ "$ci_markers" -eq 0 ]; then
+		note ci.runner_version "no CI lane has recorded a runner version yet"
+	elif [ -z "$ci_latest" ] || [ -z "$ci_checked_age" ]; then
+		note ci.runner_version "the lane runs ${ci_version:-an unknown version} and upstream's latest has not been read - home-server-github-runner-build.timer records it weekly"
+	elif [ "$ci_checked_age" -gt 14 ]; then
+		warn ci.runner_version "upstream's runner version was last read ${ci_checked_age} days ago, so this cannot say whether the lanes are behind. GitHub stops giving jobs to a runner past its minimum version, and that failure is a job queueing for ever with the runner showing online. Run 'systemctl --user start home-server-github-runner-build.service'."
+	elif [ "$ci_version" = "$ci_latest" ]; then
+		ok ci.runner_version "the lanes run $ci_version, which is upstream's latest"
+	else
+		note ci.runner_version "the lanes run ${ci_version:-unknown} against upstream's $ci_latest - a lane self-updates when GitHub requires it, so this is a note rather than a finding until it stops happening"
+	fi
+
+	# The image itself, graded on its own creation time rather than on the unit's
+	# ExecMainExitTimestamp - the effect is the thing, and runtime state is wiped
+	# by a reboot.
+	ci_img_created=$(podman image inspect localhost/home-server/github-runner:latest \
+		--format '{{.Created}}' 2>/dev/null)
+	if [ -z "$ci_img_created" ]; then
+		fact github_runner_image_age_d ""
+		if [ -z "$ci_lanes_enabled" ]; then
+			note ci.image_fresh "no CI runner image exists and no lane is enabled"
+		else
+			warn ci.image_fresh "a CI lane is enabled and localhost/home-server/github-runner:latest does not exist - nothing builds it on demand, so run 'systemctl --user start home-server-github-runner-build.service' once"
+		fi
+	else
+		ci_img_e=$(date -d "$ci_img_created" +%s 2>/dev/null)
+		ci_img_age=$(( ( $(date +%s) - ${ci_img_e:-0} ) / 86400 ))
+		fact github_runner_image_age_d "$ci_img_age" num
+		if [ "$ci_img_age" -le 14 ]; then
+			ok ci.image_fresh "the CI runner image is ${ci_img_age} day(s) old"
+		else
+			warn ci.image_fresh "the CI runner image is ${ci_img_age} days old against a weekly timer - check home-server-github-runner-build.timer and whether its last run failed the smoke test, which deliberately leaves :latest where it was"
+		fi
 	fi
 
 	# --------------------------------------------------------------------------

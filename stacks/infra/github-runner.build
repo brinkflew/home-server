@@ -1,0 +1,57 @@
+# ==============================================================================
+# Build: the CI lane
+# ------------------------------------------------------------------------------
+# The fourth image built here rather than pulled, and the second that is not a
+# service. NOTHING REFERENCES IT FROM A QUADLET: bin/github-runner.sh runs it as
+# `podman run --rm` per job, from the host, under a transient systemd scope in
+# app-ci.slice. See apps/github-runner/Dockerfile and docs/ci.md.
+#
+# So this file has conduct-runner.build's shape and its consequences, for the
+# same reason. caddy.build and dashboard.build are pulled into the dependency
+# graph by a .container that names them; there is no such container here, so
+# nothing triggers this at boot at all - home-server-github-runner-build.timer is
+# the only thing that ever runs it, and Persistent=true is what makes a fresh
+# host build on first boot rather than waiting for Saturday.
+#
+# IT TAGS :next, NOT :latest, AND THAT IS THE WHOLE SAFETY MECHANISM. A
+# `curl | tar` of a runner tarball succeeds against a release that cannot run
+# here, and so does apt. So the build produces a candidate,
+# bin/github-runner-smoke.sh has to pass, and only then is :latest moved onto it -
+# three sequential ExecStart= lines in one oneshot, which stop at the first
+# failure. A lane resolves :latest and only :latest, so a failed smoke leaves CI
+# on the last image that worked.
+#
+# THE SMOKE TEST IS DOING MORE HERE THAN IT DOES FOR conduct-runner. Three of the
+# things this image has to do cannot be inferred from the fact that it built:
+# a nested rootless pull, a service container reaching `healthy` through a loop
+# that exists because there is no systemd in the container to run podman's
+# timers, and a published port answering on localhost the way a workflow's
+# DATABASE_URL expects. Every one of those fails as a hung job rather than as a
+# build error, and a hung job holds a lane for six hours.
+#
+# NO AutoUpdate= ANYWHERE, because there is no container to update. That also
+# means this file is invisible to both counting checks: update.policy_count greps
+# AutoUpdate= out of stacks/*/*.container, and containers.units_active iterates
+# *.container and *.pod. Neither number moves when this lands - the same reason
+# caddy.build, dashboard.build and conduct-runner.build appear in neither.
+# ==============================================================================
+
+[Unit]
+Description=Build the GitHub Actions CI runner image
+
+[Build]
+ImageTag=localhost/home-server/github-runner:next
+File=/var/home-server/apps/github-runner/Dockerfile
+SetWorkingDirectory=/var/home-server/apps/github-runner
+
+# The trap all three siblings document: podman build's default pull policy is
+# `missing`, so once docker.io/library/ubuntu:24.04 exists in local storage it is
+# never reconsidered. The weekly rebuild would keep succeeding, keep taking the
+# same few minutes, and keep producing an image whose base had stopped receiving
+# security updates - while looking exactly like a rebuild that worked.
+#
+# It matters here for a second reason the others do not have. This image is where
+# code from every repository in the organisation executes, and its base is a full
+# Ubuntu userland with a container engine and a browser's worth of system
+# libraries in it.
+Pull=newer

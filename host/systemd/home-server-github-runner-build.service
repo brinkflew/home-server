@@ -1,0 +1,65 @@
+# ==============================================================================
+# Build the CI lane image, prove it, and only then let a job land on it
+# ------------------------------------------------------------------------------
+# THREE STEPS, IN ONE ONESHOT, AND THE ORDER IS THE MECHANISM. A Type=oneshot
+# runs its ExecStart= lines in sequence and stops at the first failure, so:
+#
+#   1. github-runner.build produces localhost/home-server/github-runner:next
+#   2. bin/github-runner-smoke.sh has to pass against :next
+#   3. only then does :latest move onto it
+#
+# bin/github-runner.sh resolves :latest and only ever :latest, at the moment it
+# starts a container. So a build that succeeds and produces a broken image leaves
+# CI exactly where it was, and leaves this unit `failed` - which
+# containers.failed_units reports hourly, and which does NOT block the reboot
+# window, since --greenboot mode drops container and user-manager checks.
+#
+# THE GATE IS DOING MORE HERE THAN IT DOES FOR conduct-runner, and this is the
+# reason the indirection is not merely copied convention. Three things this image
+# must do cannot be inferred from the fact that it built:
+#
+#   - a nested rootless pull, on a graph root that must not silently be vfs
+#   - a service container reaching `healthy`, which needs the loop in
+#     apps/github-runner/scripts/podman-healthcheck-loop.sh, because there is no
+#     systemd in the container to run podman's healthcheck timers
+#   - a published port answering on localhost, which is what a workflow's
+#     DATABASE_URL actually does
+#
+# EVERY ONE OF THOSE FAILS AS A HUNG JOB RATHER THAN AS AN ERROR. GitHub's runner
+# waits on health status in a loop with no retry cap, and upskald sets
+# `timeout-minutes:` on none of its jobs, so the default is 360. A lane held for
+# six hours, with the container running and the service serving and nothing on
+# this host reporting anything wrong, is what this gate is between.
+#
+# IT DELIBERATELY RESTARTS NOTHING, like all three of its siblings. A lane
+# resolves :latest per job, so a job in flight finishes on the image it started
+# with and an idle lane picks the new one up on its next cycle.
+#
+# `restart`, not `start`: the generated github-runner-build.service is a oneshot
+# that sits `inactive (dead)` after it has run once, and `start` on it is a
+# no-op - the trap home-server-caddy-build.service already documents.
+#
+# Symlinked into ~/.config/systemd/user/ - see host/systemd/README.md.
+# ==============================================================================
+
+[Unit]
+Description=Rebuild and verify the GitHub Actions CI runner image
+Documentation=file:/var/home-server/apps/github-runner/Dockerfile
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl --user restart github-runner-build.service
+ExecStart=/var/home-server/bin/github-runner-smoke.sh
+ExecStart=/usr/bin/podman tag localhost/home-server/github-runner:next localhost/home-server/github-runner:latest
+# The build pulls an Ubuntu base, runs apt three times including a browser
+# dependency set, and fetches the runner tarball; the smoke then pulls three
+# service images through the NESTED engine, which on a cold lane store is the
+# slowest part of the whole thing. Measured well under this - but the first run
+# on a cold image store is the one with no second chance.
+TimeoutStartSec=3600
+
+# It joins the CI fleet's own ceiling rather than competing with the media stack
+# for memory - the same argument every other member of a slice here makes. A
+# build is not a lane, so it takes no per-unit limits of its own; the slice is
+# what bounds it.
+Slice=app-ci.slice

@@ -1,0 +1,112 @@
+# ==============================================================================
+# The aggregate ceiling for the CI lanes
+# ------------------------------------------------------------------------------
+# Second slice on this host, and it exists for the reason app-agents.slice states
+# first: per-unit limits are not a mechanism for a fleet whose unit count is a
+# variable. A lane is a `podman run --rm` under a transient scope, and a lane
+# peaks exactly when the other one starts. So the ceiling goes one level up and
+# the kernel enforces the sum.
+#
+# THE `app-` PREFIX IS LOAD-BEARING, not decoration. systemd derives the
+# hierarchy from the dashes in the name, so this nests under app.slice, where
+# every quadlet already lives. A top-level `ci.slice` would put these cgroups
+# outside the path bin/collect-metrics.py joins on - the failure app-agents.slice
+# documents at 32 of 43 series, with nothing but a counter to say so.
+#
+# SIZED AGAINST THE MEASUREMENT, NOT AGAINST THE OTHER SLICE'S CEILING. That
+# distinction is the whole of why two slices fit on a 15.8 GB host at all, and it
+# was nearly got wrong: 4,608M of agents plus 6,656M of CI reads as 11.2 GB of
+# reservation against a worst-observed MemAvailable of 9,715 MB, which looks
+# impossible. It is not, because 4,608M is a ceiling almost never approached.
+# Read out of this host's own 30-day store on 2026-08-24:
+#
+#   home_server_agent_slice_memory_bytes   median   957 MB
+#                                          p90    1,455 MB
+#                                          max    3,584 MB  <- which IS MemoryHigh
+#   home_server_agent_phase_in_flight      mean     0.069
+#   node_memory_MemAvailable_bytes         median 11,279 MB
+#                                          p1      9,645 MB
+#
+# The fleet is idle 93% of the time holding about a gigabyte, and its 30-day
+# maximum is exactly its MemoryHigh - which is page cache from `uv sync` and
+# `bun install` being reclaimed, the design working rather than a ceiling under
+# pressure. Overcommitting ceilings is already the house style here and
+# app-agents.slice says why: twenty-four quadlets declare 34.5 GiB against 15.5
+# GiB of RAM and it works, because the peaks do not coincide.
+#
+# WHAT MAKES THAT SAFE RATHER THAN LUCKY is that bin/github-runner.sh holds the
+# SECOND lane while a conduct phase is in flight, reading the same marker and the
+# same heartbeat freshness rule bin/reboot-when-staged.sh uses. At 6.9% that
+# costs almost nothing, and CI never drops to zero lanes.
+#
+# THE PER-LANE LIMITS BIND BEFORE THIS DOES, deliberately: two lanes at their
+# scope MemoryMax of 3,584M is 7,168M against the 6,656M below, so the slice
+# squeezes them rather than the kernel choosing a victim by badness across the
+# whole subtree. That is the sizing docs/agents.md insists on.
+#
+# EVERY NUMBER HERE IS A STARTING POINT AND THIS COMMENT SHOULD BE REWRITTEN.
+# app-agents.slice was, on 2026-08-20, once a real gate run could be measured.
+# The equivalent here is one e2e shard in a lane - read memory.peak, pids.peak,
+# memory.events and memory.pressure off the scope's cgroup, and read `anon`
+# against `inactive_file`, never the `high` counter.
+#
+# ITS FAILURE IS SILENCE, which is the whole reason ci.slice_limits reads these
+# values back out of the cgroup rather than out of this file. A `Slice=` naming a
+# slice with no unit file does NOT fail: systemd instantiates it with defaults,
+# and every member then starts, stays healthy, stays fully observed and is
+# contained by nothing at all. Verify, never assume:
+#   cat /sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/\
+#       app-ci.slice/memory.max
+#
+# Symlinked into ~/.config/systemd/user/ - see host/systemd/README.md, whose
+# setup loop already globs *.slice because app-agents.slice made it.
+# ==============================================================================
+
+[Slice]
+MemoryHigh=5632M
+MemoryMax=6656M
+
+# BELOW app-agents.slice's 30 ON PURPOSE. Under contention the agent fleet is
+# gating a change somebody is waiting on with a merge blocked behind it; CI is
+# doing work a hosted runner would happily do a minute later. Neither should be
+# able to starve the media stack, which has no weight set at all and therefore
+# sits at the default 100.
+CPUWeight=20
+CPUQuota=400%
+
+# THE OTHER HALF OF THAT QUOTA, and app-agents.slice paid for this lesson at 5x.
+#
+# CPUQuota PROTECTS THE HOST AND TELLS THE GUEST NOTHING. A container is not
+# CPU-namespaced, so `nproc` and node's os.availableParallelism() read the host's
+# 12 while this cgroup delivers 4. vitest, playwright, esbuild, tsc and any
+# `make -j$(nproc)` then start three times the workers the quota can run, and the
+# kernel enforces the difference by throttling all of them. Measured there, same
+# suite, five runs: 4457 tests in 340-364s with one SPURIOUS FAILURE at nproc=12,
+# against 69-71s and green at nproc=4.
+#
+# THIS VALUE ALONE IS STILL NOT ENOUGH HERE, and that is the difference from the
+# other slice. app-agents runs one phase at a time; this runs two lanes. Both
+# would read nproc=4 from this cpuset and between them start 8 workers on 4
+# cores - the same defect at half the magnitude. So bin/github-runner.sh pins
+# each lane scope to HALF of this, 4-5 and 6-7, and a job sees nproc=2, which is
+# what it will actually get.
+#
+# STATED HONESTLY: 4-7 IS NOT EXCLUSIVE. No other unit on this host pins a
+# cpuset, so ffmpeg, Jellyfin and the Tdarr nodes float across all twelve and
+# will take these four whenever they are free. nproc=2 is therefore the truth
+# about the quota and not a promise about the hardware - the mirror image of the
+# sentence this comment opens with.
+AllowedCPUs=4-7
+
+IOWeight=20
+
+# A LANE IS A CONTAINER ENGINE RUNNING A TEST SUITE, which is a different shape
+# from a phase: the nested podman, a conmon per service container, three
+# datastores, two Vite servers, a uvicorn under coverage and a browser all count
+# here. app-agents.slice measured a pids.peak of 325 for a full gate with no
+# browsers and no service containers, so 2,048 across two lanes is a guess in the
+# generous direction. It is a guess, and it is the number to re-derive from
+# pids.peak after the first e2e shard - the symptom when it binds is
+# `fork: Resource temporarily unavailable` raised by something unrelated, naming
+# neither the slice nor the limit.
+TasksMax=2048

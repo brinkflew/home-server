@@ -1497,6 +1497,163 @@ def source_agents(m):
 
 
 # ------------------------------------------------------------------------------
+# The CI lanes
+# ------------------------------------------------------------------------------
+# THE LANES ARE INVISIBLE TO EVERY OTHER SOURCE IN THIS FILE, and that is the
+# whole reason this one exists. A lane container carries io.home-server.ephemeral
+# so source_containers and source_container_network both skip it - correct,
+# because its name carries a timestamp that never repeats and the network series
+# would accumulate under an unbounded label in a store that keeps 400 days. The
+# cost is that a WEDGED LANE produces no container series, no failed unit and no
+# unhealthy container. That is the Windmill-worker shape exactly: nothing is
+# broken anywhere a reader can see, and work just queues.
+#
+# So the lane's own marker is the signal, and this reads it.
+#
+# MIND THE PREFIX, for the reason the agent family above documents at length.
+# bin/verify-host.sh's CI facts are github_runner_*, which source_status turns
+# into home_server_github_runner_*. These are home_server_ci_*. The two are
+# deliberately not one letter apart the way agents_* and agent_* are, because a
+# collision does not produce a wrong number - Prometheus rejects the WHOLE SCRAPE
+# when two samples of one name disagree, and the battery is hourly while this
+# runs every 30 seconds, so the two disagree by construction. bin/lint-repo.sh
+# leg 9 asserts the families stay disjoint.
+#
+# IT MUST NEVER RAISE ON AN ABSENT MARKER OR AN ABSENT SLICE. A source that
+# raises stops last_ok_at advancing for EVERY source at once, so
+# metrics.collector_fresh would WARN about a collector doing its job - and absent
+# is the normal state on a host where no lane is enabled.
+CI_SLICE = os.path.join(CGROUP, "app-ci.slice")
+
+# `lane` IS A LEGITIMATE LABEL AND THE FORBIDDEN FAMILY IS WHY THAT NEEDS SAYING.
+# The banned dimensions are worktree path, branch, pull-request number, job id and
+# session id - values that never repeat, in a store that keeps 400 days. This one
+# is a closed set of two, fixed by host/systemd/app-ci.slice's cpuset arithmetic,
+# and a third lane is refused by bin/github-runner.sh rather than silently
+# minting a third series.
+CI_LANES = (1, 2)
+
+
+def _ci_marker(lane):
+    return os.path.expanduser("~/.cache/home-server/ci-state-%d" % lane)
+
+
+# (marker key, metric suffix, help)
+CI_NUMBERS = (
+    ("job_in_flight", "job_in_flight",
+     "1 while this lane is running a GitHub Actions job. ABSENT when the lane "
+     "has never started, which is not the same as 0 and must not be drawn as "
+     "idle."),
+    ("jobs_today", "jobs_today",
+     "Jobs this lane has completed since midnight. A gauge, not a counter: it "
+     "resets daily by design, and rate() over a resetting counter is a lie."),
+    ("consecutive_failures", "consecutive_failures",
+     "Failed attempts to mint a runner identity since the last success. Non-zero "
+     "means GitHub is answering something transient; a permanent rejection stops "
+     "the lane instead, which shows up as the unit being failed."),
+    ("lane_disk_mb", "lane_disk_megabytes",
+     "What this lane holds on disk - its home, tool cache, nested image store "
+     "and runner tree. The driver clears the regenerable parts when it passes "
+     "its budget, so a sawtooth here is the design working."),
+)
+
+# (marker key, metric infix)
+CI_STAMPS = (("heartbeat_at", "heartbeat"), ("last_job_at", "last_job"))
+
+
+def source_ci(m):
+    # THE PRESENCE GAUGE IS NOT DECORATION - the same argument
+    # home_server_agent_slice_present makes. read_int returns None for the
+    # literal `max` and Metrics.add then drops the sample, so an UNBOUNDED
+    # control does not read as zero, it vanishes. Systemd instantiating this
+    # slice with defaults - because nobody symlinked the unit file - makes all
+    # five controls read unlimited and all five gauges disappear together, which
+    # from a dashboard is indistinguishable from a slice that is not running.
+    present = os.path.isdir(CI_SLICE)
+    m.add("home_server_ci_slice_present", 1 if present else 0, None,
+          "1 when app-ci.slice has a live cgroup. Every gauge below is ABSENT "
+          "both when the slice is empty and when a control is unlimited, so this "
+          "is what tells those two apart.")
+
+    if present:
+        for metric, filename, help_text in (
+                ("memory_bytes", "memory.current",
+                 "memory.current for both CI lanes and their driver, summed by "
+                 "the kernel."),
+                ("memory_peak_bytes", "memory.peak",
+                 "High-water mark since the slice was created. This is the "
+                 "number host/systemd/app-ci.slice's comment asks to be "
+                 "re-derived from after the first real job."),
+                ("memory_max_bytes", "memory.max",
+                 "The MemoryMax= ceiling. ABSENT when unlimited, which is the "
+                 "silent failure ci.slice_limits exists to catch."),
+                ("memory_high_bytes", "memory.high",
+                 "The MemoryHigh= throttle watermark, NOT memory.low."),
+                ("pids", "pids.current", "Tasks in the slice."),
+                ("pids_max", "pids.max",
+                 "The TasksMax= limit. ABSENT when unlimited.")):
+            m.add("home_server_ci_slice_" + metric,
+                  read_int(os.path.join(CI_SLICE, filename)), None, help_text)
+
+        # A KILL HERE MEANS THE SIZING IS WRONG, NOT THAT A TEST IS FLAKY, and
+        # the distinction matters more for CI than for the agent fleet: a job
+        # killed by the kernel reports itself to GitHub as a failed step with no
+        # useful message, and the obvious reading is that the code broke. `high`
+        # is deliberately not exported - a slice doing file I/O accumulates it
+        # for ever and it proves nothing.
+        events = read_kv(os.path.join(CI_SLICE, "memory.events"))
+        m.add("home_server_ci_slice_oom_total", events.get("oom_kill"), None,
+              "Processes killed by the kernel for breaching the CI slice's "
+              "memory ceiling. Non-zero means the per-lane limits are not "
+              "binding before the slice does, which is what they are sized to "
+              "do.", "counter")
+
+    any_marker = False
+    for lane in CI_LANES:
+        state = _marker(_ci_marker(lane))
+        if not state:
+            continue
+        any_marker = True
+        labels = {"lane": str(lane)}
+
+        for key, infix in CI_STAMPS:
+            m.add("home_server_ci_%s_timestamp_seconds" % infix,
+                  _epoch(state.get(key)), labels,
+                  "From the lane's marker. A TIMESTAMP, not an age: the consumer "
+                  "subtracts from time(), so a stopped driver shows as staleness "
+                  "rather than freezing at its last value.")
+
+        for key, suffix, help_text in CI_NUMBERS:
+            value = _marker_number(state.get(key))
+            if suffix == "lane_disk_megabytes" and value is not None:
+                m.add("home_server_ci_lane_disk_bytes", value * (1 << 20),
+                      labels, help_text)
+                continue
+            m.add("home_server_ci_" + suffix, value, labels, help_text)
+
+        # A COUNTER, UNLIKE jobs_today, so rate() over it is meaningful. The
+        # driver carries it across a unit restart by reading its own marker back,
+        # which is what keeps it monotonic through the restarts that are this
+        # design's normal operation.
+        m.add("home_server_ci_jobs_total", _marker_number(state.get("jobs_total")),
+              labels,
+              "Jobs this lane has completed since the marker was first written. "
+              "Monotonic across unit restarts, because the driver seeds it from "
+              "the marker it wrote last.", "counter")
+
+        m.add("home_server_ci_last_job_seconds",
+              _marker_number(state.get("last_job_seconds")), labels,
+              "How long this lane's last job took, wall clock, container start "
+              "to container exit. Includes the runner picking the job up, so it "
+              "is longer than the duration GitHub reports.")
+
+    m.add("home_server_ci_marker_present", 1 if any_marker else 0, None,
+          "1 when at least one CI lane has written its marker. Reads 0 on a host "
+          "where no lane is enabled, which is what every ci check reports as a "
+          "NOTE rather than a finding.")
+
+
+# ------------------------------------------------------------------------------
 # The applications - the SLOW tier
 # ------------------------------------------------------------------------------
 # Every one of these is reached with `podman exec`, which works whatever the
@@ -2741,6 +2898,7 @@ SOURCES = (
     ("sensors", source_sensors, False, None),
     ("status", source_status, False, None),
     ("agents", source_agents, False, None),
+    ("ci", source_ci, False, None),
     ("playback", source_playback, False, "activity"),
     ("transfers", source_transfers, False, "activity"),
     ("smart", source_smart, True, None),
