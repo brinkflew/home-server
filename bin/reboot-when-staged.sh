@@ -306,6 +306,87 @@ if [ "${phase_flag:-0}" = 1 ] && [ -n "$phase_hb_age" ] && [ "$phase_hb_age" -le
 fi
 
 # ------------------------------------------------------------------------------
+# Is a CI job mid-flight?
+# ------------------------------------------------------------------------------
+# THE SAME SHAPE AS THE PHASE GATE ABOVE, AND FOR THE SAME TWO REASONS. A lane's
+# marker is the only thing on this host that knows a job is running - the
+# container carries io.home-server.ephemeral, so the collector skips it, no unit
+# goes inactive and nothing reads unhealthy. And a driver killed mid-job leaves
+# job_in_flight=1 behind for ever, so the flag is believed only while the
+# heartbeat is fresh; a stale flag that vetoes reboots indefinitely is "the host
+# silently stops taking OS security updates" arriving from a third direction.
+#
+# 300 SECONDS RATHER THAN THE PHASE GATE'S 600, because the driver polls every
+# thirty. Ten missed rounds is a wedged driver; the same window ci.heartbeat
+# grades.
+#
+# THE ESCALATION IS THE COUNT IDIOM, NOT THE ENCODER'S AGE IDIOM, and naming the
+# trade is what makes it defensible rather than arbitrary. A killed CI job costs
+# one `gh run rerun` against a branch GitHub still holds - minutes of compute,
+# nothing lost but somebody pressing a button. A killed transcode costs an hour
+# of GPU time against a source that is hardlinked and untouched. So this gives
+# way after the second refusal of a morning, exactly as the phase gate does,
+# where the encoder holds out for a fortnight.
+#
+# IT IS SLIGHTLY WORSE THAN A KILLED PHASE AND THE COMMENT SHOULD SAY SO RATHER
+# THAN ROUND IT OFF: GitHub does NOT re-queue a job whose ephemeral runner
+# disappeared. conduct's reconciler reclaims a phase on the way back up with
+# nobody involved; a CI job needs a person. Still minutes, still far cheaper than
+# another week on an unapplied image, but it is not free.
+#
+# AND IT MAKES A REQUIREMENT NON-NEGOTIABLE RATHER THAN ASPIRATIONAL, the way the
+# phase gate does for conduct: bin/github-runner.sh must survive being killed
+# mid-job, deregister its runner on the way back up and reap its own container
+# and .jitconfig. A design note saying so would be a wish. This guarantees it
+# gets exercised, on a schedule, without anybody deciding to.
+ci_busy_lane=""
+ci_busy_age=""
+for ci_lane in 1 2; do
+	ci_state="${HOME_SERVER_CI_STATE_DIR:-${HOME:-/var/home/core}/.cache/home-server}/ci-state-$ci_lane"
+	[ -f "$ci_state" ] || continue
+	[ "$(sed -n 's/^job_in_flight=//p' "$ci_state" 2>/dev/null | tail -1)" = 1 ] || continue
+
+	ci_hb=$(sed -n 's/^heartbeat_at=//p' "$ci_state" 2>/dev/null | tail -1)
+	[ -n "$ci_hb" ] || continue
+	ci_hb_epoch=$(date -d "$ci_hb" +%s 2>/dev/null) || continue
+	[ -n "${ci_hb_epoch:-}" ] || continue
+	ci_hb_age=$(( $(date +%s) - ci_hb_epoch ))
+	[ "$ci_hb_age" -le 300 ] || continue
+
+	ci_busy_lane="$ci_lane"
+	ci_busy_age="$ci_hb_age"
+	break
+done
+
+if [ -n "$ci_busy_lane" ]; then
+	ci_today=$(date -u +%Y-%m-%d)
+	ci_prev_day=$(sed -n 's/^ci_refused_on=//p' "$STATE" 2>/dev/null | tail -1)
+	ci_prev_n=$(sed -n 's/^ci_refusals=//p' "$STATE" 2>/dev/null | tail -1)
+	case "$ci_prev_n" in ''|*[!0-9]*) ci_prev_n=0 ;; esac
+	[ "$ci_prev_day" = "$ci_today" ] || ci_prev_n=0
+
+	if [ "$ci_prev_n" -ge 2 ]; then
+		note "a CI job has been in flight at $ci_prev_n earlier attempts this morning - applying anyway. The job dies with the reboot and GitHub records it as cancelled rather than re-queueing it, so somebody re-runs it with 'gh run rerun --failed'. bin/github-runner.sh reclaims its own container and registration on the way back up, which is the property this escalation exists to keep honest."
+	else
+		# RECORDED BEFORE REFUSING, because refuse() exits immediately - and not
+		# at all under --dry-run, which must change nothing. The block rewrites
+		# the file whole and keeps every key it does not own, the same shape the
+		# phase gate above and the unattended_reboot_at write at the end of this
+		# script both use.
+		if [ -z "$DRY" ]; then
+			{
+				grep -vE '^ci_refus(als|ed_on)=' "$STATE" 2>/dev/null
+				echo "ci_refused_on=$ci_today"
+				echo "ci_refusals=$((ci_prev_n + 1))"
+			} | priv tee "$STATE.tmp" >/dev/null
+			priv mv "$STATE.tmp" "$STATE"
+		fi
+		refuse "CI lane $ci_busy_lane has a job in flight (heartbeat ${ci_busy_age}s ago) - a reboot would kill it, and GitHub does not re-queue a job whose runner disappeared.
+  Refusal $((ci_prev_n + 1)) of 2 this morning; the next attempt applies anyway."
+	fi
+fi
+
+# ------------------------------------------------------------------------------
 # Is anything mid-flight that a reboot would destroy?
 # ------------------------------------------------------------------------------
 # SOMEBODY IS WATCHING, AND THE ENCODER GATE BELOW CANNOT SEE THEM. That is not

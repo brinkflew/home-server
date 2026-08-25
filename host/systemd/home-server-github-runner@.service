@@ -1,0 +1,82 @@
+# ==============================================================================
+# One CI lane, and the reason the loop is not in this file
+# ------------------------------------------------------------------------------
+# A template, instantiated once per lane: `home-server-github-runner@1.service`
+# and `@2`. %i is the lane number and nothing else - it is not a repository, not
+# a label and not a scope, so it never needs systemd-escape and cannot collide
+# with a repository name containing a dash.
+#
+# A plain user unit rather than a quadlet, and for the reason
+# home-server-conduct.service gives: forking podman is the whole job. No
+# container on this host may reach the podman socket - container_t ->
+# unconfined_t : unix_stream_socket connectto is DENY under enforcing SELinux -
+# so the thing that starts containers runs where the socket is, and the job runs
+# one tier down inside an image that cannot see it at all.
+#
+# THE LOOP IS IN bin/github-runner.sh, NOT IN Restart=, AND THAT IS THE WHOLE
+# DESIGN OF THIS FILE. A finished job is a process exit, so the obvious shape -
+# one unit start per job, `Restart=always` doing the cycling - makes a completed
+# job and a crash indistinguishable to systemd. StartLimitBurst would then be
+# counting SUCCESSFUL WORK, and a busy afternoon would put a lane into `failed`
+# for having done its job. With the loop inside the script, Restart= only ever
+# fires when the driver itself died, which is always a fault.
+#
+# THE START LIMIT ARITHMETIC IS THE OTHER HALF, and docs/known-state.md records
+# what happens without it: `Restart=always` at `RestartSec=5` cannot reach
+# systemd's shipped 5-in-10s ceiling, because five-second spacing produces at
+# most two restarts in the window - so no unit here ever gave up, and Pocket ID
+# oscillated 6,224 times over nine and a half hours. That was NEVER a detection
+# failure; containers.failed_units went FAIL within the hour. What was missing
+# was an END STATE. Twenty starts at thirty seconds is about six hundred seconds
+# inside a 3,600-second window, so a hopeless lane comes to rest in `failed` in
+# about ten minutes, where ci.lanes_alive reports it hourly and the driver's own
+# exit code says which of the unrecoverable causes it was.
+#
+# RestartSec=30 RATHER THAN 5, for home-server-conduct.service's reason one step
+# removed. A lane restarting every five seconds would mint a fresh just-in-time
+# runner registration on every attempt, and a registration is a thing GitHub
+# counts against a rate limit shared with everything else this host asks it.
+#
+# Symlinked into ~/.config/systemd/user/ - see host/systemd/README.md. A template
+# matches the existing *.service glob, so that loop needed no widening; the
+# INSTANCES have to be enabled by name, which is the one line in that README.
+# ==============================================================================
+
+[Unit]
+Description=GitHub Actions runner lane %i
+Documentation=file:/var/home-server/docs/ci.md
+StartLimitIntervalSec=3600
+StartLimitBurst=20
+
+[Service]
+Type=simple
+EnvironmentFile=/var/home-server/.env
+ExecStart=/var/home-server/bin/github-runner.sh %i
+Restart=always
+RestartSec=30
+
+# ONE HUNDRED AND TWENTY SECONDS TO STOP, and it is not generosity. The driver's
+# TERM handler has to kill the container, then DELETE the runner registration
+# from GitHub over the network. Cut short, the container dies and the
+# registration is orphaned until GitHub reaps it a day later - which is exactly
+# the leak ci.runners_leaked would then report against a lane that was stopped
+# correctly.
+TimeoutStopSec=120
+
+# The CI fleet's aggregate ceiling. The driver itself is small - it forks podman
+# and polls - but it belongs inside the same accounting as the lanes it starts,
+# or the slice measures everything except the thing that caused it. The JOB does
+# not run inside these numbers: it runs in a transient scope that is a SIBLING in
+# the same slice, with limits of its own that bin/github-runner.sh sets.
+Slice=app-ci.slice
+MemoryHigh=192M
+MemoryMax=256M
+
+# The thing that orchestrates work must yield to the stack it runs on, same shape
+# as home-server-conduct.service and home-server-metrics.service.
+Nice=10
+CPUWeight=20
+IOWeight=20
+
+[Install]
+WantedBy=default.target

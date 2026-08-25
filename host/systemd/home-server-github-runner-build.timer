@@ -1,0 +1,53 @@
+# ==============================================================================
+# Rebuild the CI lane image weekly, ahead of every other source build
+# ------------------------------------------------------------------------------
+# Saturday 20:00: an hour before home-server-conduct-runner-build.timer, two
+# before Caddy's and four before podman-auto-update.timer. Nothing depends on
+# that ordering - this unit restarts no container, and auto-update never touches
+# an image with no container to update - but this is the longest of the four
+# builds and putting it first is what keeps the evening's journal readable.
+#
+# WEEKLY, AND THE STALENESS IS PRICED DIFFERENTLY HERE THAN FOR ITS SIBLINGS.
+# For conduct-runner a week behind is a week behind on a tool; for this image it
+# is a week closer to a deadline somebody else set. GitHub enforces a MINIMUM
+# runner version - a runner too far behind stops being given jobs, and the
+# symptom is a job that queues for ever while the runner shows online and idle.
+#
+# THAT IS NOT WHAT THIS TIMER DEFENDS AGAINST, and the distinction matters
+# because it would be easy to reach for a nightly build believing it did. The
+# defence is that the lane's runner tree is WRITABLE, so the runner updates
+# ITSELF - a just-in-time configuration carries no `disableUpdate` and GitHub
+# pushes the new version the moment it is required. This timer refreshes the
+# SEED, which is what a brand new lane starts from, and the Ubuntu base beneath
+# it. ci.runner_version grades what is on disk in a lane, never the seed, for
+# exactly that reason.
+#
+# So the cadence is chosen the way conduct-runner's is: the build is over a
+# gigabyte with two apt runs and a browser dependency set, and a nightly build
+# whose smoke fails is a nightly `failed` unit. The :next -> smoke -> :latest
+# promotion is what makes a week safe, not the week itself.
+#
+# Persistent=true so a machine that was off on Saturday rebuilds when it comes
+# back rather than skipping the week.
+#
+# IT DOES NOT COVER THE FIRST INSTALL. `systemctl --user enable --now` writes the
+# stamp file immediately, so there is no missed elapse to catch up on and the
+# unit does NOT fire - measured, and recorded on
+# home-server-conduct-runner-build.timer where it was found. This image has the
+# same exposure and worse consequences: no .container references it, so on a host
+# that has never run this unit the image does not exist, and every lane exits
+# non-zero at its preflight until the first Saturday. The one-time
+# `systemctl --user start` is part of the setup in host/systemd/README.md.
+# ==============================================================================
+
+[Unit]
+Description=Rebuild and verify the GitHub Actions CI runner image weekly
+
+[Timer]
+OnCalendar=Sat *-*-* 20:00
+Persistent=true
+RandomizedDelaySec=15min
+AccuracySec=5min
+
+[Install]
+WantedBy=timers.target

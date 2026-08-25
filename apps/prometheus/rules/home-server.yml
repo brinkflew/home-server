@@ -688,3 +688,102 @@ groups:
             home_server_agent_slice_memory_max_bytes before assuming a leak - the
             runner is sized to bind before the slice does, so a slice-level kill
             means that ordering no longer holds.
+
+  # ----------------------------------------------------------------------------
+  # The CI lanes
+  # ----------------------------------------------------------------------------
+  # THE SEVENTH GROUP, and it mirrors `agents` deliberately rather than
+  # inventing a shape: the same containment/catch-all/OOM triple, at the same
+  # severities, for a fleet with the same properties. What is different is what
+  # a failure looks like from outside, and that is why the descriptions do not
+  # read like the agents ones.
+  #
+  # A WEDGED CI LANE BREAKS NOTHING A READER CAN SEE. The lane container carries
+  # io.home-server.ephemeral, so bin/collect-metrics.py skips it: no container
+  # series, no unhealthy status, and the unit stays `active` because the driver
+  # is alive and polling. Work just queues on GitHub's side, where nothing on
+  # this host is looking. That is the Windmill-worker shape, and it is why these
+  # rules lean on the battery's own checks rather than on container health.
+  - name: ci
+    rules:
+      - alert: CiContainmentLost
+        # CRITICAL RATHER THAN WARNING, on the AgentContainmentLost precedent and
+        # for the same three reasons one tier over. The slice is the only ceiling
+        # the lanes have; isolate=true is the only thing keeping a workflow off
+        # net-arr; and the lane root's SELinux label is what a `restorecon -R
+        # /var` silently removes, after which every job dies on a permission
+        # error naming SELinux nowhere.
+        #
+        # IT MATTERS MORE HERE THAN THERE. A phase runs model-authored code
+        # against one repository this household owns. A lane runs whatever is in
+        # a pull request against any repository in the organisation's runner
+        # group, and the containment is the only thing between that and the rest
+        # of this host.
+        expr: >-
+          home_server_check_status{id=~"ci.(slice_limits|runner_isolation|fleet_root_label)"} == 2
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CI containment finding: {{ $labels.id }}"
+          description: >-
+            The CI lanes may be running with systemd's defaults instead of
+            app-ci.slice, on a bridge that is not isolated, or against a lane
+            root nothing can read. `jq -r '.checks[]|select(.id=="{{ $labels.id }}")'
+            /var/lib/home-server/status.json` names which. Until it is resolved,
+            stop the lanes rather than leaving them taking jobs:
+            `systemctl --user stop home-server-github-runner@1 home-server-github-runner@2`.
+
+      - alert: CiCheckWarning
+        # THE CATCH-ALL FOR THE SECTION, and it covers every check added to it
+        # later without a rule change - the same property CheckFailing has for
+        # FAIL and AgentCheckWarning has one group up. The three above are
+        # excluded so a containment finding pages once rather than twice, thirty
+        # minutes apart, at two severities.
+        #
+        # It is what carries ci.runner_version, which is the one check in this
+        # section with a DEADLINE rather than a threshold: GitHub stops giving
+        # jobs to a runner past its minimum version, and the symptom is a job
+        # queueing for ever while the runner shows online and idle. No separate
+        # rule, because that check already warns with the whole explanation in
+        # its message and a second rule would restate the threshold in a second
+        # place.
+        expr: >-
+          home_server_check_status{section="ci",
+            id!~"ci.(slice_limits|runner_isolation|fleet_root_label)"} == 2
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CI check {{ $labels.id }} is warning"
+          description: >-
+            A CI lane is degraded rather than contained wrongly. The wording is
+            in status.json: `jq -r '.checks[]|select(.id=="{{ $labels.id }}")'
+            /var/lib/home-server/status.json`.
+
+      - alert: CiSliceOOM
+        # WARNING RATHER THAN CRITICAL, on AgentSliceOOM's argument: an OOM
+        # inside the slice is the containment working, and it fires so the sizing
+        # gets revisited rather than the failures being written off.
+        #
+        # WRITTEN OFF AS WHAT, THOUGH, IS THE DIFFERENCE. A phase killed by the
+        # kernel looks like a flaky test. A JOB killed by the kernel is reported
+        # to GitHub as a failed step with no useful message, and the obvious
+        # reading is that somebody's code broke - so this can send a person to
+        # debug a pull request that is fine. The per-lane MemoryMax is sized to
+        # bind before the slice does; a kill at slice level means that ordering
+        # no longer holds, which is a fact about this host and not about the
+        # branch.
+        expr: increase(home_server_ci_slice_oom_total[1h]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The CI slice OOM-killed a process"
+          description: >-
+            app-ci.slice hit MemoryMax, and a job will have failed for a reason
+            that looks like its own. Read home_server_ci_slice_memory_peak_bytes
+            against home_server_ci_slice_memory_max_bytes, and the per-lane
+            limits in bin/github-runner.sh against them, before assuming the
+            branch is at fault. host/systemd/app-ci.slice's comment asks for
+            exactly this measurement.
