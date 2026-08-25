@@ -636,6 +636,17 @@ while [ "$stopping" = 0 ]; do
 
 		# NOT BUSY. Either it has not been given a job yet, or it has finished
 		# one and is about to exit. The idle ceiling is what bounds both.
+		#
+		# THE HEARTBEAT IS WRITTEN HERE OR IT IS NOT WRITTEN AT ALL, and leaving
+		# it out was a real defect rather than an omission. An idle lane is the
+		# NORMAL state - it is what a lane does between jobs, which is most of
+		# the time - and without this the marker only moved when something
+		# happened. ci.heartbeat grades at 300s against a 30s poll and warned
+		# with the lane perfectly healthy and its registration online: measured
+		# at 465 seconds stale on the first live lane. A check that fires on the
+		# normal case is a check somebody learns to ignore.
+		marker_write 0
+
 		[ "$busy" = 1 ] && continue
 
 		if [ "$(( $(date +%s) - idle_since ))" -ge "$IDLE_SEC" ]; then
