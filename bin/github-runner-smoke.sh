@@ -155,8 +155,13 @@ say "Tooling"
 # web-checks then runs the FULL suite instead of the changed one - slower, and
 # green, and wrong.
 missing=""
+# node/npm/npx were NOT on this list and the image did not have them, which is
+# how a green smoke test shipped a lane that could not run prek's root-lint hook.
+# Hosted ubuntu-latest carries node at /usr/local/bin/node, so no workflow
+# installs it and no workflow declares it - the dependency is invisible until it
+# is absent, and then the error names the HOOK rather than the interpreter.
 for b in bash sh git git-lfs curl wget tar unzip zip zstd xz jq make gcc \
-         pkgconf python3 sudo docker podman crun fuse-overlayfs \
+         pkgconf python3 node npm npx sudo docker podman crun fuse-overlayfs \
          newuidmap newgidmap pasta ssh rsync; do
 	runner sh -c "command -v $b >/dev/null 2>&1" || missing="$missing $b"
 done
