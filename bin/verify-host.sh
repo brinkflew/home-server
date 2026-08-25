@@ -2801,8 +2801,15 @@ if [ -z "$GREENBOOT" ]; then
 	# The image itself, graded on its own creation time rather than on the unit's
 	# ExecMainExitTimestamp - the effect is the thing, and runtime state is wiped
 	# by a reboot.
+	# `.Created.Unix`, NOT `.Created`, AND THIS FILE ALREADY RECORDS THE TRAP ONE
+	# CHECK OVER. podman renders the plain field as a Go timestamp carrying both a
+	# numeric offset AND a zone name, which `date -d` rejects outright - so
+	# ci_img_e came back empty, the `${ci_img_e:-0}` fallback made it the epoch,
+	# and a freshly built image reported itself as **20,690 days old**. Loud
+	# rather than silent, which is the only merciful part. Same fix as
+	# agents.model_credential's `.UpdatedAt.Unix`.
 	ci_img_created=$(podman image inspect localhost/home-server/github-runner:latest \
-		--format '{{.Created}}' 2>/dev/null)
+		--format '{{.Created.Unix}}' 2>/dev/null)
 	if [ -z "$ci_img_created" ]; then
 		fact github_runner_image_age_d ""
 		if [ -z "$ci_lanes_enabled" ]; then
@@ -2811,10 +2818,18 @@ if [ -z "$GREENBOOT" ]; then
 			warn ci.image_fresh "a CI lane is enabled and localhost/home-server/github-runner:latest does not exist - nothing builds it on demand, so run 'systemctl --user start home-server-github-runner-build.service' once"
 		fi
 	else
-		ci_img_e=$(date -d "$ci_img_created" +%s 2>/dev/null)
-		ci_img_age=$(( ( $(date +%s) - ${ci_img_e:-0} ) / 86400 ))
-		fact github_runner_image_age_d "$ci_img_age" num
-		if [ "$ci_img_age" -le 14 ]; then
+		# A SUBTRACTION RATHER THAN A DATE PARSE, now that the format is an epoch.
+		# Guarded anyway: a non-numeric answer must not become an age of 20,690
+		# days, which is what the previous `${var:-0}` produced and is far more
+		# alarming than "could not be read".
+		case "$ci_img_created" in
+			''|*[!0-9]*) ci_img_age="" ;;
+			*) ci_img_age=$(( ( $(date +%s) - ci_img_created ) / 86400 )) ;;
+		esac
+		fact github_runner_image_age_d "${ci_img_age:-}" num
+		if [ -z "$ci_img_age" ]; then
+			warn ci.image_fresh "localhost/home-server/github-runner:latest exists but its creation time did not read as an epoch - check the podman format string in this check rather than the image"
+		elif [ "$ci_img_age" -le 14 ]; then
 			ok ci.image_fresh "the CI runner image is ${ci_img_age} day(s) old"
 		else
 			warn ci.image_fresh "the CI runner image is ${ci_img_age} days old against a weekly timer - check home-server-github-runner-build.timer and whether its last run failed the smoke test, which deliberately leaves :latest where it was"
