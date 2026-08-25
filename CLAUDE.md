@@ -559,6 +559,21 @@ signal read green.
 - **A drift check can fire on a key the server refuses to keep** - Windmill drops a default, so git
   held a key the deployed flow never had. The mirror image of the `lock` trap.
 
+### The round, and four ways a phase reads a tree that is not the one it was sent to
+- `prepare_worktree` is destructive, so every phase after the first one continues someone's work -
+  and resetting deletes the commits under review, silently. `continues` and `needs_commits` are two
+  tuples because they answer different questions, and the planning phase is in neither.
+- A continuing phase must INHERIT the base pin, not take one. Keying the graph build on `needs_task`
+  made the squash phase rebuild 38 MB it never opened.
+
+### A stable branch name, and the guarantee the head sha was quietly providing
+- `stop_after_if` fires correctly after a resumed suspend, measured both directions. A task-shaped
+  branch is mutable, which gives back the run-N/run-N+1 hazard - closed by a publication refusal at
+  the planning step and by `--force-with-lease` on the sha conduct itself pushed.
+- A squash rewrites history and the TREE is what carries the gate across it. The round counter must
+  never be a flow argument, the continuation marker is cleared before the start, and the publication
+  pass must run before the continuation pass.
+
 ### A filesystem that counts against the memory ceiling, and a browser that fills it
 - **A tmpfs inside a container is part of its MEMORY budget**, unreclaimable without swap, so a full
   one pins the cgroup at `MemoryHigh` for ever. `/tmp` 2g plus `/dev/shm` 1g inside a 3G `MemoryMax`

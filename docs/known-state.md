@@ -2265,3 +2265,76 @@ otherwise, and three of them were nearly shipped as assumptions.
   is an enterprise only feature". The UI path works and the owner endpoint does not - so conduct was
   ALREADY unable to answer the human gate, by a second mechanism underneath the `conduct_` prefix
   guard that nobody had found.
+
+## The round, and four ways a phase reads a tree that is not the one it was sent to
+
+**Everything here was found by writing the loop down rather than by running it**, which is the
+cheapest place any of it could have been found - three of the four are silent, and the fourth costs
+money on every publish.
+
+- **`prepare_worktree` is destructive and every phase after the first one continues someone's
+  work.** It does `checkout --force --detach origin/<ref>`, `reset --hard` and `clean -xdff`, so
+  calling it before the reviewing phase DELETES THE COMMITS UNDER REVIEW and calling it before the
+  second round's dev phase throws away the work the plan has just triaged. Neither raises: the phase
+  runs happily on a clean checkout of `main` and answers "no findings" or "nothing to do", which is
+  indistinguishable from a real clean run. `continues` in the descriptor is which phases get
+  `continue_worktree` instead.
+- **The refusal for an empty tree is a SUBSET of that, not the same list.** `review` and `ship` must
+  refuse a tree with nothing on it - a review of a clean checkout of the base reports it clean - and
+  `dev` must not, because on the first round it legitimately starts from one. One tuple for both
+  questions would have made the first change in the fleet impossible or made every review a lie,
+  depending on which way it was written. Two tuples: `continues` and `needs_commits`.
+- **The planning phase cannot be in either tuple, because its answer depends on the round.** Round
+  one prepares - it is the first step and that is what pins the base for everything after it. Round
+  two must not, or it resets away the commits it is reading findings about. It is the only phase
+  here whose tree handling is decided at dispatch rather than by the descriptor.
+- **A continuing phase must inherit the base pin rather than take one.** `pinned_base` reads the
+  MIRROR, which `prepare_worktree` refreshed - so a phase that did not prepare did not refresh, and
+  asking again hands it a base newer than the change was written against. Exactly the bug the pin on
+  the run row already exists to prevent, one phase later, and it surfaces as
+  `merge-base --is-ancestor` refusing a good run.
+- **Keying the knowledge-graph build on `needs_task` made the squash phase rebuild 38 MB it never
+  opened**, on every publish. `--mcp-config` is the flag that actually makes the server reachable, so
+  anything else deciding it is a second list that can disagree - silently, in both directions: a
+  pointless 12-second build, or a phase whose prompt tells it to reach for the graph before grep with
+  no server behind it.
+- **`review` and `ship` had to join `ANSWERS_TO_A_TASK`.** Both answer on the same worktree and both
+  run AFTER the dev phase, so both would be the newest answering row and the approval card would show
+  a review object - or a squash receipt - labelled as what the phase said it did. The exact failure
+  `plan` was added to that tuple for, twice more.
+
+## A stable branch name, and the guarantee the head sha was quietly providing
+
+- **`stop_after_if` fires correctly on a module that FOLLOWS a resumed suspend.** Measured
+  2026-08-25 on a scratch flow, both directions: `again` true stopped the flow there with that
+  module's result as the flow's and the module below never ran; false carried through to the end.
+  `publish_auto` only ever proved it after a plain rawscript, and the `skip_if` trap one section up
+  is what "a suspend nearby changes the meaning of the key beside it" looks like when it is real.
+- **A branch named for the task is stable, and the head sha in the old name was load-bearing.**
+  `agents/<worktree>-<head12>` was immutable by construction, so run N+1 could not move the ref while
+  run N's approval was suspended. `agents/fix/1572-file-download-spec` can - a person then approves
+  the card for run N and the pull request opens on run N+1's commit, with every check passing and
+  nothing anywhere noticing. Two guards replace it: an open publication row for the same task refuses
+  a new run at the PLANNING step, before a container costs anything; and every push that could move
+  an existing ref is `--force-with-lease`d on the sha conduct itself last put there. A lease naming
+  the value it expects to replace is stronger than a name that cannot repeat; what it is not is free
+  of bookkeeping, which is why both are there.
+- **A squash rewrites history and the gate measured a commit.** The tree does not change, so
+  `tree_sha` is what carries the expensive measurement across the rewrite - one `rev-parse` in
+  staging instead of a second 15-30 minute verification. A squash that changes the tree is refused,
+  and the refusal keeps the VERIFIED commits as what publishes rather than throwing the run away.
+- **The round counter must not be a flow argument.** A run form is editable in a browser, so a
+  counter carried there is a bound anybody can reset to 1 for ever - and it is the only thing between
+  a review that never comes back clean and an unbounded spend. It is a row in conduct's database, and
+  the continuation pass measures against that row rather than against what it was handed.
+- **Clearing the continuation marker AFTER starting the next round double-dispatches.** A crash
+  between Windmill accepting the run and the row being written starts the same round twice - two
+  containers, two rounds counted against a limit of two. Cleared first, a failed start restores it,
+  so a transient failure retries and only a crash costs a round.
+- **The publication pass must run before the continuation pass.** A round going back to planning
+  stops a flow that ALREADY opened a publication row when the verification pushed, so that row has to
+  be closed - no pull request, nothing to move - before the next round starts, or the new round's
+  planning step refuses itself over its own predecessor's row.
+- **A tracker outage at the review or the squash would throw away a verified change.** "Reading the
+  work refuses the step" is right for planning and dev and wrong after the commits exist and the gate
+  has passed on them; those two fall back to the task text conduct recorded on the run row.

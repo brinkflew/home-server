@@ -1513,6 +1513,227 @@ only feature"*. The UI path works - a person approved through it on 2026-08-24 -
 endpoint cannot, so conduct was structurally unable to answer that step by a mechanism underneath the
 prefix guard entirely.
 
+## The round: a change goes back to the plan until a reviewer has nothing left to say
+
+The pipeline was a straight line - plan, ship, verify, publish - and `ship` did three jobs at once:
+it made the change, squashed it, and wrote the pull request. So there was no moment where the change
+existed, had been gated, and had not yet been tidied, which is exactly where a review belongs.
+Nothing reviewed anything: `make check` cannot tell a passing suite from a good change, and the dev
+phase's own `concerns` deliberately do not gate, because making a self-report gate teaches a model to
+report none.
+
+**Four phases now, and the split is the point.**
+
+| Phase | Writes? | Budget | What it does |
+|---|---|---|---|
+| `plan` | no | $5.00 | reads the tree, triages the last round's findings, answers a plan |
+| `dev` | yes | $15.00 | makes the change and commits it. Today's `ship`, renamed |
+| `review` | **no** | $8.00 | reads the change and reports findings. Cannot fix one |
+| `ship` | git only | $3.00 | squashes the run into one commit and writes the PR text |
+
+**A reviewer that can edit fixes quietly and reports nothing**, and a review that always comes back
+clean cannot be told from a real one. So `review` gets no `Write`, no `Edit` and
+`policy.ALLOW_BASH_READONLY` underneath, exactly as `plan` does, and the only route from a finding to
+a change is back through the planning phase.
+
+**Three severities and only two of them cost a round.** `error` and `warning` send the change back;
+`note` does not, and reaches the card and the pull request body instead. Without the third level
+every observation a reviewer wanted to make would cost an hour, so it would learn to make none - the
+same trap `concerns` records one schema over.
+
+**The planning phase triages, and is told it may disagree.** `remediate` puts it in this round's
+steps, `follow_up` makes it a Backlog task, `dismiss` says the reviewer was wrong and why. Dismissing
+is free and deferring is the right answer more often than it feels like: a change that grows to
+absorb every observation made about it stops being reviewable.
+
+### The loop is a chain of runs, because Windmill has no way to do it inside one
+
+Both mechanisms were measured and both are unavailable here.
+
+- **`skip_if` cannot skip a step conduct answers.** On the module *carrying* a suspend it disables
+  that suspend whatever the predicate evaluates to - proved on a scratch flow with a literal
+  `false`, which ran straight through - and on the module that *waits* it does not prevent the wait.
+  Neither position works.
+- **A `whileloopflow` puts its body in a sub-job**, where `windmill.current_module()` reads `None`.
+  That is what `branchone` was rejected for: teaching conduct's discovery path about nesting means
+  editing the one function the `conduct_` prefix guard lives behind, which is the last code here
+  that should grow a special case.
+
+So the flow runs **one round and stops**, and conduct starts the next. `f/agents/ship` is fourteen
+modules; `retry` sits between the review and the squash and is two lines long, because conduct
+decides and the flow only carries the answer:
+
+```
+ 0 await_plan     1 conduct_plan     read the tree, triage, answer a plan
+ 2 await_dev      3 conduct_dev      write the change
+ 4 await_verify   5 conduct_verify   the gate on a pristine tree, the push, the card
+ 6 await_review   7 conduct_review   report findings, fix nothing
+ 8 retry          stop_after_if results.retry.again      <- THE LOOP
+ 9 await_ship    10 conduct_ship     squash, and the tree assertion
+11 publish_auto   stop_after_if results.publish_auto.opened
+12 await_human   13 publish_pr
+```
+
+**`stop_after_if` after a resumed suspend was measured before any of this was written**, 2026-08-25,
+both directions: `again` true stopped the flow at `retry` with `{"again": true}` as the flow's result
+and the module below it never ran; false carried through to the end. `publish_auto` only ever proved
+it after a plain rawscript, and the `skip_if` trap is exactly what "a suspend nearby changes the
+meaning of the key beside it" looks like when it goes wrong.
+
+**Exhausting the rounds is not a failure.** `again` is false once the chain has used
+`config.MAX_ATTEMPTS`, so the flow carries straight on to the squash and the publish path - which is
+also where a red gate the base already failed goes. A change that could not be made clean still
+reaches a person, with the findings on its card. The fleet does not give up on work it has paid for.
+
+**Three things make `again` false, and the last two matter as much as the first**: no blocking
+findings; the rounds are used up; or **the head gate failed on a target the base already fails**.
+`dispatch.judge_base` already tells those apart, and no round of planning can fix somebody else's
+broken base - looping on it would burn every remaining round on a change that is not at fault.
+
+**A red gate skips the review entirely**, and the skip is recorded rather than silent. Asking a model
+to read a change whose tests do not pass costs $8 to be told what `make check` already said. But *a
+review that ran and found nothing* and *a review that never ran* look identical from outside, and one
+of them means nobody has read the change - so the payload says which, and the card has a review
+section even when there is nothing in it.
+
+**A review that did not complete neither loops nor passes.** Another round would run the same phase
+against the same tree and fail the same way; carrying on silently would publish something nobody
+read. It goes to a person with the autonomy withdrawn.
+
+### The counter is conduct's, and deliberately not the flow's
+
+The obvious place is the flow's arguments - conduct starts the next round, so it could hand itself
+`attempt: 2`. **It must not.** A flow's run form is editable in a browser, so an argument is a number
+anybody can reset to 1 for ever, and the bound it drives is the only thing between a review that
+never comes back clean and an unbounded spend. It lives in `state.chain`, keyed on the worktree,
+which the lease already guarantees holds one run at a time.
+
+**The continuation pass sits beside `_publications` and after it**, and that order is load-bearing: a
+round going back to planning stops a flow that has *already* opened a publication row, so the row has
+to be closed - no pull request, nothing to move - before the next round starts, or the new round's
+planning step refuses itself over its own predecessor's row.
+
+**Clearing the marker before starting is the only ordering that cannot double-dispatch.** Clearing it
+afterwards means a crash between Windmill accepting the run and the row being written starts the same
+round twice: two containers, two rounds counted against a limit of two. A failed start restores the
+marker, so a transient failure retries and a crash costs a round rather than duplicating one.
+
+**A round left open is reaped after six hours**, not the eight days a publication gets. A chain is
+opened by the planning step and closed when the run reaches the publish path, so one left open means
+the flow died in between - and left alone it makes the *next* change on that worktree get one round
+instead of two, silently.
+
+### The worktree is prepared once per run, and that was a bug waiting to happen
+
+`phase.prepare_worktree` does `checkout --force --detach origin/<ref>`, `reset --hard` and
+`clean -xdff`. **Calling it before the review deletes the commits under review**, and calling it
+before round two's dev phase throws away the work the plan has just triaged rather than remediating
+it. Neither failure raises: the phase runs happily on a clean checkout of `main` and answers "no
+findings" or "nothing to do", which is the most convincing wrong answer available.
+
+Two descriptor tuples, because what each drives is a refusal:
+
+- **`continues`** - `dev`, `review`, `ship` - get `phase.continue_worktree`, which sanitizes the git
+  config and touches nothing else. The sanitize still runs, and it is the one thing that must: a
+  previous phase in this same tree could have written `.git/config`, and `core.fsmonitor`,
+  `core.hooksPath`, a `textconv` filter and `remote.url = ext::sh -c` all exec from a repository's
+  own configuration.
+- **`needs_commits`** - `review`, `ship` - additionally *refuse* a tree with nothing on it. `dev` is
+  deliberately absent: on the first round it legitimately starts from an empty tree, and refusing
+  there would mean no change could ever be written.
+
+**A continuing phase inherits the base pin rather than taking one.** `pinned_base` reads the mirror,
+which `prepare_worktree` refreshed - and a phase that did not prepare did not refresh, so asking
+again would hand the review or the squash a base newer than the change was written against. That is
+the bug the pin on the run row already exists to prevent, one phase later.
+
+**The planning phase is the one exception and cannot be a tuple.** Round one prepares - it is the
+first step, and preparing is what gives the whole round a clean base and one pinned commit. Round two
+must not, or it resets away the very commits it is triaging findings about.
+
+### The squash happens after the gate, and the gate still holds
+
+Everything the verification measured was measured against a commit the ship phase is about to
+destroy, because a squash rewrites history. Re-running the gate afterwards costs another 15-30
+minutes to learn nothing; skipping the question means publishing a commit nothing looked at.
+
+**The tree is what survives.** A commit is a tree plus a history; a squash keeps the tree and throws
+the history away. So `conduct_verify` records `tree_sha`, and conduct fetches the squashed commit into
+its own staging repository and refuses unless the tree behind it is byte-identical. **A squash that
+changes the tree is not a squash.** One `rev-parse`, in a repository the phase cannot write.
+
+**Nothing on that path can lose a change.** The verification already pushed the un-squashed commits
+and already built the card, so every failure here degrades to "a person looks at it": the report keeps
+pointing at the commit that was actually verified, autopublish is withdrawn, and the reason leads the
+card. A tidy-up phase must not be able to throw away an hour of verified work.
+
+**The report does not travel through the flow.** conduct's handlers see the flow's *arguments* and
+never its results, so the ship step reads what the verification measured out of `state.report` - the
+same rule that already keeps an 8 KB plan off a job argument.
+
+### The branch has a name a person can read
+
+`agents/<type>/<odoo-task>-<slug>`, so `agents/fix/1572-file-download-spec`. The type and the slug
+come from the plan - the only phase that has read the task and the tree and written nothing - the
+task id comes from the flow's arguments, and the prefix comes from the descriptor. **The `agents/`
+prefix is unchanged and is still the whole boundary**: `main` is not branch protected on the remote,
+measured 2026-08-22, and a deploy key has no ref scoping, so `publish.branch_name` refusing anything
+outside that namespace is the only thing between conduct's write key and the default branch. An
+unknown change type becomes `chore` rather than a refusal, because a branch name is not worth losing
+an hour of verified work over.
+
+**Dropping the head sha from the name gives back a hazard it closed**, and `publish.py` says what it
+was: a stable branch means run N+1 can move the ref while run N's approval is suspended, so a person
+approves the card for run N and the pull request opens on run N+1's commit with every check passing.
+Two guards replace it, neither of which needs GitHub API surface conduct does not already have:
+
+1. **An open publication for the same task refuses a new run** at the planning step. That row is open
+   from the moment the verification pushes until the flow ends, so the overlap window *is* its
+   lifetime - and refusing there closes it before a container starts rather than at the push.
+2. **Every push that could move an existing ref is leased.** `--force-with-lease` naming the sha
+   conduct itself last put there is strictly stronger than the old "no force at all", because it
+   names the value it expects to replace instead of relying on a name that can never repeat.
+
+### The tracker moves with the phase, and only at four moments
+
+| Moment | Written by | Stage |
+|---|---|---|
+| the flow starts | - | Pending |
+| `conduct_plan` claims its lease | `_plan_step` | **Planning** |
+| `conduct_dev` claims its lease | `_dev_step` | **Implementation** |
+| review, squash, publish | nobody | Implementation |
+| the pull request exists | the publication pass | **Review** |
+
+Review and opening the pull request are both Implementation, so the only two moves inside a round are
+the two at the top - and **a change that goes back to the plan goes visibly back to Planning**, which
+is a true statement about where the work is. **Review is entered when a pull request exists and never
+before**, written by the publication pass, which is the only thing that ever learns one was opened -
+and never by `publish_pr`, which holds the one write credential in the workspace and must keep
+containing no logic worth attacking. Nothing ever moves past Review.
+
+**A tracker outage must never throw away work that already happened**, and the rule needed one more
+clause for this. Reading the work still *refuses* the planning and dev steps: a phase whose task
+cannot be fetched has nothing to do. By the review and the squash the commits exist and the gate has
+passed on them, so those steps fall back to the task text conduct recorded on the run row when it
+dispatched the phase that did the work, and say so.
+
+**Follow-ups are merged from two phases and filed once.** The plan's triage and the dev phase's
+verdict both name follow-ups, and both are looking at the same findings - so they are deduplicated by
+title, capped at five, and filed only after a pull request exists. A declined run still files nothing.
+
+### Two bugs the graph flag and the review found in each other
+
+**Keying the graph build on `needs_task` made the squash phase rebuild 38 MB it never opened**, on
+every publish. It is keyed on the phase's own `--mcp-config` now, which is the flag that actually
+makes the server reachable - so a second list cannot disagree with it, and it disagreed silently in
+both directions: a pointless build, or a phase told to reach for the graph before grep with no server
+behind it.
+
+**`review` and `ship` had to join `ANSWERS_TO_A_TASK`.** Both answer on the same worktree and both
+run *after* the dev phase, so both would be the newest answering row - and the approval card would
+show a review object, or a squash receipt, labelled as what the phase said it did. That is the exact
+failure `plan` was added to that tuple for, twice more.
+
 ## What is deliberately not built yet
 
 **No gate runs after the model call, and adding one would break a good run.** `make lint` is
