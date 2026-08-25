@@ -177,6 +177,32 @@ else
 	bad "libicu or liblttng is missing - the runner will not start and the error names neither"
 fi
 
+# NODE'S LOCALE DATA, ASSERTED BY ASKING IT TO NAME A COUNTRY.
+#
+# THE BINARY ANSWERING IS NOT THE BINARY WORKING, and this is the leg that says
+# so. `node` was added to the list above after prek could not spawn it - and the
+# very next run still failed, because Fedora builds node `small-icu`: Intl exists,
+# every call succeeds, and DisplayNames answers with the input it was given. NL
+# comes back as "NL" rather than "Netherlands". Nothing throws and nothing warns;
+# a sort by display name simply comes out in a different order, which is how
+# upskald's "orders countries by English display name, not ISO code" failed ONE
+# test of 4,460 and read as flake.
+#
+# DELIBERATELY NOT `process.config.variables.icu_small`. That reads the build flag,
+# and a future base could bundle the data some other way and fail this check while
+# working perfectly - or pass it while shipping data too old to matter. The display
+# name is the thing a workflow actually depends on, so the display name is the
+# assertion.
+icu=$(runner node -e 'process.stdout.write(new Intl.DisplayNames(["en"],{type:"region"}).of("NL"))' 2>/dev/null | tr -d '\r')
+case "$icu" in
+	Netherlands)
+		ok "node has full locale data - Intl.DisplayNames names a country rather than echoing its code" ;;
+	NL)
+		bad "node is small-icu: Intl.DisplayNames('NL') returned 'NL', not 'Netherlands'. Every Intl call SUCCEEDS and answers with the input, so the only symptom is a wrong sort order in someone's test suite. Install nodejs24-full-i18n" ;;
+	*)
+		bad "the ICU probe returned '${icu:-nothing}', which is neither the name nor the code - node did not run, or Intl.DisplayNames is unavailable entirely" ;;
+esac
+
 # THE TAP DEVICE, ASSERTED BY OPENING IT RATHER THAN BY LISTING IT.
 # It arrives `crw-rw---- 65534 0`, group 0 only, and the nested engine's pasta
 # cannot give a DETACHED container a network without it - which is every

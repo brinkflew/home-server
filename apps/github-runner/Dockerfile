@@ -115,6 +115,16 @@ RUN usermod -l runner -d /home/runner -m podman \
 #   nodejs24-npm `npm` and `npx`, which the nodejs24 package does NOT carry -
 #                it ships `node` alone. Hosted runners have both, and an action
 #                shelling out to npx would fail the same quiet way.
+#   nodejs24-full-i18n
+#                LOCALE DATA. Fedora builds node `small-icu`, so Intl works and
+#                answers with the input: Intl.DisplayNames(['en'],{type:'region'})
+#                returns "NL" for NL rather than "Netherlands". Nothing throws and
+#                nothing warns - a sort by display name simply comes out in a
+#                different order, which is how upskald's
+#                "orders countries by English display name, not ISO code" failed
+#                ONE test of 4,460 and looked like flake. Hosted node is full-ICU,
+#                so again no workflow declares what it depends on. The package is
+#                version-locked to nodejs24 (1:24.18.0-1.fc44) and is data only.
 #
 # THE BROWSER LIBRARIES ARE NAMED RATHER THAN INSTALLED BY PLAYWRIGHT, which is
 # the one place this image cannot follow apps/conduct-runner/Dockerfile.
@@ -126,7 +136,7 @@ RUN usermod -l runner -d /home/runner -m podman \
 RUN dnf install -y --setopt=install_weak_deps=False \
       git git-lfs jq make gcc pkgconf rsync zip unzip zstd xz tar gzip wget \
       openssh-clients sudo findutils procps-ng which hostname podman-docker \
-      python3.13 python3-devel nodejs24 nodejs24-npm \
+      python3.13 python3-devel nodejs24 nodejs24-npm nodejs24-full-i18n \
       libicu lttng-ust krb5-libs openssl-libs file-libs \
       alsa-lib atk at-spi2-atk cups-libs libdrm mesa-libgbm nspr nss pango \
       cairo libX11 libXcomposite libXdamage libXext libXfixes libXrandr \
