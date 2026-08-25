@@ -2170,6 +2170,20 @@ otherwise, and three of them were nearly shipped as assumptions.
   four separate containment failures for one cause. The probe now prints podman's own message,
   because an arm that says "this proves nothing" and cannot say why sends whoever reads it to
   reproduce the run by hand.
+
+- **`timeout` AS PID 1 RETURNS 125 WITH NOTHING ON STDERR, AND A SHELL WRAPPER DOES NOT FIX IT.**
+  GNU `timeout` puts its child in a new process group so it can signal the whole group; as pid 1
+  that call fails and it returns 125 - its own "timeout itself failed" code. A container entrypoint
+  that `exec "$@"`s makes it pid 1, so every by-IP containment probe in
+  `bin/github-runner-smoke.sh` came back 125 and the probe correctly reported, four times, that it
+  had proved nothing about the edge. **The cause was inside the probe.**
+
+  **`sh -c 'timeout ...'` WITH A SINGLE COMMAND EXECS IT**, so the wrapper changes nothing and the
+  125 survives. A first measurement said otherwise only because it was written
+  `timeout 6 true; echo rc=$?` - the second command suppresses the exec optimisation. That accident
+  is the entire difference between the two readings, and it sent the fix in the wrong direction
+  once. `--foreground` is what actually works: measured in one container under identical flags,
+  bare 125, `sh -c` single command 125, `--foreground` 0.
 - **A workflow's `image: postgres:16-alpine` is an UNQUALIFIED short name**, because that is what
   Docker resolves. Podman refuses a short name with no search list, and a job log reports that as a
   bad image reference rather than as a missing `registries.conf`. Every `services:` block in every
