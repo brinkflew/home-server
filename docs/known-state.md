@@ -826,6 +826,98 @@ and the refusal is only in captured stderr. Proved to be environment-specific ra
 test: `database_is_local` returns `(True, '127.0.0.1')` for the workstation's URL under both sets,
 and `(False, 'db')` under the narrow set for the runner's.
 
+**THE RECONCILER REAPED A LIVE VERIFICATION, 27 SECONDS BEFORE IT FINISHED**, and `conduct/dispatch.py`'s
+own module docstring names the hazard it walked into. That docstring says the lease is claimed with
+*conduct's* pid rather than the phase's, because building the network and three datastores takes a
+minute or two and a lease with a dead pid looks stale to the reconciler. Twelve lines later,
+`set_pid` **overwrote** it with the container's. So the setup window was covered and the teardown
+window never was: from the moment a gate process exits until the run row closes, the lease pointed at
+a dead pid - and that branch of `reconcile.run` has **no `REAP_AFTER_SEC` grace at all**, deliberately,
+because a stale lease is what makes everything under it an orphan.
+
+Measured 2026-08-24 on a live run, not reasoned about: at 17:49:49 it released the lease, tore down
+the network and datastores and deleted the worktree, on a verification that finished at 17:50:16. It
+did no damage **only because everything after the gate reads staging and the database rather than the
+tree**. The window had been seconds; the base-gate measurement had just widened it to minutes -
+`preserve` copying 6 MB of artifacts, the clean check, the tree rebuild and the datastore
+recreation all sit between the two gate runs. Ninety seconds earlier it would have torn the
+datastores out from under the base gate, and **a false "the base is red" would have been cached for
+seven days** - the one lie that makes verify publish what it should refuse. `pid` is conduct's own
+and outlives the run; `runner_pid` is the container's. Neither reader needed changing.
+
+**A PERSON CAN ANSWER A STEP THAT BELONGS TO conduct, AND NOTHING ON THE SERVER CAN STOP THEM.**
+Windmill renders every suspended step as an approval form, so conduct's own waiting steps carry an
+Approve button - and on 2026-08-24, nine minutes into a gate run, one was pressed. `conduct_verify`
+was resumed with no payload, raised `conduct did not succeed: None`, and the flow completed as a
+failure while the verification behind it still had fifteen minutes to run. The summary above that
+button read *"declare the wait for the verification"*, which says nothing about whose step it is,
+and **the record cannot tell either**: conduct resumes with a token belonging to the same account,
+so the approver reads `avs` whichever answered.
+
+**Both server-side fixes were measured on a scratch flow, and both failed.** conduct resumes on
+`POST jobs/flow/resume/{id}` - `resumeSuspendedFlowAsOwner` - and a UI click goes through the
+approval path; the two are different endpoints and the record proves it, conduct's resumes landing
+as `resume_id: 0` and a person's as a non-zero id. So a constraint binding one and not the other was
+exactly what was needed:
+
+| constraint | conduct's owner resume | a person clicking Approve |
+|---|---|---|
+| `user_groups_required`, group with no members | worked, `resume_id: 0` | **allowed**, `resume_id: 22534` |
+| `self_approval_disabled: true` | worked, `resume_id: 0` | **allowed**, `resume_id: 50739` |
+
+**Neither binds a workspace admin, and this workspace is one seat which is an admin.** There is no
+group `avs` can be kept out of, and `self_approval_disabled` did not stop the account that started
+the run. The only route left is a separate Windmill identity for conduct - a service user, a second
+token in sops, and a credential whose expiry wedges the fleet - to guard against one accidental
+click. **Declined, and written down so it is not re-measured.** What shipped is a `DO NOT APPROVE`
+summary on every conduct step, a `resume_form` so there is no bare button, and a refusal that names
+the mistake instead of blaming conduct.
+
+**ONE DEAD FLOW JOB STOPPED THE WHOLE FLEET FOR TWO HOURS, AND THE RUN IT SILENCED WAS THE ONE THAT
+FOUND IT.** The verification above finished anyway and pushed its branch, then could not deliver its
+report - `500 Error: parent flow job not found`. That retry pass sits at the TOP of `poll.cycle`,
+ahead of the notification sweep and the dispatch pass, and was unguarded, so every cycle failed
+until `reconcile` forgot the row at `REAP_AFTER_SEC`. Three things fix it and each is a rule rather
+than a patch: the loop is per-row; terminal is decided by ASKING (`type == "CompletedJob"`) rather
+than by matching a Rust error string, and is false on any doubt including its own failure; and the
+row closes into `undeliverable_at` rather than `resumed_at`, because whether an answer was delivered
+is the one thing that table exists to know. `dispatch_forget` could not be reused - it carries
+`AND payload IS NULL` precisely so nothing can drop a computed answer.
+
+**A HALF-GRANTED TOOL COST A WHOLE RUN, AND THE PHASE REPORTED SUCCESS.** `--tools` named `Bash`
+and not `BashOutput`. The Bash tool offers `run_in_background`, a gate run takes minutes, so a ship
+phase backgrounded `make lint type-check` - and then had no first-class way to read the result, so
+it never did:
+
+```
+make -C ... lint type-check   ->  "Command running in background with ID bopas403w"
+...  BashOutput never called, bopas403w never read  ...
+git add api/tests/api/test_pagination.py && git commit
+```
+
+The commit carried three `basedpyright` `reportCallIssue` errors and the phase answered
+**`status: done` with an empty `concerns` list**. `verify` refused it in 91 seconds - `type-check`
+runs before `e2e-test`, so the failure came early and the base gate was a cache hit. Adding
+`BashOutput` grants nothing new: it reads the output of a Bash call the model already made and that
+`hooks/deny.py` already saw. **The lesson generalises past this tool** - granting a capability
+without granting the thing that observes its result is a grant that fails silently and expensively.
+
+**AND THE VERDICT IS ONLY AS GOOD AS THE PHASE'S OWN KNOWLEDGE, WHICH IS WHY NOTHING READS IT.** An
+earlier run of the IDENTICAL task added the `# type: ignore[call-arg]` that basedpyright wants and
+reported it as a concern; this one omitted it and claimed none. Same task, same model, same prompt,
+opposite self-assessment - and the only thing that told them apart was a gate run on a tree neither
+phase could write.
+
+**A REFUSAL FOR THE RIGHT REASON, PROVED BY THE COMPARISON REFUSING TO EXCUSE IT.** Head failed
+`type-check`; the base is red on `e2e-test` and not on `type-check`. Different targets, so the base
+did not account for it and the change was correctly blamed - which is the row of that table that
+protects the fleet from publishing its own mistakes under cover of somebody else's.
+
+**It is a hand run that exposes this, and only a hand run can.** `serve` reconciles and verifies in
+one process, so it cannot reap a lease it is itself holding - but `docs/agents.md` explicitly tells a
+reader to run `conduct run` by hand while `serve` is looping, and that is two processes with one
+database between them.
+
 
 ## The gate the fleet was going to trust, and six ways it was not a gate
 
@@ -2095,3 +2187,67 @@ otherwise, and three of them were nearly shipped as assumptions.
   registered at that instant - flaky, environment-dependent, and near-impossible to attribute from a
   job log. It would also capture `release-please`, `auto-merge` and `pr-recap`, stalling merges
   behind CI.
+
+## What a phase is given, and the flags that decide it
+
+**Measured 2026-08-25, against the pinned CLI, on the runner image itself.**
+
+- **`--setting-sources` has three values and they do three different things.** `''` loads no skills
+  and no `CLAUDE.md` at all; `user` loads `$HOME/.claude/{skills,CLAUDE.md}`; `project` loads the
+  BRANCH's, and its hooks with it. The entry above said `''` "drops the project's skills" and left
+  it there - `user` is the arm nobody had tried, and it is the one that makes a container's own
+  `HOME` a place to put them. Safe here only because that HOME is an ephemeral tmpfs the image
+  creates empty, so `user` has nothing of the branch's to find.
+- **`--model` unset means the token's default, and the default was NOT the workstation's.** A probe
+  read back `claude-sonnet-5` while every interactive session was on Opus. A pin whose absence is
+  silent, and the largest single difference in output quality nobody had measured.
+- **A mount is not access.** `Read` and `Glob` are confined to the working directory, so a
+  read-only mount outside it can be listed by `ls` and not opened by the tools the prompt tells the
+  model to use. Four of five `permission_denials` on the first live run were this, and the run
+  still answered correctly - by finding a way round, which is what makes it the kind of defect a
+  passing test hides. `--add-dir` declares it.
+- **rtk's `PreToolUse` hook answers `updatedInput` and no `permissionDecision` at all**, so it
+  rewrites and cannot permit. Worth measuring before shipping any third-party hook: one answering
+  `allow` bypasses the permission system, which is the half this design calls stronger than a hook
+  precisely because it spawns no process.
+- **Allowing rtk is allowing everything.** `rtk proxy <cmd>` runs anything, so `Bash(rtk:*)` is
+  `Bash(*)`. That costs no capability - `python3 -c` already did - but it empties
+  `permission_denials`, which was the only signal saying the model had reached for something new.
+  **Silence there is now expected and is not evidence of anything.**
+- **A cold `code-review-graph` build is 12 seconds and 38 MB** on 725 files, and `--data-dir` keeps
+  it out of the worktree - which matters because `git clean -xdff` in the verification tree would
+  delete it on every run.
+- **The graph stores ABSOLUTE PATHS, so one data directory per project does not work.** Sharing it
+  between worktrees of the same repository - same commits, same files - is refused, naming a file
+  from the other tree. It refuses loudly, which is the only reason this cost one run rather than a
+  fortnight of a phase navigating a different tree's code. Per worktree, and pay the 38 MB.
+- **A phase that hit `--max-budget-usd` exits non-zero exactly like a broken `make install`**, and
+  the result event's `subtype` is the only thing that tells them apart. Not reading it meant every
+  model failure reached a person as a bare exit code. Measured the expensive way: a plan phase with
+  no graph fell back to reading files and spent $2.14 over 32 turns without answering.
+- **A planning phase costs more than a fifth of what doing the work costs.** $2.00 was not enough
+  twice; the second attempt had a working graph and still ran 41 turns, 1.7M cached tokens and $2.25
+  without answering. 27 shell calls against 3 uses of the knowledge graph - on a phase whose whole
+  advantage is the graph, with the MCP server connected and all 37 tools offered. **The model
+  reaching for grep is the expense**, and it is a prompt problem rather than a plumbing one.
+
+## Windmill will not make a suspend conditional the obvious way
+
+**Measured 2026-08-25 on a scratch flow, both directions, after two wrong answers.**
+
+- **`skip_if` on a module disables that module's `suspend` WHATEVER the predicate evaluates to.**
+  Proved with a literal `false`: the module ran, reported `Success`, the suspend never armed and the
+  flow completed. A human gate built this way could only ever publish and never ask - the exact
+  inverse of a gate, arrived at through the only spelling that reads correct.
+- **`skip_if` on the module that WAITS does not prevent the wait**, which is the other half of the
+  same misreading. A suspend belongs to the module it precedes, so both ends were tried.
+- **A `branchone` DOES contain a suspend, in a sub-job.** The parent reads `InProgress` with
+  `branch_chosen`, `windmill.current_module()` returns `None`, and the suspended step lives under a
+  different job id - so conduct's discovery, notification and resume paths would all need to learn
+  about nesting.
+- **`stop_after_if` is what works**, survives the round trip with no drift, and needs no change to
+  conduct at all: the flow either stops before the gate or reaches the gate exactly as before.
+- **`user_auth_required: true` makes `jobs/flow/resume` fail** with "Approvals for logged in users
+  is an enterprise only feature". The UI path works and the owner endpoint does not - so conduct was
+  ALREADY unable to answer the human gate, by a second mechanism underneath the `conduct_` prefix
+  guard that nobody had found.

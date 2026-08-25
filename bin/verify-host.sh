@@ -1968,6 +1968,65 @@ if [ -z "$GREENBOOT" ]; then
 		fi
 	fi
 
+	# THE ONE THING A PHASE IS GIVEN THAT NOTHING IN GIT CAN RESTORE.
+	#
+	# The fleet's memory of a project - 148 files on the day this was written -
+	# is written continuously by workstation sessions and reaches the server only
+	# when somebody runs bin/sync-agent-assets.sh. That makes its failure mode
+	# silence rather than an error: the mount stays, the files stay, every phase
+	# starts normally, and they quietly describe a codebase from a month ago.
+	# Nothing else here would ever say so.
+	#
+	# SEVEN DAYS, WHICH IS DELIBERATELY GENEROUS. The memory is knowledge rather
+	# than configuration and a week-old entry about why a test flakes is still
+	# true. What this is for is the sync that stopped in March.
+	#
+	# THE NEWEST mtime AND NOT THE DIRECTORY'S. rsync updates the directory on
+	# every run whether or not anything changed, so `stat` on the root would
+	# report the sync and never the content.
+	memory_root="$fleet_root/memory"
+	if [ ! -d "$memory_root" ]; then
+		fact agents_memory_age_hours ""
+		note agents.memory_age "no $memory_root - no project ships a memory to its phases yet"
+	else
+		mem_newest=$(find "$memory_root" -type f -printf '%T@\n' 2>/dev/null | sort -rn | head -1)
+		if [ -z "$mem_newest" ]; then
+			fact agents_memory_age_hours ""
+			warn agents.memory_age "$memory_root exists and is empty - a phase gets a MEMORY.md index whose every link is a file it cannot open; run ./bin/sync-agent-assets.sh from the workstation"
+		else
+			mem_age=$(( ( $(date +%s) - ${mem_newest%.*} ) / 3600 ))
+			fact agents_memory_age_hours "$mem_age"
+			if [ "$mem_age" -le 168 ]; then
+				ok agents.memory_age "the fleet's memory was last synced ${mem_age}h ago"
+			else
+				warn agents.memory_age "the fleet's memory is ${mem_age}h old, limit 168h - every phase is still being handed it and it is describing an older codebase; run ./bin/sync-agent-assets.sh from the workstation"
+			fi
+		fi
+	fi
+
+	# WHETHER THE FLEET CAN READ ITS OWN WORK, and this is a configuration check
+	# rather than a live one on purpose. It asks whether the credential is there,
+	# the same thing agents.model_credential asks and for the same reason: an
+	# hourly POST to a third party puts that party's uptime in the path of this
+	# battery, and routes.ntfy already sits behind --routes for exactly that.
+	#
+	# UNSET IS A note AND NOT A warn. With these empty the fleet runs as it did
+	# before the tracker existed - the work arrives as words in the `task` field
+	# and no stage moves - so an empty set is a configuration, not a fault. A
+	# PARTIAL set is the fault: it reads as configured and fails on the first call.
+	odoo_have=0
+	for v in ODOO_URL ODOO_DB ODOO_API_KEY; do
+		grep -qE "^$v=.+" "$repo/.env" 2>/dev/null && odoo_have=$((odoo_have + 1))
+	done
+	fact agents_tracker_vars "$odoo_have"
+	if [ "$odoo_have" -eq 0 ]; then
+		note agents.tracker_configured "no Odoo credential in .env - runs carry their task as text and no stage is moved, which is the fleet's behaviour before the tracker existed"
+	elif [ "$odoo_have" -eq 3 ]; then
+		ok agents.tracker_configured "conduct can read a task and move it between stages"
+	else
+		warn agents.tracker_configured "only $odoo_have of ODOO_URL, ODOO_DB and ODOO_API_KEY are set - that reads as configured and fails on the first call, which is worse than none of them"
+	fi
+
 	# THE ISOLATION IS PROVEN LIVE ELSEWHERE, AND THIS IS THE HALF THAT CAN RUN
 	# HOURLY. The plan had this check run a throwaway container against
 	# windmill-db by IP every hour. It cannot: a live probe needs a fleet
