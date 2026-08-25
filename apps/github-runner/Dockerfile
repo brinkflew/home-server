@@ -103,6 +103,18 @@ RUN usermod -l runner -d /home/runner -m podman \
 #                the app
 #   python3.13   see the tool cache below - Fedora 44's default python3 is
 #                3.14.7 and upskald asks for 3.13
+#   nodejs24     `node` ON PATH, WHICH HOSTED RUNNERS HAVE AND THIS DID NOT.
+#                ubuntu-latest ships it at /usr/local/bin/node, so a workflow
+#                never installs it and never declares it. prek's root-lint hook
+#                spawns `node .../eslint` directly and the failure names the
+#                HOOK, not the missing interpreter: "Failed to run hook
+#                `root-lint` ... No such file or directory (os error 2)".
+#                Deliberately NOT the runner's own externals/node24: that is an
+#                implementation detail the runner replaces on self-update, and
+#                putting it on PATH would tie every job to the runner version.
+#   nodejs24-npm `npm` and `npx`, which the nodejs24 package does NOT carry -
+#                it ships `node` alone. Hosted runners have both, and an action
+#                shelling out to npx would fail the same quiet way.
 #
 # THE BROWSER LIBRARIES ARE NAMED RATHER THAN INSTALLED BY PLAYWRIGHT, which is
 # the one place this image cannot follow apps/conduct-runner/Dockerfile.
@@ -114,7 +126,7 @@ RUN usermod -l runner -d /home/runner -m podman \
 RUN dnf install -y --setopt=install_weak_deps=False \
       git git-lfs jq make gcc pkgconf rsync zip unzip zstd xz tar gzip wget \
       openssh-clients sudo findutils procps-ng which hostname podman-docker \
-      python3.13 python3-devel \
+      python3.13 python3-devel nodejs24 nodejs24-npm \
       libicu lttng-ust krb5-libs openssl-libs file-libs \
       alsa-lib atk at-spi2-atk cups-libs libdrm mesa-libgbm nspr nss pango \
       cairo libX11 libXcomposite libXdamage libXext libXfixes libXrandr \
