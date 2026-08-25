@@ -2432,3 +2432,29 @@ nothing was wrong with the key, the ref, the branch name or the remote.
 - **A failed flow notified nobody.** `_note_for_a_person` fires only when a HUMAN GATE is next, so a
   run that died at the gate left one journal line on a host nobody watches - and a person who
   dispatched a task and heard nothing cannot tell that from one still running.
+
+## One artefact for two readers, and the flag that unmade a pull request
+
+- **`+` IS A SUCCESSFUL FORCED PUSH and `publish._FLAGS` did not know it.** git documents six
+  porcelain flags and the table listed three; `+` is unreachable until something pushes with
+  `--force`, so it did not exist until the leased re-push landed and the table was not revisited on
+  the day the flag became possible. Measured on avanserv/upskald#252: the squash succeeded, the push
+  succeeded, `_status` called it a refusal, and the pull request opened describing a commit its
+  branch no longer held - wrong sha, wrong compare link, the pre-squash commit's subject as the
+  title, and an error that never happened leading the reasons a person was being asked. The TREE was
+  right the whole time, so every check was green. **Name the flags from git's own list, not from the
+  ones that happened to occur.**
+- **The approval card is not a pull request description.** The card answers "should this be
+  published at all", for one person, at one moment, beside evidence, behind a passkey; a pull
+  request answers "is this right", for whoever reads it, months later. `pr_body` was `render()` with
+  the log paths stripped, so #252 opened with `### Why you are being asked` where its description
+  should have been.
+- **Withholding a skill does not stop the fleet doing the thing.** `pr` was excluded because its
+  step 4 runs `gh pr create`; the fleet wrote a body anyway, just not the project's. Shipping it
+  with an override table naming what cannot work is cheaper than a second copy of somebody else's
+  convention - and the acceptance criteria needed no parser, because `odoo.prompt_text` already
+  renders them as the Given/When/Then bullets the skill asks for.
+- **Two model phases looking at one finding do not name it the same way.** Five follow-ups reached
+  the tracker and two pairs were one task each, differing by "API" and by "response" - which a
+  case-folded title comparison cannot see. Word sets, merged when one contains the other; over-merging
+  loses a follow-up nobody wrote down twice, under-merging litters a backlog for ever.

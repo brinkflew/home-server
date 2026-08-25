@@ -580,6 +580,14 @@ signal read green.
   bare `git commit` opens an editor a container does not have.
 - All three answer confidently from less information than they were given, and none of them fails.
 
+### One artefact for two readers, and the flag that unmade a pull request
+- `+` is a successful FORCED push and `_FLAGS` listed three of git's six, so a squash that worked
+  was read as a refusal and the PR opened describing a commit its branch no longer held. Every
+  check green, because the tree was right the whole time.
+- The approval card is not a PR description; withholding the `pr` skill did not stop the fleet
+  writing a body, only the right one; and two phases naming one finding differ by a word, which a
+  case-folded title comparison cannot see.
+
 ### A failed flow is unrecoverable and almost nothing in it is
 - A Windmill `CompletedJob` is terminal, but the plan, the commits, the report and the review all
   survive - so a resume is a NEW flow run that skips the three model phases conduct recorded as

@@ -1856,6 +1856,94 @@ conduct ship --task 1266 --resume --dry-run
 `conduct status` shows what a resume would skip, so the question is answerable without opening the
 database.
 
+## The pull request follows the project's template, and used to be the approval card
+
+`avanserv/upskald#252` opened with `## upskald verify on upskald-ship`, `### Why you are being
+asked` and `### Evidence` where its description should have been. `card.pr_body()` was
+`card.render()` with the log paths stripped - **one artefact serving two readers**. The card answers
+*"should this be published at all"*, for one person, at one moment, beside evidence, behind a
+passkey. A pull request answers *"is this right"*, for whoever reads it, possibly months later.
+Neither is a draft of the other.
+
+**The template is upskald's and the ship phase writes it.** `.claude/skills/pr` is now shipped,
+having been excluded for its step 4 - `gh pr create`, which `DENY_BASH` refuses. Withholding it did
+not stop the fleet writing a body; it stopped the fleet writing the *right* one, and put the
+convention in a second repository. `conduct/prompts/ship.md` carries an override table:
+
+| The skill says | Here |
+|---|---|
+| step 1, `detect_changes` from the knowledge graph | `rtk proxy git diff` - the ship phase loads no MCP server |
+| step 2, fetch the task with `mcp__odoo-mcp__` | the task is in the prompt, in full, with its acceptance criteria |
+| step 2, build the `Task:` line | conduct builds it from the id it dispatched |
+| step 4, `gh pr create` | conduct opens it from the host; the phase holds no credential that could |
+| "confirm the draft with the user" | there is nobody to confirm with |
+
+That is the pattern `prompts/addendum.md` already uses for `CLAUDE.md`, and it means the project can
+change its template with no change on this side.
+
+**`SHIP_SCHEMA` carries the shape and the skill carries the convention.** A phase that ignored the
+skill still cannot answer something conduct has nowhere to put: `summary`, `changes[]`, `notes` and
+`verification[]` are enforced by `--json-schema`. **The acceptance criteria needed no parser** -
+`odoo.prompt_text` already renders the task's description in full, and it carries them as
+Given/When/Then bullets, which is the form the skill asks for. That is the whole reason this belongs
+in the phase rather than in conduct.
+
+**conduct assembles, bounds, and adds only what it alone knows**: the `Task:` link, built from the
+id it dispatched rather than one a model retyped; and a compact provenance block after the footer.
+
+```
+---
+Opened by the agent fleet - conduct, on brinkflew/home-server. ...
+base `6268220f78c2` -> head `bed4b387a872` on `agents/feat/1266-cap-request-body-size`
+**GATE: RED.** `e2e-test` fails at the base as well, so it proved nothing about this change.
+Changes what the gate MEANS: `api/pyproject.toml`
+Squashed to one commit, and conduct proved the tree behind it is byte-identical ...
+```
+
+**The red-gate line must never be dropped.** A draft that looks green whose gate proved nothing is
+the most misleading thing this fleet can produce, and a reviewer cannot learn it any other way. The
+flagged-path and deleted-test lines appear only when there is something to say.
+
+**A fallback that is still template-shaped.** A run reaches `pr_body` without the phase's prose
+whenever the squash failed, or a person approved one that never got that far. The dev verdict has a
+summary, the diff has a file list, and the manual checkbox stands alone - because a pull request that
+opens on those paths should still look like this project's pull requests.
+
+**The card is unchanged.** It still builds what the Windmill gate and the phone show. The problem
+was reusing it, not writing it.
+
+### The flag that cost a pull request its own identity
+
+git documents six `--porcelain` flags - `*` created, ` ` updated, `=` up to date, **`+` forced
+update**, `-` deleted, `!` rejected - and `publish._FLAGS` listed three. `+` is unreachable until
+something pushes with `--force`, so it did not exist here until the leased re-push landed, and the
+table was not revisited on the day the flag became possible.
+
+Measured on #252: the squash rewrote two commits into one, **the push succeeded** and force-updated
+the branch to `bed4b387`, and `_status` raised `git refused the push` on the `+`. conduct took its
+own withdraw path, so the pull request opened describing `09c2968f` - a commit the branch no longer
+held - with a compare link to the wrong sha, the pre-squash commit's subject as its title, and an
+error that never happened at the top of the reasons a person was being asked. The tree behind
+`bed4b387` was byte-identical to the one the gate measured, so the **content** was right the whole
+time; only everything said about it was wrong. Every check green.
+
+That is the run-N/run-N+1 class this design has two explicit guards against, arriving through a
+dictionary literal. `-` stays out deliberately: conduct never deletes a ref, so a deletion reported
+here means a push doing something nothing in that module writes.
+
+### Two follow-ups filed twice
+
+Five follow-ups reached Odoo on the first run that filed any, and two pairs were one task each: 1577
+and 1580 differ by the word "API", 1578 and 1581 by "response". `_merge_follow_ups` deduplicated on
+the case-folded title, and **two model phases looking at one finding do not name it the same way** -
+one adds a qualifier the other left out.
+
+It compares **word sets** now, minus a short closed stopword list, and merges when one set contains
+the other. Exact, untuned, and matched to the shape this actually takes. The asymmetry of the cost
+settles the direction: over-merging loses a follow-up nobody had written down twice anyway, and
+under-merging puts a duplicate in a backlog for ever - the one place here where litter outlives what
+made it.
+
 ## What is deliberately not built yet
 
 **No gate runs after the model call, and adding one would break a good run.** `make lint` is
