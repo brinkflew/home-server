@@ -112,26 +112,33 @@ podman network exists "$NET" >/dev/null 2>&1 ||
 # either "dropped" or "refused", and which would otherwise have been reported as
 # a containment failure in four separate legs. A unique name per invocation and a
 # label for the cleanup removes the class.
+#
+# THE FLAGS ARE AN ARRAY BECAUSE TWO CALLERS NEED THEM. probe() below has to put
+# a `timeout` in FRONT of podman, which cannot be done to a shell function - and
+# a second copy of twenty flags is a second thing to forget when one changes.
+RUNNER_ARGS=(
+	--rm -i
+	--label io.home-server.ephemeral
+	--label "io.home-server.ci-smoke=$SMOKE_TAG"
+	--network "$NET"
+	--dns 1.1.1.1 --dns 1.0.0.1
+	--cap-add=SYS_ADMIN
+	--security-opt label=type:container_engine_t
+	--security-opt unmask=ALL
+	--device /dev/fuse --device /dev/net/tun
+	--read-only --read-only-tmpfs
+	--tmpfs "/tmp:rw,exec,size=512m"
+	--shm-size=512m
+	--pids-limit=1024 --log-driver=none --no-healthcheck
+	-v "$LANE/home:/home/runner:rw"
+	-v "$LANE/toolcache:/opt/hostedtoolcache:rw"
+	-v "$LANE/storage:/var/lib/nested-storage:rw"
+	-v "$LANE/runner:/opt/actions-runner:rw"
+	-v "$LANE/tmp:/scratch:rw"
+)
+
 runner() {
-	podman run --rm -i --name "$SMOKE_TAG-$RANDOM" \
-		--label io.home-server.ephemeral \
-		--label "io.home-server.ci-smoke=$SMOKE_TAG" \
-		--network "$NET" \
-		--dns 1.1.1.1 --dns 1.0.0.1 \
-		--cap-add=SYS_ADMIN \
-		--security-opt label=type:container_engine_t \
-		--security-opt unmask=ALL \
-		--device /dev/fuse --device /dev/net/tun \
-		--read-only --read-only-tmpfs \
-		--tmpfs /tmp:rw,exec,size=512m \
-		--shm-size=512m \
-		--pids-limit=1024 --log-driver=none --no-healthcheck \
-		-v "$LANE/home:/home/runner:rw" \
-		-v "$LANE/toolcache:/opt/hostedtoolcache:rw" \
-		-v "$LANE/storage:/var/lib/nested-storage:rw" \
-		-v "$LANE/runner:/opt/actions-runner:rw" \
-		-v "$LANE/tmp:/scratch:rw" \
-		"$IMAGE" "$@"
+	podman run --name "$SMOKE_TAG-$RANDOM" "${RUNNER_ARGS[@]}" "$IMAGE" "$@"
 }
 
 # ------------------------------------------------------------------------------
@@ -431,24 +438,34 @@ say "Containment"
 probe() {
 	local label="$1" host="$2" port="$3" want="$4"
 	local rc=0 err=""
-	# `--foreground` IS LOAD-BEARING AND IS NOT ABOUT TERMINALS. GNU timeout
-	# normally puts its child in a NEW PROCESS GROUP so it can signal the whole
-	# group; as pid 1 that call fails, and timeout then returns **125** - its own
-	# "timeout itself failed" code - with nothing on stderr at all. The entrypoint
-	# execs its arguments, so timeout is pid 1 here.
+	# THE TIMEOUT IS ON THE HOST SIDE, WRAPPING PODMAN, AND THAT IS THE FIX FOR A
+	# CLASS RATHER THAN A SYMPTOM. `timeout` INSIDE the container becomes pid 1,
+	# because the entrypoint execs its arguments - and GNU timeout puts its child
+	# in a new process group so it can signal the whole group, which as pid 1
+	# fails. It then returns **125**, its own "timeout itself failed" code, with
+	# nothing on stderr. Every containment leg reported that, and this function
+	# correctly refused to read it as either dropped or refused: it said four
+	# times that it had proved nothing, and it was right - the cause was in the
+	# probe.
 	#
-	# WRAPPING IT IN A SHELL DOES NOT HELP, WHICH IS THE PART THAT MISLED.
-	# `sh -c 'timeout ...'` with a SINGLE command execs it, so timeout is still
-	# pid 1 and still returns 125. A first measurement suggested otherwise only
-	# because it happened to be written `timeout 6 true; echo rc=$?` - the second
-	# command suppresses the exec optimisation, and that is the whole difference.
-	# Measured in one container, same flags: bare 125, `sh -c` single command 125,
-	# `--foreground` 0.
+	# TWO ATTEMPTS TO FIX IT IN THE CONTAINER BOTH FAILED, AND FOR THE SAME
+	# REASON THE MEASUREMENTS DISAGREED. `sh -c 'timeout ...'` with a SINGLE
+	# command execs it, so timeout is pid 1 again; and `--foreground` was measured
+	# as working only in a probe written `timeout ... ; echo rc=$?`, where the
+	# second command suppresses that exec. One stray semicolon in a throwaway test
+	# is the whole difference, and it pointed the fix the wrong way twice.
 	#
-	# IT LOOKED EXACTLY LIKE A CONTAINMENT FINDING. Four edges reported rc 125,
-	# which this function correctly refuses to read as either dropped or refused -
-	# and the cause was inside the probe rather than anywhere near the network.
-	err=$(runner timeout --foreground 6 bash -c "exec 3<>/dev/tcp/$host/$port" 2>&1 >/dev/null) || rc=$?
+	# Out here timeout is an ordinary process, and 124 still means what it has to
+	# mean: podman was killed because the connect never came back. Verified
+	# end to end against all three outcomes, run exactly as this function runs
+	# them: windmill-db 124, the host publish 124, the host's own ssh 1, and
+	# api.github.com 0.
+	#
+	# 30 SECONDS, NOT 6, because the container has to start first - runner-init
+	# waits for the nested engine's socket before it execs anything, so a few
+	# seconds are gone before the connect is even attempted.
+	err=$(timeout 30 podman run --name "$SMOKE_TAG-$RANDOM" "${RUNNER_ARGS[@]}" \
+		"$IMAGE" bash -c "exec 3<>/dev/tcp/$host/$port" 2>&1 >/dev/null) || rc=$?
 	err=$(printf '%s' "$err" | tr '\n' ' ' | cut -c1-160)
 	case "$want:$rc" in
 		dropped:124)   ok "$label is dropped (rc 124)" ;;
