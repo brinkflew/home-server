@@ -574,6 +574,17 @@ signal read green.
   never be a flow argument, the continuation marker is cleared before the start, and the publication
   pass must run before the continuation pass.
 
+### Three ways a new phase reads something that is not there
+- `ALLOW_BASH_READONLY` had no git, and the reviewing phase's first instruction is `git diff`. rtk
+  rewrites `git diff` into a summary, so a review would report findings about code it never saw. A
+  bare `git commit` opens an editor a container does not have.
+- All three answer confidently from less information than they were given, and none of them fails.
+
+### The worktree is reused between changes, and so is everything keyed on it
+- "The most recent X on this worktree" is the previous TASK's X until this one overwrites it. The
+  planning phase would have triaged a stale review; the push would have leased against a branch
+  belonging to another task, which git refuses outright.
+
 ### A filesystem that counts against the memory ceiling, and a browser that fills it
 - **A tmpfs inside a container is part of its MEMORY budget**, unreclaimable without swap, so a full
   one pins the cgroup at `MemoryHigh` for ever. `/tmp` 2g plus `/dev/shm` 1g inside a 3G `MemoryMax`

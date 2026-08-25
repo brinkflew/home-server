@@ -2338,3 +2338,47 @@ money on every publish.
 - **A tracker outage at the review or the squash would throw away a verified change.** "Reading the
   work refuses the step" is right for planning and dev and wrong after the commits exist and the gate
   has passed on them; those two fall back to the task text conduct recorded on the run row.
+
+## Three ways a new phase reads something that is not there
+
+**All three were found before the phase ran, by reading its own prompt against its own allow
+list.** None of them would have failed anything: each produces a confident answer from less
+information than it was supposed to have, which is the shape this repository has the most names for.
+
+- **`ALLOW_BASH_READONLY` had no git at all, and the reviewing phase's first instruction is
+  `git diff <base>...HEAD`.** The line was drawn at "no git" on an argument about `git checkout` and
+  `git stash` moving the tree - true of those verbs, not of git - and it cost nothing while the only
+  read-only phase was `plan`, which reads source rather than history. The comment even named
+  `git log` and `git diff` as "the one real cost of drawing the line here". Named read-only verbs
+  now, two words each, because `Bash(git:*)` is the whole of git and the point is that this is not.
+  **The subset test had to learn that these rules are command PREFIXES**: it compared strings, and
+  the full list's `Bash(git:*)` is WIDER than `Bash(git log:*)`, so set difference called the
+  narrower entry something the full list did not have.
+- **rtk rewrites `git diff` and a summarised patch is not a patch.** Every command a model phase
+  runs becomes `rtk <command>`, which filters output to save tokens - so a reviewing phase told to
+  run `git diff` reads a SUMMARY and reports findings about code it never saw. upskald's own
+  `self-review` skill says this in one line; the fleet's prompt did not. `rtk proxy` is the escape
+  hatch and it is now in both prompts that need a real diff.
+- **A bare `git commit` opens an editor**, and there is no terminal in a phase container. The squash
+  phase also holds no `Write` tool, so the message has to reach a file through a shell heredoc.
+  Recoverable by retry, and a retry is a turn of a three-dollar phase spent learning something the
+  prompt already knew.
+
+## The worktree is reused between changes, and so is everything keyed on it
+
+**The reuse is deliberate and load-bearing** - it holds the `node_modules`, `.venv` and chromium
+download that make the gate minutes rather than half an hour - so "the most recent X on this
+worktree" means the previous TASK's X until this task has produced its own. Every reader that
+existed before the review loop was safe by ordering: the plan phase runs first, and the dev phase
+writes its verdict before verify reads one. The two the loop added were not.
+
+- **The planning phase would have been handed the previous task's review to triage** on the first
+  round of a new change - findings about code that is no longer in the tree, which it has no way to
+  recognise as stale. Bounded by the chain's `opened_at`, which is the only stamp that means "this
+  change" rather than "this directory".
+- **The verification's push would have leased against the previous task's branch.** Round two
+  onwards must lease - a dev phase that amended or rebased does not fast-forward, and a plain push
+  is then refused as a non-fast-forward with no way to tell that from somebody else moving the ref -
+  but `--force-with-lease` naming `agents/fix/1222-old` while pushing `agents/feat/1266-new` is a
+  lease git refuses outright, and the run is lost for it. The report is dropped at the top of round
+  one, which is the only moment that can tell a new change from another round.

@@ -1721,6 +1721,36 @@ dispatched the phase that did the work, and say so.
 verdict both name follow-ups, and both are looking at the same findings - so they are deduplicated by
 title, capped at five, and filed only after a pull request exists. A declined run still files nothing.
 
+### What the reviewing phase is allowed to run, and the one command that lies
+
+`ALLOW_BASH_READONLY` had **no git at all**. The line was drawn at "no git" on an argument about
+`git checkout` and `git stash` moving the tree - which is about those verbs rather than about git -
+and it cost nothing while the only read-only phase was `plan`, which reads source rather than
+history. **The reviewing phase's first instruction is `git diff <base>...HEAD`**, so a list without
+these would have denied the first command in its own prompt, and the phase would have fallen back to
+reading files it was never told to read.
+
+Named read-only verbs now - `log`, `diff`, `show`, `status`, `blame`, `shortlog`, `rev-list`,
+`rev-parse`, `merge-base`, `ls-files`, `cat-file`, `grep`, `describe` - two words each, because
+`Bash(git:*)` is the whole of git and the point is that this is not. `checkout`, `switch`,
+`restore`, `reset`, `clean`, `stash`, `apply`, `add`, `commit`, `rebase` and `merge` are absent, and
+`git push` is refused outright by `DENY_BASH` for both lists.
+
+**And `rtk proxy git diff`, never `git diff`.** Every command a model phase runs is rewritten into
+`rtk <command>`, which summarises output to save tokens - so a review told to run `git diff` reads a
+SUMMARY of the patch and reports findings about code it never saw. upskald's own `self-review` skill
+says this in one line and the fleet's prompt did not. Nothing would have failed; the findings would
+have been confident and unfounded.
+
+**The squash phase needs `git commit -F`.** There is no terminal in the container, so a bare
+`git commit` opens an editor and fails - and that phase holds no `Write` tool, so the message reaches
+a file through a shell heredoc. Recoverable by retry, and a retry is a turn of a three-dollar phase
+spent learning what the prompt already knew.
+
+**The subset test had to learn that these rules are command prefixes.** It compared strings, and the
+full list's `Bash(git:*)` is *wider* than the read-only list's `Bash(git log:*)` - so set difference
+reported the narrower entry as "something the full one does not have".
+
 ### Two bugs the graph flag and the review found in each other
 
 **Keying the graph build on `needs_task` made the squash phase rebuild 38 MB it never opened**, on
