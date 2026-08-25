@@ -1764,6 +1764,98 @@ run *after* the dev phase, so both would be the newest answering row - and the a
 show a review object, or a squash receipt, labelled as what the phase said it did. That is the exact
 failure `plan` was added to that tuple for, twice more.
 
+## A run that failed part-way starts again from where it got to
+
+**The first full run of the round proved the pipeline and then threw it away**: task 1266 planned,
+changed, gated and cleared its base-gate comparison - forty-five minutes and about twenty dollars -
+and lost the whole flow to a transient `exit 128` on the push. The push retries now, which closes
+that cause and not the class.
+
+**Almost everything expensive already survives a failed flow**, because the round was built to keep
+it. The plan is on a run row. The commits are on the worktree, which a `continues` phase never
+resets. The gate's report is in its own table. The review is on another run row. **The only thing
+genuinely lost is the Windmill job** - a `CompletedJob` is terminal, there is no endpoint that
+resumes one, and none that pretends to.
+
+So a resume is not "restart the flow". It is **a new flow run in which conduct answers the steps its
+own `chain` row records as finished**, without starting a container.
+
+```
+conduct_plan     $5   skipped when the round recorded it done
+conduct_dev     $15   skipped when the round recorded it done AND HEAD still matches
+conduct_verify    0   ALWAYS RUNS
+conduct_review   $8   skipped when the round recorded it done
+conduct_ship     $3   ALWAYS RUNS
+```
+
+**The gate is never skipped and that is the whole safety argument.** It costs no model spend, it is
+what the pull request rests on, and `publish.push` lives inside it - so a run whose push failed has
+nothing on the remote to open one from and must re-run it regardless. Reusing a stored report would
+add the one code path in this design whose bug publishes unverified work, to save wall-clock nobody
+is billed for. The three model phases are the money, and they are what a resume skips.
+
+**Recorded, never derived.** The cheap version asks `run.result = 'ok'` - and a run row says `ok`
+for a plan phase that exited 0 and answered nothing, which `_plan_step` correctly treats as a
+failure. Deriving would skip a step that never produced what the next one needs, so each entry in
+`chain.done` is written by the handler at the moment it decided the step had succeeded.
+
+**Nothing skips unless a person asked.** `resume` is a flow argument with no default, so every
+existing path is byte-for-byte what it was. Without the flag a re-dispatch would silently reuse a
+plan the operator may have re-dispatched precisely to replace.
+
+### Three things that would have been wrong and are not
+
+- **`_plan_step` called `chain_open`, which counts a round.** A resume would have been counted as
+  round two and left the change one round short of what it was promised. Moving the call behind the
+  skip also makes the counter mean what it always should have: **planning phases actually run**.
+- **`done` says a dev phase finished; it does not say its commits are still in the tree.** A
+  worktree is a directory a person can reach, and the skipped alternative is publishing whatever
+  happens to be sitting there - so the skip compares HEAD against what the round recorded and runs
+  the phase again if it moved.
+- **The review skip goes *behind* the red-gate branch.** A resumed run re-runs the gate, so it can
+  come back red on a tree whose stored review was written when it was green; answering with that
+  review would report on a state that no longer holds.
+
+### One automatic attempt, and only when conduct broke
+
+**The discriminator is structural, not a message** - the rule `publish._worth_retrying` follows one
+module over. `run_verify` *returns* `rc 3` with a populated `refused` when the change is at fault,
+and *raises* when conduct itself could not do its job; `cycle()` turns a raised handler into a
+payload carrying `error` with `exit_code` left null.
+
+> **`error` present, `refused` empty, `exit_code is None`** means the orchestrator broke. A red
+> gate, a refused diff, a non-zero exit and a spent budget all fill one of the other two in, and an
+> answer is not worth retrying: it is the same answer, more slowly.
+
+`is None` rather than falsy, because a phase that exited 0 is a different thing entirely.
+
+Three guards, each closing a way this could spend money on its own: **`resumed_at`** bounds it to
+one attempt, so a deterministic fault stops rather than restarting for ever; **`done` must be
+non-empty**, or there is nothing to skip and the "resume" is the fleet re-running a failed run from
+scratch; and the marker is **cleared before the start and restored if it fails**, the same ordering
+the round continuation uses and for the same reason.
+
+**Giving up now tells somebody, and it did not.** `_note_for_a_person` fires only when a human gate
+is next, so a run that died at the gate reached nobody and the only trace was one journal line - and
+a person who dispatched a task and heard nothing cannot tell that from one still running.
+`notify.failed` names the step, the reason and the worktree, and carries no link at all.
+
+### `conduct ship`
+
+There was **no way to start a flow from a terminal**: `windmill.run_flow` existed for the
+continuation pass, and every hand dispatch was a written-out `python3 -c`. A command that spends
+twenty dollars should be one somebody can type, read back and dry-run.
+
+```bash
+conduct ship --task 1266                  # start the publish flow for an Odoo task
+conduct ship --task 1266 --resume         # ... skipping what the round already has
+conduct ship --text "do the thing"        # a one-off with no tracker entry
+conduct ship --task 1266 --resume --dry-run
+```
+
+`conduct status` shows what a resume would skip, so the question is answerable without opening the
+database.
+
 ## What is deliberately not built yet
 
 **No gate runs after the model call, and adding one would break a good run.** `make lint` is

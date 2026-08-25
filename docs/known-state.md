@@ -2405,3 +2405,30 @@ nothing was wrong with the key, the ref, the branch name or the remote.
 - **A handler that raises was answered and never echoed.** The reason went to Windmill and to a
   `dispatch` row, so a person reading `journalctl` saw `poll: failed <job>/<module>` and nothing
   else - on the one path where the orchestrator has already decided the run is over.
+
+## A failed flow is unrecoverable and almost nothing in it is
+
+- **A Windmill `CompletedJob` is terminal.** There is no endpoint that resumes one and none that
+  pretends to, so "resume the flow" is not available in any form. What IS available is a new flow
+  run in which conduct answers the steps its own tables record as finished - the plan on a run row,
+  the commits on a worktree a `continues` phase never resets, the review on another run row.
+- **The gate must never be part of that.** It costs no model spend, it is what the pull request
+  rests on, and `publish.push` lives INSIDE it - so a run whose push failed has nothing on the
+  remote to open a pull request from and has to re-run it regardless. The saving is the three model
+  phases; reusing a stored report would buy wall-clock nobody is billed for at the price of the one
+  code path whose bug publishes unverified work.
+- **`run.result = 'ok'` is not "this step succeeded".** A plan phase that exits 0 and answers
+  nothing leaves an `ok` row and is a failure - `_plan_step` says so. Anything deciding what to skip
+  has to be RECORDED by the code that made that judgement, never derived from an exit code.
+- **A skip that trusts a flag alone publishes whatever is in the tree now.** A worktree is a
+  directory on a host a person can reach, so the dev-phase skip compares HEAD against what the round
+  recorded and runs the phase again if it moved.
+- **The counter counted the wrong thing.** `_plan_step` called `chain_open`, which increments, so a
+  resume would have counted as round two and left the change one round short. The counter means
+  planning phases actually RUN, and moving the call behind the skip is what makes that true.
+- **`not payload.get("exit_code")` also matches a phase that exited 0**, which is why the
+  "did conduct break" test is `exit_code is None`. `cycle()` sets the key and leaves it null on a
+  raised handler; every handler answering a failure of its own fills it in.
+- **A failed flow notified nobody.** `_note_for_a_person` fires only when a HUMAN GATE is next, so a
+  run that died at the gate left one journal line on a host nobody watches - and a person who
+  dispatched a task and heard nothing cannot tell that from one still running.

@@ -580,6 +580,13 @@ signal read green.
   bare `git commit` opens an editor a container does not have.
 - All three answer confidently from less information than they were given, and none of them fails.
 
+### A failed flow is unrecoverable and almost nothing in it is
+- A Windmill `CompletedJob` is terminal, but the plan, the commits, the report and the review all
+  survive - so a resume is a NEW flow run that skips the three model phases conduct recorded as
+  done. The gate is never skipped: it costs no credits and the push lives inside it.
+- `run.result = 'ok'` is not "the step succeeded", a skip that trusts a flag alone publishes
+  whatever is in the tree now, and `not payload.get("exit_code")` also matches a phase that exited 0.
+
 ### The last step of the pipeline is the first one that leaves the host
 - A transient `exit 128` on the push threw away a run that had already planned, changed and gated.
   Retried three times, and "worth retrying" keys on the absence of a per-ref line - a rejection
