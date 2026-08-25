@@ -2265,3 +2265,219 @@ otherwise, and three of them were nearly shipped as assumptions.
   is an enterprise only feature". The UI path works and the owner endpoint does not - so conduct was
   ALREADY unable to answer the human gate, by a second mechanism underneath the `conduct_` prefix
   guard that nobody had found.
+
+## The round, and four ways a phase reads a tree that is not the one it was sent to
+
+**Everything here was found by writing the loop down rather than by running it**, which is the
+cheapest place any of it could have been found - three of the four are silent, and the fourth costs
+money on every publish.
+
+- **`prepare_worktree` is destructive and every phase after the first one continues someone's
+  work.** It does `checkout --force --detach origin/<ref>`, `reset --hard` and `clean -xdff`, so
+  calling it before the reviewing phase DELETES THE COMMITS UNDER REVIEW and calling it before the
+  second round's dev phase throws away the work the plan has just triaged. Neither raises: the phase
+  runs happily on a clean checkout of `main` and answers "no findings" or "nothing to do", which is
+  indistinguishable from a real clean run. `continues` in the descriptor is which phases get
+  `continue_worktree` instead.
+- **The refusal for an empty tree is a SUBSET of that, not the same list.** `review` and `ship` must
+  refuse a tree with nothing on it - a review of a clean checkout of the base reports it clean - and
+  `dev` must not, because on the first round it legitimately starts from one. One tuple for both
+  questions would have made the first change in the fleet impossible or made every review a lie,
+  depending on which way it was written. Two tuples: `continues` and `needs_commits`.
+- **The planning phase cannot be in either tuple, because its answer depends on the round.** Round
+  one prepares - it is the first step and that is what pins the base for everything after it. Round
+  two must not, or it resets away the commits it is reading findings about. It is the only phase
+  here whose tree handling is decided at dispatch rather than by the descriptor.
+- **A continuing phase must inherit the base pin rather than take one.** `pinned_base` reads the
+  MIRROR, which `prepare_worktree` refreshed - so a phase that did not prepare did not refresh, and
+  asking again hands it a base newer than the change was written against. Exactly the bug the pin on
+  the run row already exists to prevent, one phase later, and it surfaces as
+  `merge-base --is-ancestor` refusing a good run.
+- **Keying the knowledge-graph build on `needs_task` made the squash phase rebuild 38 MB it never
+  opened**, on every publish. `--mcp-config` is the flag that actually makes the server reachable, so
+  anything else deciding it is a second list that can disagree - silently, in both directions: a
+  pointless 12-second build, or a phase whose prompt tells it to reach for the graph before grep with
+  no server behind it.
+- **`review` and `ship` had to join `ANSWERS_TO_A_TASK`.** Both answer on the same worktree and both
+  run AFTER the dev phase, so both would be the newest answering row and the approval card would show
+  a review object - or a squash receipt - labelled as what the phase said it did. The exact failure
+  `plan` was added to that tuple for, twice more.
+
+## A stable branch name, and the guarantee the head sha was quietly providing
+
+- **`stop_after_if` fires correctly on a module that FOLLOWS a resumed suspend.** Measured
+  2026-08-25 on a scratch flow, both directions: `again` true stopped the flow there with that
+  module's result as the flow's and the module below never ran; false carried through to the end.
+  `publish_auto` only ever proved it after a plain rawscript, and the `skip_if` trap one section up
+  is what "a suspend nearby changes the meaning of the key beside it" looks like when it is real.
+- **A branch named for the task is stable, and the head sha in the old name was load-bearing.**
+  `agents/<worktree>-<head12>` was immutable by construction, so run N+1 could not move the ref while
+  run N's approval was suspended. `agents/fix/1572-file-download-spec` can - a person then approves
+  the card for run N and the pull request opens on run N+1's commit, with every check passing and
+  nothing anywhere noticing. Two guards replace it: an open publication row for the same task refuses
+  a new run at the PLANNING step, before a container costs anything; and every push that could move
+  an existing ref is `--force-with-lease`d on the sha conduct itself last put there. A lease naming
+  the value it expects to replace is stronger than a name that cannot repeat; what it is not is free
+  of bookkeeping, which is why both are there.
+- **A squash rewrites history and the gate measured a commit.** The tree does not change, so
+  `tree_sha` is what carries the expensive measurement across the rewrite - one `rev-parse` in
+  staging instead of a second 15-30 minute verification. A squash that changes the tree is refused,
+  and the refusal keeps the VERIFIED commits as what publishes rather than throwing the run away.
+- **The round counter must not be a flow argument.** A run form is editable in a browser, so a
+  counter carried there is a bound anybody can reset to 1 for ever - and it is the only thing between
+  a review that never comes back clean and an unbounded spend. It is a row in conduct's database, and
+  the continuation pass measures against that row rather than against what it was handed.
+- **Clearing the continuation marker AFTER starting the next round double-dispatches.** A crash
+  between Windmill accepting the run and the row being written starts the same round twice - two
+  containers, two rounds counted against a limit of two. Cleared first, a failed start restores it,
+  so a transient failure retries and only a crash costs a round.
+- **The publication pass must run before the continuation pass.** A round going back to planning
+  stops a flow that ALREADY opened a publication row when the verification pushed, so that row has to
+  be closed - no pull request, nothing to move - before the next round starts, or the new round's
+  planning step refuses itself over its own predecessor's row.
+- **A tracker outage at the review or the squash would throw away a verified change.** "Reading the
+  work refuses the step" is right for planning and dev and wrong after the commits exist and the gate
+  has passed on them; those two fall back to the task text conduct recorded on the run row.
+
+## Three ways a new phase reads something that is not there
+
+**All three were found before the phase ran, by reading its own prompt against its own allow
+list.** None of them would have failed anything: each produces a confident answer from less
+information than it was supposed to have, which is the shape this repository has the most names for.
+
+- **`ALLOW_BASH_READONLY` had no git at all, and the reviewing phase's first instruction is
+  `git diff <base>...HEAD`.** The line was drawn at "no git" on an argument about `git checkout` and
+  `git stash` moving the tree - true of those verbs, not of git - and it cost nothing while the only
+  read-only phase was `plan`, which reads source rather than history. The comment even named
+  `git log` and `git diff` as "the one real cost of drawing the line here". Named read-only verbs
+  now, two words each, because `Bash(git:*)` is the whole of git and the point is that this is not.
+  **The subset test had to learn that these rules are command PREFIXES**: it compared strings, and
+  the full list's `Bash(git:*)` is WIDER than `Bash(git log:*)`, so set difference called the
+  narrower entry something the full list did not have.
+- **rtk rewrites `git diff` and a summarised patch is not a patch.** Every command a model phase
+  runs becomes `rtk <command>`, which filters output to save tokens - so a reviewing phase told to
+  run `git diff` reads a SUMMARY and reports findings about code it never saw. upskald's own
+  `self-review` skill says this in one line; the fleet's prompt did not. `rtk proxy` is the escape
+  hatch and it is now in both prompts that need a real diff.
+- **A bare `git commit` opens an editor**, and there is no terminal in a phase container. The squash
+  phase also holds no `Write` tool, so the message has to reach a file through a shell heredoc.
+  Recoverable by retry, and a retry is a turn of a three-dollar phase spent learning something the
+  prompt already knew.
+
+## The worktree is reused between changes, and so is everything keyed on it
+
+**The reuse is deliberate and load-bearing** - it holds the `node_modules`, `.venv` and chromium
+download that make the gate minutes rather than half an hour - so "the most recent X on this
+worktree" means the previous TASK's X until this task has produced its own. Every reader that
+existed before the review loop was safe by ordering: the plan phase runs first, and the dev phase
+writes its verdict before verify reads one. The two the loop added were not.
+
+- **The planning phase would have been handed the previous task's review to triage** on the first
+  round of a new change - findings about code that is no longer in the tree, which it has no way to
+  recognise as stale. Bounded by the chain's `opened_at`, which is the only stamp that means "this
+  change" rather than "this directory".
+- **The verification's push would have leased against the previous task's branch.** Round two
+  onwards must lease - a dev phase that amended or rebased does not fast-forward, and a plain push
+  is then refused as a non-fast-forward with no way to tell that from somebody else moving the ref -
+  but `--force-with-lease` naming `agents/fix/1222-old` while pushing `agents/feat/1266-new` is a
+  lease git refuses outright, and the run is lost for it. The report is dropped at the top of round
+  one, which is the only moment that can tell a new change from another round.
+
+## The last step of the pipeline is the first one that leaves the host
+
+**Measured 2026-08-25 on the first full run of the round.** Task 1266 planned, changed, gated and
+cleared its base-gate comparison - about forty-five minutes and twenty dollars - and then lost the
+whole flow to `exit 128` on the push. The identical push succeeded by hand ten minutes later, so
+nothing was wrong with the key, the ref, the branch name or the remote.
+
+- **Everything before the push is already paid for by the time git opens a socket**, so a blip there
+  discards a pipeline to answer a question nobody asked. Three attempts, five seconds apart.
+- **The discriminator for "worth retrying" is the per-ref line, not the exit code and not a
+  message.** `--porcelain` prints one line per ref once negotiation has happened, and a REJECTION
+  always produces one - a lease that did not hold, a non-fast-forward, a hook refusing. A transport
+  failure produces none, because git never got that far. So "no ref line" is exactly "the remote was
+  never reached", which is the only failure a retry can fix. Matching on the message would couple
+  the decision to somebody else's English and would retry a deterministic no more slowly.
+- **ssh ends every transport failure with the same trailer**, so keeping the LAST line of what git
+  said kept the one line that says nothing: *"Please make sure you have the correct access rights
+  and the repository exists"* reads identically for a revoked key, a wrong repository, a DNS failure
+  and a dropped connection. The sentence naming the cause is always the line above it.
+- **A handler that raises was answered and never echoed.** The reason went to Windmill and to a
+  `dispatch` row, so a person reading `journalctl` saw `poll: failed <job>/<module>` and nothing
+  else - on the one path where the orchestrator has already decided the run is over.
+
+## A failed flow is unrecoverable and almost nothing in it is
+
+- **A Windmill `CompletedJob` is terminal.** There is no endpoint that resumes one and none that
+  pretends to, so "resume the flow" is not available in any form. What IS available is a new flow
+  run in which conduct answers the steps its own tables record as finished - the plan on a run row,
+  the commits on a worktree a `continues` phase never resets, the review on another run row.
+- **The gate must never be part of that.** It costs no model spend, it is what the pull request
+  rests on, and `publish.push` lives INSIDE it - so a run whose push failed has nothing on the
+  remote to open a pull request from and has to re-run it regardless. The saving is the three model
+  phases; reusing a stored report would buy wall-clock nobody is billed for at the price of the one
+  code path whose bug publishes unverified work.
+- **`run.result = 'ok'` is not "this step succeeded".** A plan phase that exits 0 and answers
+  nothing leaves an `ok` row and is a failure - `_plan_step` says so. Anything deciding what to skip
+  has to be RECORDED by the code that made that judgement, never derived from an exit code.
+- **A skip that trusts a flag alone publishes whatever is in the tree now.** A worktree is a
+  directory on a host a person can reach, so the dev-phase skip compares HEAD against what the round
+  recorded and runs the phase again if it moved.
+- **The counter counted the wrong thing.** `_plan_step` called `chain_open`, which increments, so a
+  resume would have counted as round two and left the change one round short. The counter means
+  planning phases actually RUN, and moving the call behind the skip is what makes that true.
+- **`not payload.get("exit_code")` also matches a phase that exited 0**, which is why the
+  "did conduct break" test is `exit_code is None`. `cycle()` sets the key and leaves it null on a
+  raised handler; every handler answering a failure of its own fills it in.
+- **A failed flow notified nobody.** `_note_for_a_person` fires only when a HUMAN GATE is next, so a
+  run that died at the gate left one journal line on a host nobody watches - and a person who
+  dispatched a task and heard nothing cannot tell that from one still running.
+
+## One artefact for two readers, and the flag that unmade a pull request
+
+- **`+` IS A SUCCESSFUL FORCED PUSH and `publish._FLAGS` did not know it.** git documents six
+  porcelain flags and the table listed three; `+` is unreachable until something pushes with
+  `--force`, so it did not exist until the leased re-push landed and the table was not revisited on
+  the day the flag became possible. Measured on avanserv/upskald#252: the squash succeeded, the push
+  succeeded, `_status` called it a refusal, and the pull request opened describing a commit its
+  branch no longer held - wrong sha, wrong compare link, the pre-squash commit's subject as the
+  title, and an error that never happened leading the reasons a person was being asked. The TREE was
+  right the whole time, so every check was green. **Name the flags from git's own list, not from the
+  ones that happened to occur.**
+- **The approval card is not a pull request description.** The card answers "should this be
+  published at all", for one person, at one moment, beside evidence, behind a passkey; a pull
+  request answers "is this right", for whoever reads it, months later. `pr_body` was `render()` with
+  the log paths stripped, so #252 opened with `### Why you are being asked` where its description
+  should have been.
+- **Withholding a skill does not stop the fleet doing the thing.** `pr` was excluded because its
+  step 4 runs `gh pr create`; the fleet wrote a body anyway, just not the project's. Shipping it
+  with an override table naming what cannot work is cheaper than a second copy of somebody else's
+  convention - and the acceptance criteria needed no parser, because `odoo.prompt_text` already
+  renders them as the Given/When/Then bullets the skill asks for.
+- **Two model phases looking at one finding do not name it the same way.** Five follow-ups reached
+  the tracker and two pairs were one task each, differing by "API" and by "response" - which a
+  case-folded title comparison cannot see. Word sets, merged when one contains the other; over-merging
+  loses a follow-up nobody wrote down twice, under-merging litters a backlog for ever.
+
+## A backlog is a corpus, and the parent task is in it
+
+- **Nothing ever asked the tracker whether a follow-up already existed.** `_merge_follow_ups`
+  deduplicates the two sources of ONE run against each other and stops there, so a task re-run after
+  a failure re-files everything it filed the first time, and a follow-up duplicating a task a PERSON
+  wrote was never checked at all. Same litter, different door.
+- **The rule survives a wider corpus; the LENGTH at which it is trusted does not.** Measured over the
+  905 open non-epic tasks in project 17, the bare word-set subset rule collides 9 times and every
+  invention is one shape - `Public status page` inside `Include the public API in SLOs and on the
+  status page`, `Audit Logs` inside `Retain audit logs at least twelve months`. Short, epic-ish
+  titles swallowing real work. At a floor of four distinguishing words **on both sides** it collides
+  3 times and all three are genuine duplicates. The dangerous direction is the short EXISTING title
+  eating a long candidate, so a floor on the candidate alone would have left the failure in place.
+- **A follow-up's own parent task is a false positive, and only a live run showed it.** With 1266
+  `Cap the size of a request body` back in Pending, a candidate of that name matched the task that
+  asked for it. A follow-up is deferred work FROM its task, the parent is usually the shortest
+  phrasing of the subject, and every narrower follow-up is therefore a superset of it.
+- **A tracker search that fails must file anyway.** The asymmetry inverts the one `_merge_follow_ups`
+  reasons from: a duplicate in Backlog is something a person deletes, a finding dropped because a
+  search timed out is gone. The note is what stops the degradation being silent.
+- **The cap has to apply to what SURVIVES the dedup.** Applied first, three already-open titles spend
+  three of the five slots and a genuine sixth is never reached.

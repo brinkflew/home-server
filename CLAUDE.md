@@ -559,6 +559,62 @@ signal read green.
 - **A drift check can fire on a key the server refuses to keep** - Windmill drops a default, so git
   held a key the deployed flow never had. The mirror image of the `lock` trap.
 
+### The round, and four ways a phase reads a tree that is not the one it was sent to
+- `prepare_worktree` is destructive, so every phase after the first one continues someone's work -
+  and resetting deletes the commits under review, silently. `continues` and `needs_commits` are two
+  tuples because they answer different questions, and the planning phase is in neither.
+- A continuing phase must INHERIT the base pin, not take one. Keying the graph build on `needs_task`
+  made the squash phase rebuild 38 MB it never opened.
+
+### A stable branch name, and the guarantee the head sha was quietly providing
+- `stop_after_if` fires correctly after a resumed suspend, measured both directions. A task-shaped
+  branch is mutable, which gives back the run-N/run-N+1 hazard - closed by a publication refusal at
+  the planning step and by `--force-with-lease` on the sha conduct itself pushed.
+- A squash rewrites history and the TREE is what carries the gate across it. The round counter must
+  never be a flow argument, the continuation marker is cleared before the start, and the publication
+  pass must run before the continuation pass.
+
+### Three ways a new phase reads something that is not there
+- `ALLOW_BASH_READONLY` had no git, and the reviewing phase's first instruction is `git diff`. rtk
+  rewrites `git diff` into a summary, so a review would report findings about code it never saw. A
+  bare `git commit` opens an editor a container does not have.
+- All three answer confidently from less information than they were given, and none of them fails.
+
+### One artefact for two readers, and the flag that unmade a pull request
+- `+` is a successful FORCED push and `_FLAGS` listed three of git's six, so a squash that worked
+  was read as a refusal and the PR opened describing a commit its branch no longer held. Every
+  check green, because the tree was right the whole time.
+- The approval card is not a PR description; withholding the `pr` skill did not stop the fleet
+  writing a body, only the right one; and two phases naming one finding differ by a word, which a
+  case-folded title comparison cannot see.
+
+### A backlog is a corpus, and the parent task is in it
+- Nothing ever asked the tracker whether a follow-up already existed, so a re-run re-filed its own
+  follow-ups and a duplicate of a task a PERSON wrote was never checked at all.
+- The subset rule survives a wider corpus; the length at which it is trusted does not. Measured over
+  905 open tasks: 9 collisions bare, 3 at a four-word floor on BOTH sides, and all three real.
+  Epics are dropped, and a follow-up's own parent task is a false positive only a live run showed.
+- A tracker search that fails must file anyway and say so, and the cap applies to what survives.
+
+### A failed flow is unrecoverable and almost nothing in it is
+- A Windmill `CompletedJob` is terminal, but the plan, the commits, the report and the review all
+  survive - so a resume is a NEW flow run that skips the three model phases conduct recorded as
+  done. The gate is never skipped: it costs no credits and the push lives inside it.
+- `run.result = 'ok'` is not "the step succeeded", a skip that trusts a flag alone publishes
+  whatever is in the tree now, and `not payload.get("exit_code")` also matches a phase that exited 0.
+
+### The last step of the pipeline is the first one that leaves the host
+- A transient `exit 128` on the push threw away a run that had already planned, changed and gated.
+  Retried three times, and "worth retrying" keys on the absence of a per-ref line - a rejection
+  always prints one, a transport failure never does.
+- ssh's trailer is identical for four different causes, so keeping git's LAST line kept the useless
+  one. A handler that raised was answered and never echoed, so the journal said only "failed".
+
+### The worktree is reused between changes, and so is everything keyed on it
+- "The most recent X on this worktree" is the previous TASK's X until this one overwrites it. The
+  planning phase would have triaged a stale review; the push would have leased against a branch
+  belonging to another task, which git refuses outright.
+
 ### A filesystem that counts against the memory ceiling, and a browser that fills it
 - **A tmpfs inside a container is part of its MEMORY budget**, unreclaimable without swap, so a full
   one pins the cgroup at `MemoryHigh` for ever. `/tmp` 2g plus `/dev/shm` 1g inside a 3G `MemoryMax`

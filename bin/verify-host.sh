@@ -2004,6 +2004,60 @@ if [ -z "$GREENBOOT" ]; then
 		fi
 	fi
 
+	# A ROUND THAT NEVER ENDED, which is what a continuation pass that stopped
+	# firing looks like from outside.
+	#
+	# A chain is opened by the planning step and closed when the run reaches the
+	# publish path, so a round is under an hour and one still open past six is
+	# either a flow that died mid-round or a pass that is not running. Left
+	# alone it is not merely untidy: the counter it holds is what decides how
+	# many rounds the NEXT change on that worktree gets, so a stale row silently
+	# hands the following task one round instead of two.
+	#
+	# READ OUT OF THE DATABASE RATHER THAN OFF THE CONTROL PLANE. This battery
+	# already holds that line for the tracker one comment down and for
+	# routes.ntfy: a check that asks a service is a check that reports that
+	# service's outage as this host's fault. reconcile reaps these itself; this
+	# is the detector for reconcile having stopped.
+	# python3 AND NOT sqlite3. The CLI is not installed on this host - uCore
+	# ships neither and `/usr` is read-only - while python3's sqlite3 module is
+	# what conduct itself uses, so it is present by construction. Reading the
+	# file directly rather than shelling to `conduct status` keeps this battery
+	# independent of the orchestrator being importable, which is the state it is
+	# most likely to be in when this fires.
+	chain_db="${CONDUCT_STATE_DB:-${DOCKER_VOLUME_CONFIG:-/var/home-server/config}/conduct/conduct.db}"
+	stale_rounds=""
+	open_rounds=""
+	if [ -f "$chain_db" ]; then
+		chain_read=$(python3 - "$chain_db" <<-'PY' 2>/dev/null || true
+		import sqlite3, sys, time
+		conn = sqlite3.connect("file:%s?mode=ro" % sys.argv[1], uri=True)
+		try:
+		    rows = conn.execute(
+		        "SELECT worktree_id, attempts, opened_at FROM chain"
+		        " WHERE closed_at IS NULL").fetchall()
+		except sqlite3.Error:
+		    rows = []
+		cut = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+		                    time.gmtime(time.time() - 6 * 3600))
+		print(len(rows))
+		for wt, n, opened in rows:
+		    if (opened or "") < cut:
+		        print("%s (%s round(s), opened %s)" % (wt, n, opened))
+		PY
+		)
+		open_rounds=$(printf '%s\n' "$chain_read" | head -1)
+		stale_rounds=$(printf '%s\n' "$chain_read" | tail -n +2)
+	fi
+	fact agents_rounds_open "${open_rounds:-}"
+	if [ ! -f "$chain_db" ]; then
+		note agents.rounds_open "no conduct database at $chain_db - nothing has run"
+	elif [ -n "$stale_rounds" ]; then
+		warn agents.rounds_open "a review round has been open for over 6h: $(echo "$stale_rounds" | tr '\n' ';') - the flow died mid-round or the continuation pass has stopped, and the row's counter shortens the NEXT change on that worktree; conduct reconcile clears it"
+	else
+		ok agents.rounds_open "${open_rounds:-0} review round(s) open, none older than 6h"
+	fi
+
 	# WHETHER THE FLEET CAN READ ITS OWN WORK, and this is a configuration check
 	# rather than a live one on purpose. It asks whether the credential is there,
 	# the same thing agents.model_credential asks and for the same reason: an
