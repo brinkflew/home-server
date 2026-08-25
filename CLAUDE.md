@@ -580,6 +580,13 @@ signal read green.
   bare `git commit` opens an editor a container does not have.
 - All three answer confidently from less information than they were given, and none of them fails.
 
+### The last step of the pipeline is the first one that leaves the host
+- A transient `exit 128` on the push threw away a run that had already planned, changed and gated.
+  Retried three times, and "worth retrying" keys on the absence of a per-ref line - a rejection
+  always prints one, a transport failure never does.
+- ssh's trailer is identical for four different causes, so keeping git's LAST line kept the useless
+  one. A handler that raised was answered and never echoed, so the journal said only "failed".
+
 ### The worktree is reused between changes, and so is everything keyed on it
 - "The most recent X on this worktree" is the previous TASK's X until this one overwrites it. The
   planning phase would have triaged a stale review; the push would have leased against a branch

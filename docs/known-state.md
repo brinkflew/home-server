@@ -2382,3 +2382,26 @@ writes its verdict before verify reads one. The two the loop added were not.
   but `--force-with-lease` naming `agents/fix/1222-old` while pushing `agents/feat/1266-new` is a
   lease git refuses outright, and the run is lost for it. The report is dropped at the top of round
   one, which is the only moment that can tell a new change from another round.
+
+## The last step of the pipeline is the first one that leaves the host
+
+**Measured 2026-08-25 on the first full run of the round.** Task 1266 planned, changed, gated and
+cleared its base-gate comparison - about forty-five minutes and twenty dollars - and then lost the
+whole flow to `exit 128` on the push. The identical push succeeded by hand ten minutes later, so
+nothing was wrong with the key, the ref, the branch name or the remote.
+
+- **Everything before the push is already paid for by the time git opens a socket**, so a blip there
+  discards a pipeline to answer a question nobody asked. Three attempts, five seconds apart.
+- **The discriminator for "worth retrying" is the per-ref line, not the exit code and not a
+  message.** `--porcelain` prints one line per ref once negotiation has happened, and a REJECTION
+  always produces one - a lease that did not hold, a non-fast-forward, a hook refusing. A transport
+  failure produces none, because git never got that far. So "no ref line" is exactly "the remote was
+  never reached", which is the only failure a retry can fix. Matching on the message would couple
+  the decision to somebody else's English and would retry a deterministic no more slowly.
+- **ssh ends every transport failure with the same trailer**, so keeping the LAST line of what git
+  said kept the one line that says nothing: *"Please make sure you have the correct access rights
+  and the repository exists"* reads identically for a revoked key, a wrong repository, a DNS failure
+  and a dropped connection. The sentence naming the cause is always the line above it.
+- **A handler that raises was answered and never echoed.** The reason went to Windmill and to a
+  `dispatch` row, so a person reading `journalctl` saw `poll: failed <job>/<module>` and nothing
+  else - on the one path where the orchestrator has already decided the run is over.
