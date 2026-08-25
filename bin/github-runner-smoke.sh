@@ -450,6 +450,40 @@ case "$pub" in
 	*)           bad "the published-port probe did not run: '$pub'" ;;
 esac
 
+# THE SHIM'S STDOUT IS LOAD-BEARING, AND THIS IS WHAT MAKES IT SAFE TO INSTRUMENT.
+#
+# /usr/bin/docker is no longer podman-docker's two-liner - it is
+# apps/github-runner/scripts/docker-shim.sh, which adds a post-mortem to a failing
+# `start`. DockerCommandManager.cs reads container ids straight off stdout, so a
+# single stray byte there - a banner, a diagnostic, a trailing blank line - breaks
+# EVERY job that uses a service container, not just the failing ones. That is a
+# far worse outcome than the bug the instrumentation exists to catch.
+#
+# So the assertion is on the SHAPE of stdout: `docker create` must emit a bare
+# 64-character hex id and nothing else. The banner podman-docker prints is
+# silenced by /etc/containers/nodocker in the image, and this leg is what would
+# notice if that stopped working.
+# shellcheck disable=SC2016  # this runs in the CONTAINER, so nothing may expand here
+shim=$(runner sh -c '
+	id=$(docker create --name shimprobe alpine true 2>/dev/null)
+	docker rm -f shimprobe >/dev/null 2>&1
+	case "$id" in
+		*[!0-9a-f]*) echo "DIRTY:$(printf %s "$id" | tr "\n" " " | cut -c1-70)" ;;
+		"")          echo EMPTY ;;
+		*)           if [ ${#id} -ge 64 ]; then echo CLEAN; else echo "SHORT:${#id}"; fi ;;
+	esac
+' 2>/dev/null | tail -1 | tr -d '\r')
+case "$shim" in
+	CLEAN)
+		ok "the docker shim returns a bare container id on stdout, so the runner can still parse one" ;;
+	DIRTY*)
+		bad "the docker shim put something other than a container id on stdout (${shim#DIRTY:}). DockerCommandManager.cs parses this - every services: job breaks. Check apps/github-runner/scripts/docker-shim.sh writes ONLY to stderr, and that /etc/containers/nodocker exists" ;;
+	EMPTY)
+		bad "docker create produced NO stdout at all - the shim is swallowing it, and the runner would see an empty container id" ;;
+	*)
+		bad "the docker shim probe returned '${shim:-nothing}' - it did not run" ;;
+esac
+
 # ------------------------------------------------------------------------------
 say "Containment"
 # ------------------------------------------------------------------------------

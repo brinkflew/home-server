@@ -218,7 +218,20 @@ RUN set -eu \
 
 COPY scripts/runner-init.sh /usr/local/bin/runner-init
 COPY scripts/podman-healthcheck-loop.sh /usr/local/bin/podman-healthcheck-loop
-RUN chmod 0755 /usr/local/bin/runner-init /usr/local/bin/podman-healthcheck-loop
+
+# THE DOCKER SHIM IS REPLACED, NOT WRAPPED AROUND. podman-docker owns
+# /usr/bin/docker and ships it as two lines that exec podman; this is the same
+# exec plus a post-mortem on a failing `start`, which is upskald's api-checks
+# failure and has survived six synthetic reproductions. It writes to STDERR only
+# - DockerCommandManager.cs parses container ids off stdout - and returns
+# podman's own exit code untouched. A witness, not a gate.
+#
+# `nodocker` silences podman-docker's "Emulate Docker CLI" banner, which would
+# otherwise appear on stderr before every diagnostic and once per docker call in
+# every job log.
+COPY scripts/docker-shim.sh /usr/bin/docker
+RUN chmod 0755 /usr/local/bin/runner-init /usr/local/bin/podman-healthcheck-loop /usr/bin/docker \
+ && touch /etc/containers/nodocker
 
 # EVERY ONE OF THESE PATHS IS A REQUIRED MOUNT, and the failure when one is
 # missing names neither the variable nor the path - the class
