@@ -2723,6 +2723,15 @@ runner on this host, and **nothing was repaired**.
   copies `db.sql` and the layer, container and image json first - kilobytes, against the 2.5 GB a
   tar of the store would cost - and a routine window reset captures nothing, because there is no
   anomaly in it and fifty of them would evict the two that matter.
+- **`cp -a` would have made that capture unreadable, and the first version used it.** `-a`
+  preserves the SOURCE's owner and mode, so the copy lands outside the namespace owned by the
+  mapped subuid instead of by `core`. Measured: db.sql is 0644, but `layers.json`,
+  `containers.json` and `images.json` are all **0600** - three of the five. The commit that
+  introduced the fix named db.sql as the 0600 file, which is wrong; the hazard is real and it is
+  on the other three.
+- **`mountpoints.json` does not exist on an idle lane**, which is not an error - it is written when
+  something is mounted, so its absence from a capture is itself a reading. Every copy is `|| true`
+  and none is asserted.
 - **Automating the wipe is what makes silence the new risk**, so `ci.lane_store` reports a lane
   that healed itself and names the capture. A window reset is deliberately not reported at all.
 
