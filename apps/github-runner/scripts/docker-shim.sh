@@ -293,7 +293,25 @@ postmortem() {
 		echo "--- dmesg tail, if readable ---"
 		dmesg 2>/dev/null | tail -5 | sed 's/^/  /' || echo "  (not readable from here)"
 		echo "::endgroup::"
-	} >&2
+	# TO STDERR *AND* TO A FILE UNDER $HOME, AND THE FILE IS THE HALF THAT LASTS.
+	# stderr goes to a job log on GitHub, which is where every previous
+	# post-mortem went and where none of them can be read against the next one -
+	# they expire, and nothing on this host has them at all. $HOME is a bind
+	# mount of the lane's persistent tree, so a copy there outlives the container
+	# by design, and bin/github-runner.sh folds it into the forensic capture it
+	# takes before healing the lane.
+	#
+	# THAT IS THE POINT: the capture is taken 21 seconds later and is
+	# POST-CLEANUP by construction - libpod unmounts on a failed start and the
+	# runner then `docker rm --force`s the container, so the store metadata in it
+	# is byte-for-byte the shape of a healthy one, measured. This block is the
+	# only evidence taken at the instant of failure, and until now it was the
+	# only one not in the capture.
+	#
+	# `|| true` on the tee's target and no test of its result: an unwritable
+	# $HOME must not change what this script returns, and the contract at the top
+	# of the file is that podman's exit code arrives untouched.
+	} 2>&1 | tee -a "${HOME:-/tmp}/.docker-shim-postmortem.log" >&2 || true
 }
 
 # BEFORE the call, so it cannot disturb $?, and only for the two verbs that
