@@ -313,8 +313,11 @@ first time a `services:` block has ever worked under the real runner on this hos
 a fix**: nothing was repaired, a person ran `rm -rf`.
 
 **A one-minute reproduction is what got that far**, after eleven that each cost a thirty-minute
-job. `lane-probe.yml`, a scratch workflow in upskald triggered by a push to one branch, carrying
-`api-checks`' service block verbatim and a body that does nothing. Four variants across an
+job. `lane-probe.yml`, triggered by a push to one branch, carrying `api-checks`' service block
+verbatim over a body that does nothing. **It is kept at `apps/github-runner/lane-probe.yml`** -
+not deployed by anything, copied into a repository when it is needed - because it is a diagnostic
+for this runner rather than a feature of the repository it runs in, and because deleting it would
+throw away the one instrument that has ever moved this. Four variants across an
 afternoon eliminated three hypotheses outright: `ports:` and the `rootlessport` child netns, the
 runner's own container-init path (the identical eleven calls issued **from a step** behave the
 same), and the inherited environment (`env -i` with only what podman needs behaves the same). It

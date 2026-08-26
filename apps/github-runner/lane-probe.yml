@@ -1,0 +1,246 @@
+# ==============================================================================
+# A `services:` block starting on a lane, in about a minute, under the REAL
+# runner - which is the only thing that has ever reproduced this
+# ------------------------------------------------------------------------------
+# THIS FILE IS NOT DEPLOYED BY ANYTHING. It lives here because it is a diagnostic
+# for THIS repository's CI runner rather than a feature of any repository it is
+# copied into, and because deleting it would have thrown away the one instrument
+# that moved this investigation. To use it:
+#
+#   cp apps/github-runner/lane-probe.yml \
+#      <repo>/.github/workflows/lane-probe.yml
+#   cd <repo> && git checkout -b ci/lane-probe
+#   git add -A && git commit -m probe && git push -u origin ci/lane-probe
+#   # then: git commit --allow-empty -m probe && git push, per iteration
+#
+# It needs `vars.CI_RUNNER` set on that repository, or every job lands on
+# `ubuntu-latest` and proves nothing about the lane.
+#
+# WHY IT EXISTED. `docker start` returned 125 on every `services:` block for
+# weeks, and the only trigger anyone had was re-running a thirty-minute job for
+# one `docker start`. That made every hypothesis expensive enough that
+# cheap-but-unfaithful reproductions were run instead - eleven of them, none of
+# which fired. This is that trigger in about a minute.
+#
+# WHAT IT ESTABLISHED, all of it in one afternoon:
+#
+#   - `ports:` and the rootlessport child netns are NOT implicated: the job
+#     without a published port fails the same way.
+#   - The runner's own container-init path is NOT implicated: the identical
+#     eleven calls issued FROM A STEP fail the same way.
+#   - The inherited environment is NOT implicated: `env -i` with only what
+#     podman needs fails the same way.
+#   - AND THE ONE POSITIVE RESULT - on wiped lanes all four variants pass; on
+#     lanes carrying ~2.4-2.7 GB of state from twenty-odd real jobs, all four
+#     fail. It is not a threshold: it failed at 2.4 GB after 21 jobs and passes
+#     at 2.5 GB after 39.
+#
+# THE CAUSE IS STILL NOT KNOWN. bin/github-runner.sh bounds the state and heals
+# the lane instead, and keeps the store's metadata before it does - see
+# docs/ci.md. If `ci.lane_store` ever fires, this file plus that capture is
+# where the next attempt starts.
+#
+# WHY `push` AND NOT `workflow_dispatch`. GitHub only offers workflow_dispatch
+# for workflows present on the DEFAULT branch, which would mean merging a probe
+# into main. A push trigger scoped to one branch needs no such thing - but check
+# first that no other workflow in the target repository triggers on a push to an
+# arbitrary branch, or a probe run starts a pipeline too.
+# ==============================================================================
+name: Lane Probe
+
+on:
+  push:
+    branches: [ci/lane-probe]
+
+concurrency:
+  group: lane-probe
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  postgres-service:
+    name: Postgres service container
+    # The same expression every ci.yml job uses, so this lands on whichever
+    # runner the repository variable selects and falls back to hosted when it is
+    # unset. If this ever runs on ubuntu-latest it proves nothing about the lane.
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
+    # The failure mode being chased is `docker start` returning 125 in seconds,
+    # not a hang - but a service container that never reports healthy makes the
+    # runner wait with NO retry cap, so the ceiling is what stops that becoming
+    # six hours of a held lane.
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: avanserv
+          POSTGRES_PASSWORD: avanserv_password
+          POSTGRES_DB: avanserv_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U avanserv -d avanserv_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      # Reaching this step at all is the result: the runner starts and health-
+      # checks every service container BEFORE the first step runs, so a green
+      # tick here means `Initialize containers` succeeded.
+      - name: Say where this ran and that the service came up
+        run: |
+          echo "runner name:        ${RUNNER_NAME:-unset}"
+          echo "runner environment: ${RUNNER_ENVIRONMENT:-unset}"
+          echo "nproc:              $(nproc)"
+          echo
+          echo "The postgres service container reached healthy before this step"
+          echo "was allowed to run, which is the whole assertion."
+
+  # THE SAME BLOCK MINUS `ports:`, AND THAT IS THE ONLY DIFFERENCE.
+  # podman's debug on the failing start shows it mounts the rootfs successfully
+  # ("Mounted container ... at .../merged", "Created root filesystem"), and only
+  # then does crun fail to open paths underneath it. Between those two points
+  # podman sets up the network and, because of `ports:`, starts `rootlessport` -
+  # which spawns a CHILD DRIVER IN A CHILD NETNS. If publishing the port is what
+  # puts crun somewhere that cannot see the mount, this job starts and the one
+  # above does not.
+  #
+  # A service with no published port is not what upskald needs; this exists to
+  # split one variable, not to propose a fix.
+  no-ports:
+    name: Postgres service container, no published port
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: avanserv
+          POSTGRES_PASSWORD: avanserv_password
+          POSTGRES_DB: avanserv_test
+        options: >-
+          --health-cmd "pg_isready -U avanserv -d avanserv_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Reaching this step is the result
+        run: |
+          echo "runner name: ${RUNNER_NAME:-unset}"
+          echo "A postgres service WITHOUT ports: started, so publishing the port"
+          echo "is implicated and the network setup around it is where to look."
+
+  # THE DECISIVE SPLIT: the same eleven calls, from a STEP, inside the same runner.
+  #
+  # Every reproduction that ever succeeded was shell-driven on the host. Every
+  # failure was the runner's own `Initialize containers`. This job declares NO
+  # services: and issues the identical sequence from a shell that the runner
+  # itself started - so it holds the runner, the lane, the image and the store
+  # constant and varies ONLY who makes the calls.
+  #
+  #   start succeeds -> the docker invocation is fine and the fault is in the
+  #                     runner's container-init path, which runs before any step
+  #   start fails    -> the fault is in the runner's ENVIRONMENT, which a step
+  #                     inherits too, and the host reproductions differ from it
+  #                     in some way that is now worth finding
+  #
+  # Either answer eliminates half the remaining space, which is more than the
+  # last eleven reproductions managed between them.
+  from-a-step:
+    name: The same sequence, from a step
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
+    timeout-minutes: 10
+    steps:
+      - name: Replay what Initialize containers does
+        run: |
+          set -x
+          L=io.home-server.lane-probe
+          NET="github_network_$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')"
+          docker version --format '{{.Server.APIVersion}}'
+          docker version --format '{{.Client.APIVersion}}'
+          docker ps --all --quiet --no-trunc --filter "label=$L"
+          docker network prune --force --filter "label=$L"
+          docker network create --label "$L" "$NET"
+          docker pull postgres:16-alpine
+          id=$(docker create --name probe_postgres --label "$L" \
+            --network "$NET" --network-alias postgres -p 5432:5432 \
+            --health-cmd "pg_isready -U avanserv -d avanserv_test" \
+            --health-interval 10s --health-timeout 5s --health-retries 5 \
+            -e POSTGRES_USER=avanserv -e POSTGRES_PASSWORD=avanserv_password \
+            -e POSTGRES_DB=avanserv_test -e GITHUB_ACTIONS=true -e CI=true \
+            postgres:16-alpine)
+          set +x
+          if docker start "$id"; then
+            echo "::notice::START SUCCEEDED from a step. The calls are fine; the"
+            echo "::notice::fault is in the runner's own container-init path."
+          else
+            echo "::error::START FAILED from a step too. The fault is in the"
+            echo "::error::runner ENVIRONMENT, not in who issues the calls."
+            exit 1
+          fi
+          docker rm -f "$id" >/dev/null 2>&1 || true
+          docker network rm "$NET" >/dev/null 2>&1 || true
+
+  # THE ENVIRONMENT IS NOW THE SUSPECT, so bisect it in one job rather than one
+  # push per variable. A shell the runner started fails; a shell `podman run`
+  # started on the same lane, same image, same store, succeeds every time. The
+  # runner injects a large environment and runs from a different working
+  # directory, and both travel into `docker`.
+  #
+  # Arm 1 reproduces from the step as-is. Arm 2 runs the identical call under
+  # `env -i` with only what podman genuinely needs. If arm 2 starts, an inherited
+  # variable is responsible and the next push bisects which; if arm 2 fails too,
+  # the environment is exonerated and what is left is the working directory, the
+  # process tree, and the state the job has already written into $HOME.
+  env-bisect:
+    name: Is it the environment?
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
+    timeout-minutes: 10
+    steps:
+      - name: Same call, dirty environment then clean
+        run: |
+          # The runner runs steps under `bash -e`, so a failing arm ends the job
+          # before the second one runs - which is exactly what happened the first
+          # time. Both arms are SUPPOSED to be allowed to fail; that is the
+          # measurement.
+          set +e
+          run_one() {
+            n="$1"; shift
+            docker rm -f "eb$n" >/dev/null 2>&1 || true
+            id=$("$@" docker create --name "eb$n" postgres:16-alpine 2>&1) || {
+              echo "arm $n: CREATE failed: $id"; return 1; }
+            if "$@" docker start "$id" >/dev/null 2>&1; then
+              echo "arm $n: START OK"
+              docker rm -f "eb$n" >/dev/null 2>&1
+              return 0
+            fi
+            echo "arm $n: START FAILED"
+            docker rm -f "eb$n" >/dev/null 2>&1
+            return 1
+          }
+          docker pull -q postgres:16-alpine >/dev/null 2>&1
+          echo "cwd=$PWD  vars=$(env | wc -l)"
+          echo "--- every variable name the step inherited ---"
+          env | cut -d= -f1 | sort | tr '\n' ' '
+          echo
+          echo
+          run_one dirty env; d=$?
+          run_one clean env -i \
+            PATH=/usr/local/bin:/usr/bin:/bin \
+            HOME="$HOME" \
+            XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+            TMPDIR="$TMPDIR" \
+            CONTAINERS_CONF=/etc/containers/containers.conf; c=$?
+          echo
+          echo "dirty=$d clean=$c   (0 = started)"
+          if [ "$d" -ne 0 ] && [ "$c" -eq 0 ]; then
+            echo "::notice::AN INHERITED ENVIRONMENT VARIABLE IS RESPONSIBLE."
+          elif [ "$d" -ne 0 ] && [ "$c" -ne 0 ]; then
+            echo "::notice::Environment exonerated - it fails clean too. Look at"
+            echo "::notice::the working directory, the process tree, or \$HOME state."
+          else
+            echo "::warning::The dirty arm STARTED, so this lane is not reproducing"
+            echo "::warning::right now and neither arm means anything."
+          fi
