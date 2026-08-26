@@ -361,8 +361,20 @@ phase_in_flight() {
 # tree the container owns, and a fresh graph root costs one re-pull of three
 # small images. lane_disk_mb is in the marker either way, so ci.lane_disk can
 # warn before this has to act.
+# `podman unshare du`, FOR THE SAME REASON THE rm BELOW IS UNSHARED, and this
+# half was wrong for as long as the other half was right. Everything under the
+# lane belongs to the subuid container uid 1000 maps to, so `core` cannot
+# traverse most of it: `du` skips what it cannot read and reports the remainder
+# WITHOUT AN ERROR. Measured on lane 1 on 2026-08-26: 1,383 MB reported against
+# 2,500 MB actual, and the same understatement reaches ci.lane_disk, which is
+# therefore grading a fiction. A garbage collector reading a number that is
+# systematically low is one that never fires.
+lane_du_mb() {
+	podman unshare du -sm "$1" 2>/dev/null | cut -f1
+}
+
 gc_disk() {
-	lane_disk_mb=$(du -sm "$LANE_ROOT" 2>/dev/null | cut -f1)
+	lane_disk_mb=$(lane_du_mb "$LANE_ROOT")
 	case "$lane_disk_mb" in ''|*[!0-9]*) lane_disk_mb=""; return 0 ;; esac
 
 	if [ "$lane_disk_mb" -gt "$LANE_MAX_MB" ]; then
@@ -375,7 +387,7 @@ gc_disk() {
 		podman unshare rm -rf \
 			"${LANE_ROOT:?}/home/work" "${LANE_ROOT:?}/tmp" "${LANE_ROOT:?}/storage"
 		mkdir -p "$LANE_ROOT/tmp" "$LANE_ROOT/storage"
-		lane_disk_mb=$(du -sm "$LANE_ROOT" 2>/dev/null | cut -f1)
+		lane_disk_mb=$(lane_du_mb "$LANE_ROOT")
 	fi
 }
 
