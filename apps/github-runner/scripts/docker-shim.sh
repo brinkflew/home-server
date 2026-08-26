@@ -11,14 +11,24 @@
 #   docker start   -> crun: open `<graphroot>/overlay/<id>/merged/run/.containerenv`:
 #                     No such file or directory
 #
-# NINE SYNTHETIC REPRODUCTIONS HAVE NOW FAILED TO FIRE. Both service images;
+# IT IS NOT ABOUT ONE JOB. Exactly two of upskald's eleven jobs declare a
+# service container and they are exactly the two that fail; the other nine pass.
+# A `services:` block has never once succeeded here under the real runner.
+#
+# TWELVE SYNTHETIC REPRODUCTIONS HAVE FAILED TO FIRE. Both service images;
 # `run -d` against `create`+`start`; the driver's full flag set; a store reused
 # across six container recycles; the faithful hosting with the systemd scope,
 # --cgroups=split and the 3,584M cap; 1,662 VERIFIED MemoryHigh breaches of
-# deliberate slice pressure; /tmp filled to 90%; and finally the user-namespace
+# deliberate slice pressure; /tmp filled to 90%; and the user-namespace
 # hypothesis taken apart three ways in one run - the pause pid file deleted, the
 # pause process killed, and the whole runtime directory wiped, each between
 # `create` and `start`. All of them started postgres cleanly.
+#
+# EVERY ONE OF THEM DROVE PODMAN FROM A SHELL, and that is now the leading
+# suspect rather than a footnote: the same sequence driven by Runner.Worker
+# fails in fifteen seconds, every time. `.github/workflows/lane-probe.yml` in
+# avanserv/upskald is the one-minute trigger that finally made that cheap to
+# test.
 #
 # THE POST-MORTEM IS HERE BECAUSE THE EVIDENCE IS DESTROYED EVERY TIME ANYONE
 # LOOKS. Teardown runs within seconds, so a host-side snapshot polling every 8
@@ -66,6 +76,17 @@ BACKOFF="2 5"
 
 S=/var/lib/nested-storage
 U=$(id -u)
+
+# PODMAN'S OWN STDERR IS KEPT, because the layer id that matters is only in it.
+# The error names a LAYER, not the container - `overlay/<layerid>/merged/...` -
+# and that id is what makes it possible to look at the one directory that failed
+# instead of listing all twelve. Captured to a file and re-emitted rather than
+# tee'd, because this is /bin/sh and process substitution is not available.
+#
+# It lives on $XDG_RUNTIME_DIR, the 128 MB private tmpfs, NOT on /tmp: /tmp is
+# 1777 and shared with the job's own steps.
+ERRF="${XDG_RUNTIME_DIR:-/tmp}/.docker-shim-err.$$"
+trap 'rm -f "$ERRF"' EXIT
 
 # ONE LINE PER `create` AND `start`, AND IT COSTS NO PODMAN INVOCATION.
 # A job makes roughly twenty `docker` calls; starting an engine to ask `podman
@@ -167,6 +188,40 @@ postmortem() {
 		done
 		echo "  layers=$pm_n  overlay-mounts=$(grep -c ' overlay ' /proc/self/mountinfo 2>/dev/null)"
 
+		# THE ONE LAYER THAT MATTERS, named by podman's own error rather than
+		# guessed. `merged/` being empty says the rootfs is not there; what this
+		# distinguishes is WHY - a layer that was never assembled has no `diff`
+		# or `link` either, while a layer that was assembled and simply never
+		# mounted has all of them and an empty `merged/`. Those are different
+		# bugs and the error message cannot tell them apart.
+		pm_layer=$(sed -n 's#.*/overlay/\([0-9a-f]\{64\}\)/merged.*#\1#p' "$ERRF" 2>/dev/null | head -1)
+		if [ -n "$pm_layer" ]; then
+			echo "--- the layer the error names: $pm_layer ---"
+			# shellcheck disable=SC2012  # the point is the mode and size columns, which `find` does not give as legibly
+			ls -la "$S/overlay/$pm_layer" 2>&1 | sed 's/^/  /' | head -12
+			echo "  lower: $(cut -c1-120 "$S/overlay/$pm_layer/lower" 2>/dev/null || echo '(no lower file)')"
+			echo "  link:  $(cat "$S/overlay/$pm_layer/link" 2>/dev/null || echo '(no link file)')"
+			echo "  in layers.json: $(grep -c "$pm_layer" "$S/overlay-layers/layers.json" 2>/dev/null)"
+			echo "  in containers.json: $(grep -c "$pm_layer" "$S/overlay-containers/containers.json" 2>/dev/null)"
+			echo "  GraphDriver for the container being started:"
+			/usr/bin/podman inspect "${2:-}" \
+				--format '    Lower={{.GraphDriver.Data.LowerDir}}{{println}}    Upper={{.GraphDriver.Data.UpperDir}}{{println}}    Merged={{.GraphDriver.Data.MergedDir}}' 2>&1 |
+				cut -c1-200
+		else
+			echo "  (podman's stderr named no layer id, so nothing layer-specific was read)"
+		fi
+
+		# WHO ELSE WAS TOUCHING THE STORE. A lane runs three libpod consumers over
+		# one store - the long-lived `podman system service`, the healthcheck
+		# loop's CLI every two seconds, and this shim - and no reproduction has
+		# ever varied that. If a second engine is mid-call at the instant a mount
+		# does not happen, this is where it shows.
+		echo "--- other podman processes at this instant ---"
+		# shellcheck disable=SC2009  # pgrep cannot give ppid, elapsed time and argv in one pass, which is the whole point
+		ps -eo pid,ppid,etimes,args 2>/dev/null |
+			grep -E 'podman|conmon|catatonit|healthcheck' | grep -v grep |
+			cut -c1-140 | sed 's/^/  /' | head -8
+
 		echo "--- containers podman still knows about ---"
 		/usr/bin/podman ps -a --format '  {{.ID}} {{.Status}} {{.Image}}' 2>&1 | head -10
 
@@ -194,8 +249,16 @@ case "${1:-}" in
 create | start) echo "home-server lane: engine-fp $1 $(fingerprint)" >&2 ;;
 esac
 
-/usr/bin/podman "$@"
-rc=$?
+# STDOUT IS INHERITED IN BOTH BRANCHES - only stderr is diverted, and only for
+# `start`. Every other verb keeps the original two-line behaviour exactly.
+if [ "${1:-}" = start ]; then
+	/usr/bin/podman "$@" 2>"$ERRF"
+	rc=$?
+	cat "$ERRF" >&2
+else
+	/usr/bin/podman "$@"
+	rc=$?
+fi
 
 # Only a failing `start`. Any other non-zero exit is the workflow's business and
 # is passed through untouched.
@@ -227,8 +290,26 @@ for pause in $BACKOFF; do
 	echo "  This is apps/github-runner/scripts/docker-shim.sh, not the workflow." >&2
 	sleep "$pause"
 
-	/usr/bin/podman "$@"
-	rc=$?
+	# THE FIRST RETRY IS THE LOUD ONE, and only the first. Everything above
+	# describes the aftermath of a mount that did not happen; this is podman
+	# saying what it decided to do, which no post-mortem can reconstruct. Debug
+	# output goes to STDERR only, so stdout stays inherited and unpolluted -
+	# safe for the same measured reason the retry itself is safe: a failing
+	# `podman start` writes zero bytes to stdout.
+	#
+	# Retries two and three stay quiet. One verbose block per genuine failure,
+	# none at all on a healthy job.
+	if [ "$try" = 1 ]; then
+		echo "::group::home-server lane: podman --log-level=debug, retry 1" >&2
+		/usr/bin/podman --log-level=debug "$@" 2>"$ERRF"
+		rc=$?
+		cat "$ERRF" >&2
+		echo "::endgroup::" >&2
+	else
+		/usr/bin/podman "$@" 2>"$ERRF"
+		rc=$?
+		cat "$ERRF" >&2
+	fi
 	if [ "$rc" -eq 0 ]; then
 		echo "home-server lane: retry $try succeeded. The first attempt's post-mortem is" >&2
 		echo "  above and is worth reading - this path exists because the cause is" >&2
