@@ -356,6 +356,46 @@ recurrence leaves no red job for anyone to notice, so a lane that healed itself 
 the path to its capture. A window reset is not reported at all - it fires on a counter by design,
 and reporting it would train the reader to skip the line.
 
+### It came back forty minutes later, and this time something was measured
+
+**It recurred on 2026-08-26 at 12:52**, on lane 2, in a re-run of the pipeline that had just gone
+green. Same failure, same shape - `docker create` fine, `docker start` 125, crun unable to open
+`merged/etc/resolv.conf`. **The whole chain built that morning ran on its first real occurrence**:
+the shim retried twice, printed its post-mortem, left the breadcrumb; the driver read it 21 seconds
+later, captured the store's metadata and reset the lane; `ci.lane_store` reported it.
+
+**The capture turned out to be nearly worthless, and for a reason already on record.** Compared
+against a capture taken from a healthy lane 13 minutes earlier: 20 layers each, `incomplete=0` in
+both, no mount state in either, `containers.json` 2 bytes in both, `mountpoints.json` absent from
+both, `images.json` byte-identical. **The store of a lane that had just failed is indistinguishable
+from the store of one that was working.** The reason is the one the post-mortem section above
+already gives for the shim's own block: libpod unmounts on a failed start and the runner then
+`docker rm --force`s the container, so a capture 21 seconds later is post-cleanup by construction.
+It preserves `db.sql` and `layers.json`, which survive cleanup, and those turned out to say nothing.
+
+**What did say something is the shim's block, printed inside the lane at the instant of failure -
+and, for the first time, a control beside it.** A postgres started by hand on a healthy lane
+thirty seconds later, through the same nested engine:
+
+```
+                 merged gid   work gid   overlay mounts (pause ns)   merged entries   mountpoints.json
+failing start    65535        65535      1                           0                2 bytes
+healthy start    0            0          2                           18               198 bytes
+```
+
+Every one of the other eleven layers in that healthy store also reads gid 0.
+
+**It is not the kernel's overflow gid, which was the first guess and is wrong.** This host reports
+`overflowgid` **65534**, and the nested engine's gid map is `0 1000 1` / `1 100000 65536` - so
+65535 is inside the mapped range and is a real gid that something deliberately chose. What chooses
+it is not known. It is the first asymmetry anyone has measured between a failing start and a
+working one, it came with its control, and the post-mortem now prints both numbers with the
+baseline beside them so the next occurrence needs no re-derivation.
+
+**It also refutes nothing about accumulated state and confirms nothing either.** Lane 2's store had
+not been reset; lane 1's had, and lane 1 kept working through the same run. That is consistent with
+the correlation and is not evidence for it - two lanes is not a sample.
+
 **`bin/github-runner-smoke.sh` cannot see any of this**, and both affected legs now say so.
 `runner()` builds a fresh lane every run, and a fresh store is the single condition under which
 this failure has never been observed. That is the same blind spot that let the `db.sql` split pass

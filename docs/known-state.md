@@ -2785,3 +2785,35 @@ now keeps both off each transient scope, in the marker, as a high-water mark acr
   `app-agents.slice` records that exact reading being misread once already - 3,566M of apparent
   pressure that was `uv sync` cache being reclaimed as designed. `memory.events max` is the hard
   ceiling actually binding and `oom_kill` is the kernel having chosen a victim.
+
+## The failure came back on the machinery built for it, and one number differed
+
+**It recurred on 2026-08-26 at 12:52 on lane 2**, in a re-run of a pipeline that had just gone
+green. The whole chain ran on its first real occurrence: the shim retried, post-mortemed and left
+the breadcrumb; the driver read it 21 seconds later, captured the store and reset the lane;
+`ci.lane_store` reported it. Nobody had to notice a red job.
+
+- **The driver's capture was nearly worthless, for a reason already on record.** Against a capture
+  from a healthy lane 13 minutes earlier: 20 layers each, `incomplete=0` in both, no mount state in
+  either, `containers.json` 2 bytes in both, `mountpoints.json` absent from both, `images.json`
+  byte-identical. **A failing lane's store metadata is indistinguishable from a working one's** -
+  because libpod unmounts on a failed start and the runner then `docker rm --force`s the container,
+  so a capture 21 seconds later is POST-CLEANUP by construction. The same limitation that was
+  written about the shim's own block, rediscovered in the thing built to get round it.
+- **What did say something is the shim's block, WITH A CONTROL BESIDE IT for the first time** - a
+  postgres started by hand on a healthy lane thirty seconds later, same nested engine:
+
+  ```
+                   merged gid   work gid   overlay mounts (pause ns)   merged entries
+  failing start    65535        65535      1                           0
+  healthy start    0            0          2                           18
+  ```
+
+  and all eleven other layers in that healthy store read gid 0 too.
+- **65535 IS NOT THE OVERFLOW GID, which was the first guess and is wrong.** This host reports
+  `overflowgid` **65534**, and the nested engine's gid map is `0 1000 1` / `1 100000 65536`, so
+  65535 is inside the mapped range - a real gid that something chose. What chooses it is unknown.
+  The post-mortem now prints both gids and the baseline, so the next occurrence is unambiguous.
+- **Two lanes is not a sample.** Lane 2's store had not been reset and lane 1's had, and lane 1
+  worked through the same run. That is consistent with the accumulated-state correlation and is not
+  evidence for it.
