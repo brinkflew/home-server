@@ -2628,3 +2628,13 @@ nothing was wrong with the key, the ref, the branch name or the remote.
   `$LANE_ROOT/runner` is seeded once and never re-seeded or garbage collected - `gc_disk()`
   clears `home/work`, `tmp` and `storage` and deliberately leaves it. A file written there
   under one image is read by every image after it, for ever.
+- **`--log-driver=none` MAKES EVERY DIAGNOSTIC INSIDE A LANE UNREADABLE.** The repair above
+  announced itself in six lines of stderr and not one of them reached the journal: podman
+  discards the container's streams, so `runner-init`'s socket failure, its writability
+  assertion and its store repair are all invisible. The failures at least exit non-zero,
+  which the driver reads as a fault; a *successful* repair leaves no trace whatsoever. The
+  same test therefore runs host-side in `bin/github-runner.sh` before the container starts,
+  where `log` reaches the journal, and the in-container copy is the backstop. Two
+  implementations of one rule, taken deliberately over a repair nobody can see.
+- **The expected value is read from the IMAGE**, not written as a constant in the driver, so
+  the check cannot drift from the `ENV` it is checking against.
