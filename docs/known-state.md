@@ -2481,3 +2481,99 @@ nothing was wrong with the key, the ref, the branch name or the remote.
   search timed out is gone. The note is what stops the degradation being silent.
 - **The cap has to apply to what SURVIVES the dedup.** Applied first, three already-open titles spend
   three of the five slots and a genuine sixth is never reached.
+
+## A binary that answers is not a binary that works
+
+- **`node` is assumed by every JS action and declared by none.** `ubuntu-latest` ships it at
+  `/usr/local/bin/node`, so no workflow installs it and no workflow declares it. Without it prek's
+  `root-lint` hook fails with `Failed to run hook 'root-lint' ... No such file or directory
+  (os error 2)` - naming the HOOK, not the interpreter it could not spawn. Deliberately NOT the
+  runner's own `externals/node24`: that is an implementation detail the runner replaces on
+  self-update, and putting it on PATH would tie every job to the runner version.
+- **`nodejs24` ships `node` alone.** `npm` and `npx` are `nodejs24-npm`, and an action shelling out
+  to `npx` fails the same quiet way.
+- **Fedora builds node `small-icu`, so `Intl` works and answers with the input.**
+  `Intl.DisplayNames(['en'],{type:'region'}).of('NL')` returns `NL` rather than `Netherlands`.
+  Nothing throws and nothing warns; a sort by display name simply comes out in a different order,
+  which is how upskald's *"orders countries by English display name, not ISO code"* failed ONE test
+  of 4,460 and read as flake. The test was right and the image was wrong.
+- **The gate has to assert BEHAVIOUR, not the build flag.** Checking
+  `process.config.variables.icu_small` would pass on any future base that bundles locale data
+  differently. The display name is what the workflow actually depends on, so that is what is
+  asserted.
+- **A binary list is only as good as its enumeration.** The smoke test asserted twenty-six binaries
+  and shipped a lane that could not lint, because `node` was not one of them. Same shape as the
+  hand-maintained unit watchlist: a check that cannot see what nobody thought to add.
+
+## Turning a feature off costs nothing when it bills per person
+
+- **GHAS bills per ACTIVE COMMITTER, not per repository**, so disabling it on 17 of 19 repositories
+  saved exactly $0. The two that mattered were the two with commits.
+- **`security_and_analysis.advanced_security` reports ABSENT, not `disabled`**, on a repository that
+  is actively billing - so a check reading the field cannot distinguish "off" from "not reported".
+  The `code-scanning/default-setup` **403 is the only reliable negative**.
+- **A PATCH containing `advanced_security` is rejected ATOMICALLY.** Including it made GitHub refuse
+  the whole body, so `secret_scanning` silently stayed enabled while the call looked like it had
+  been sent. Send only the fields that are settable.
+- **A minimal code-security configuration defaults every setting it does not name to `disabled`**,
+  which would have taken Dependabot alerts and private vulnerability reporting with it. The
+  GHAS-gated settings have to be spelled `disabled` and the free ones `not_set`, explicitly.
+- **`gh api --jq` prints error bodies to STDOUT.** So "did the call return anything" reads a 403 as
+  an answer, and a verification script keyed on output rather than exit code reported every
+  still-billing repository as clear. It inverted a check twice in one session.
+- **`gh api` returns `visibility` LOWERCASE.** Comparing it against `PRIVATE` made a billable count
+  read 0 for every repository, which presented as a clean bill of health at $47/month. Caught only
+  by reading the rows the script had printed beside its own conclusion.
+
+## The engine kept its state where the job could reach it, and the ninth reproduction still did not fire
+
+- **`XDG_RUNTIME_DIR` was `/tmp/podman-run`**, so podman's locks, its exit files, its rootless
+  network state and the pause process pid file that owns the user namespace every nested layer is
+  mounted into all sat on the same 512 MB tmpfs a workflow's own steps write to - and `/tmp` inside
+  a lane is 1777, so any step can reach it.
+- **`runroot` in `storage.conf` LOSES TO `XDG_RUNTIME_DIR`, silently.** The file said
+  `/run/nested-storage` and podman reported `Store.RunRoot: /tmp/podman-run/containers` throughout.
+  Identical shape to `graphroot` losing to `rootless_storage_path` one setting up: a value that is
+  read, a value that is honoured, and no warning separating them. The fix is to make both name the
+  same path, and to have the gate ask the ENGINE rather than read the file back - reading the file
+  back would have passed the whole time.
+- **`/run` was uncapped at half the HOST's memory.** `--read-only-tmpfs` mounts `/run`, `/tmp` and
+  `/var/tmp`; `/tmp` was always sized and `/run` inherited podman's default, measured at **7.8G
+  inside a lane whose `MemoryMax` is 3,584M**, because a container is not memory-namespaced. A
+  tmpfs is charged to the cgroup that owns it, so that is a route to the hard limit with every
+  process behaving - the trap already recorded for Chromium and `$TMPDIR`.
+- **An explicit `--tmpfs` REPLACES the read-only-tmpfs mount rather than adjusting it**, so
+  `tmpcopyup` is required or the image's own `/run` - console, lock, log, secrets, sudo - vanishes
+  behind an empty filesystem. Measured with the flag: all fifteen entries present at 64M.
+- **uid 1000 cannot `mkdir` in `/run`.** It arrives 0755 root:root, and `mkdir: cannot create
+  directory '/run/probe-dir': Permission denied` with `runner` in group 0 and everything else about
+  the container correct. So the runtime directories are created by the entrypoint's root branch
+  before it drops, and the unprivileged half ASSERTS rather than creates - under `/tmp` the mkdir
+  always succeeded, so a tolerant `|| true` would have become podman silently choosing a fallback
+  directory and warning on every invocation for the rest of the job.
+- **NINE REPRODUCTIONS OF upskald's `api-checks` FAILURE, AND NONE OF THEM FIRED.** Both service
+  images; `run -d` against `create`+`start`; the driver's full flag set; a store reused across six
+  recycles; the faithful systemd scope with `--cgroups=split` and the 3,584M cap; 1,662 verified
+  `MemoryHigh` breaches of deliberate slice pressure; `/tmp` filled to 90%; and finally the
+  user-namespace hypothesis taken apart three ways in ONE run - the pause pid file deleted, the
+  pause process killed, and the whole runtime directory wiped, each between `create` and `start`.
+  All four started postgres cleanly. **The runtime-directory move is therefore filed as a
+  correctness fix and NOT as the cure**, which is the distinction the pinned-base entry above
+  exists to keep.
+- **So the docker shim stopped being only a witness, and the reversal is stated rather than made
+  quietly.** It shipped saying "no retry, no suppression"; that sentence was written while "find the
+  cause" was still on the table, and nine reproductions later it is not. A failing `docker start` is
+  now attempted up to three times, 2s then 5s apart, every attempt announced in the job log and
+  every post-mortem kept.
+- **A FAILING `podman start` writes ZERO BYTES to stdout** (rc=125, len=0, measured), which is the
+  only reason the retry is safe: `DockerCommandManager.cs` parses container ids off stdout, so a
+  retry that could print an id twice would break every `services:` job rather than only the failing
+  ones.
+- **`docker start -a` returns the exit code OF THE CONTAINER**, so a non-zero result there is an
+  ordinary outcome and retrying would run the container a second time and duplicate its output. Any
+  `-a`/`--attach`/`-i`/`--interactive` disables the retry, combined short flags included. This was
+  nearly missed, and it would have been a real bug rather than a noisy one.
+- **The gate is the point, because the retry is the only thing in the image that can turn a red job
+  green.** The leg asserts four directions against a container that cannot exist: it still exits
+  non-zero, stdout stays empty, the ELAPSED TIME proves the retries actually ran rather than being
+  merely intended, and `docker start -a` returns in under a second having not been retried.
