@@ -924,6 +924,18 @@ signal read green.
 - **`ai-review` now runs on a lane**, which `docs/ci.md` used to forbid. What widens is what runs,
   not what is held: the credential is upskald's repo secret, not this host's.
 
+### The failure came back on the machinery built for it, and one number differed
+- **It recurred 40 minutes later and healed itself**: shim retried, post-mortemed, left the
+  breadcrumb; driver captured and reset 21 seconds later; `ci.lane_store` reported it. Nobody had
+  to notice a red job.
+- **The driver's capture was nearly worthless and the reason was already on record** - it runs
+  POST-CLEANUP, so a failing store is byte-for-byte the shape of a working one. The limitation
+  written about the shim's block, rediscovered in the thing built to get round it.
+- **The shim's block finally had a CONTROL**: failing start reads `merged`/`work` gid **65535**,
+  pause-ns overlay mounts 1, merged 0 entries; a healthy start thirty seconds later reads gid 0,
+  mounts 2, merged 18 - as do all eleven other layers. **Not the overflow gid**, which is 65534
+  here; 65535 is inside the engine's mapped range and something chose it.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

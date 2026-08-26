@@ -234,6 +234,24 @@ postmortem() {
 			echo "  merged in the pause ns: $(find "$pm_ns$S/overlay/$pm_layer/merged" -maxdepth 1 -mindepth 1 2>/dev/null | wc -l) entries"
 			# shellcheck disable=SC2012  # the point is the mode and size columns, which `find` does not give as legibly
 			ls -la "$S/overlay/$pm_layer" 2>&1 | sed 's/^/  /' | head -12
+			# THE ONE ASYMMETRY ANYBODY HAS EVER MEASURED BETWEEN A FAILING
+			# START AND A WORKING ONE, and it is printed with its baseline
+			# because that is the whole reason it means anything. Measured on
+			# 2026-08-26, a failing start and a control started by hand on a
+			# healthy lane thirty seconds apart:
+			#
+			#   failing   merged gid=65535  work gid=65535  pause-ns mounts=1
+			#   healthy   merged gid=0      work gid=0      pause-ns mounts=2
+			#
+			# and every one of the eleven other layers in that healthy store
+			# read gid 0 as well. IT IS NOT THE KERNEL'S OVERFLOW GID: this
+			# host reports overflowgid 65534, and the nested engine's gid map
+			# is `0 1000 1` / `1 100000 65536`, so 65535 is inside the mapped
+			# range and is a real gid that something chose. Nobody knows what
+			# chooses it. Printed here so the next occurrence is unambiguous
+			# rather than re-derived.
+			echo "  merged gid=$(stat -c %g "$S/overlay/$pm_layer/merged" 2>/dev/null || echo '?') work gid=$(stat -c %g "$S/overlay/$pm_layer/work" 2>/dev/null || echo '?')"
+			echo "  (a HEALTHY layer reads gid=0 for both; overflowgid here is $(cat /proc/sys/kernel/overflowgid 2>/dev/null || echo '?'))"
 			echo "  lower: $(cut -c1-120 "$S/overlay/$pm_layer/lower" 2>/dev/null || echo '(no lower file)')"
 			echo "  link:  $(cat "$S/overlay/$pm_layer/link" 2>/dev/null || echo '(no link file)')"
 			echo "  in layers.json: $(grep -c "$pm_layer" "$S/overlay-layers/layers.json" 2>/dev/null)"
