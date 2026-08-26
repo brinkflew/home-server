@@ -581,6 +581,28 @@ else
 	ok "the shim retries a failing 'docker start' twice (${shim_el}s), still fails, keeps stdout empty, and does not retry an attached start"
 fi
 
+# THE OTHER HALF OF THE SHIM'S CONTRACT, AND IT IS NOT ABOUT THIS SCRIPT AT ALL.
+# When the retries are exhausted the shim leaves two files in $HOME - a
+# breadcrumb and its own post-mortem - because $HOME is a bind mount and is the
+# only part of an ephemeral lane that outlives it. bin/github-runner.sh reads the
+# breadcrumb at the top of its next cycle, folds the post-mortem into a forensic
+# capture and resets the lane. Nothing else in that chain can be tested from
+# here, but its FIRST link can, and it is the link that fails silently: a
+# `>` into an unwritable $HOME writes nothing and, correctly, changes no exit
+# code, so a lane would simply stop healing itself with every other leg green.
+#
+# The leg above has just failed a `docker start` on purpose, so both files exist
+# by now or they never will.
+shim_flag="$LANE/home/.docker-shim-start-failed"
+shim_pm="$LANE/home/.docker-shim-postmortem.log"
+if ! podman unshare test -f "$shim_flag" 2>/dev/null; then
+	bad "the shim exhausted its retries and left no .docker-shim-start-failed in \$HOME - bin/github-runner.sh has no other way to learn a lane needs healing, so the lane would stay broken with nothing failed and nothing unhealthy"
+elif ! podman unshare test -s "$shim_pm" 2>/dev/null; then
+	bad "the shim left its breadcrumb but no .docker-shim-postmortem.log - the forensic capture would then hold only post-cleanup store metadata, which was MEASURED to be byte-for-byte the shape of a healthy store"
+else
+	ok "a lane that cannot start a container says so in \$HOME, with the post-mortem beside it ($(podman unshare wc -l <"$shim_pm" 2>/dev/null) lines) - the driver heals on both"
+fi
+
 # ------------------------------------------------------------------------------
 say "Containment"
 # ------------------------------------------------------------------------------
