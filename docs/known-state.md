@@ -2666,3 +2666,95 @@ nothing was wrong with the key, the ref, the branch name or the remote.
   SUCCEEDING `docker start`, so there was no baseline saying what healthy looks like - in a file
   whose own comment argues that "a failing job's line means nothing without a passing one beside
   it", about a different measurement three lines away.
+
+## A tool that assumes a distribution, and does not check before it fails
+
+**`playwright install --with-deps` supports Debian and Ubuntu and nothing else, and it does not
+detect that it cannot work.** On the Fedora lane it printed `BEWARE: your OS is not officially
+supported by Playwright; installing dependencies for ubuntu24.04-x64 as a fallback`, went ahead
+with the Ubuntu package list anyway, and failed on `apt-get: command not found` with exit 127.
+All three e2e shards, on the first run that ever reached the step.
+
+- **The libraries were never missing.** `apps/github-runner/Dockerfile` installs the chromium set
+  with dnf and names each package, with the reason written beside them - and that comment
+  predicted this exact failure, adding that "the thing that would catch it going stale is an e2e
+  job actually running". It was right on both halves.
+- **The warning names the wrong problem.** "Your OS is not officially supported" reads as a
+  Playwright compatibility statement about the browser. It is a statement about the dependency
+  installer alone; the browser runs fine.
+- **Gated on `runner.environment`, NOT deleted**, which is a change from what `docs/ci.md`
+  advised for a year. Dropping `--with-deps` outright leaves the hosted path depending on
+  GitHub's image happening to carry Playwright's library set - the assumption Playwright's own
+  documentation says not to make - and hosted is the escape hatch the whole `CI_RUNNER`
+  indirection exists for.
+- **The next Playwright bump that needs a new library will not fail at that step.** Nothing on
+  the lane re-derives the list, so the symptom is Chromium failing to launch on a missing `.so`
+  several steps later, naming the library and not the step.
+
+## The lane that healed itself, because the remedy had been a person
+
+**`api-checks` has passed cleanly since both lanes were emptied BY HAND on 2026-08-25** - zero
+retries, zero post-mortems, `docker start` first attempt, twice in a row and then again with the
+full e2e matrix behind it. That is the first time a `services:` block has worked under the real
+runner on this host, and **nothing was repaired**.
+
+- **A one-minute reproduction is what got that far.** `lane-probe.yml` in upskald, a push to one
+  branch, carrying `api-checks`' service block verbatim over a body that does nothing. Eleven
+  prior hypotheses had each cost a thirty-minute job, which is why cheap-but-unfaithful
+  reproductions kept being run instead. Four variants in an afternoon eliminated `ports:` and the
+  `rootlessport` child netns, the runner's own container-init path (the identical eleven calls
+  issued FROM A STEP behave the same) and the inherited environment (`env -i` behaves the same).
+- **The one positive result: on wiped lanes all four variants pass; on lanes carrying ~2.4-2.7 GB
+  of state from twenty-odd real jobs, all four fail.**
+- **It is not a threshold on size or job count, which was the obvious next guess.** It failed at
+  2.4 GB after 21 jobs and passes at 2.5 GB after 39. Something specific accumulates and nothing
+  has identified it.
+- **So the state is BOUNDED rather than explained, and `bin/github-runner.sh` uses that word.**
+  `gc_lane` resets `home/work`, `tmp` and `storage` on three triggers - the disk budget, a 50-job
+  window, and the shim asking to be healed. The caches are not in it: `home/.cache` and
+  `home/.bun` survive and `actions/cache` lives on GitHub, so a reset costs one re-pull of three
+  small images.
+- **`$HOME` is the only channel out of an ephemeral lane.** The shim runs in a container whose
+  stdout belongs to a job log the driver never reads and whose filesystem is gone seconds later -
+  except `$HOME`, which is a bind mount. So an exhausted retry leaves a file, and the driver acts
+  on it at the top of the next cycle, which is the only moment it knows no job is running.
+- **The manual remedy destroyed the evidence every time, and the automated one must not.** Twelve
+  reproductions have failed to recreate the state that was thrown away. A reset with a reason now
+  copies `db.sql` and the layer, container and image json first - kilobytes, against the 2.5 GB a
+  tar of the store would cost - and a routine window reset captures nothing, because there is no
+  anomaly in it and fifty of them would evict the two that matter.
+- **Automating the wipe is what makes silence the new risk**, so `ci.lane_store` reports a lane
+  that healed itself and names the capture. A window reset is deliberately not reported at all.
+
+## Two defects in the reclaim, and the second one hid the first
+
+- **`gc_disk` measured with `du` as `core` and removed with `podman unshare rm`.** Half the
+  function was inside the user namespace and half was not, and the half that was not skipped every
+  directory it could not traverse and reported the remainder WITHOUT AN ERROR: **1,383 MB against
+  2,500 MB actual** on lane 1, the same shape on lane 2. The 20 GB budget was being compared
+  against a number low by roughly half, and `ci.lane_disk` reported the same understatement.
+- **It also recreated `tmp/` and `storage/` with a plain `mkdir` and never chowned them back**, so
+  the next lane would have met `mkdir /home/runner/.local: permission denied` - the exact state
+  preflight's chown loop exists to repair. **Nobody had ever seen it, because the reclaim had
+  never once fired**: the budget gating it was being read by the `du` above.
+- The lesson is the ordering: a check that under-reports does not merely warn late, it hides
+  whatever runs after the threshold.
+
+## A ceiling nothing measures is a ceiling nobody can tell is wrong
+
+**`host/systemd/app-ci.slice` asked in its own comment to be rewritten from `memory.peak` and
+`pids.peak` "after the first e2e shard", and named its own failure mode as silence.** The driver
+now keeps both off each transient scope, in the marker, as a high-water mark across every job.
+
+- **The scope is `--collect`, so it is gone the instant the container exits.** A read at job end
+  finds nothing; the numbers have to be sampled while the job runs. They are kernel high-water
+  marks, so the sample rate does not decide the answer - what a 30-second poll can miss is a peak
+  reached in the last interval before exit, which is teardown rather than test. That is a floor on
+  the true peak and is stated as one.
+- **`memory.events` counts within ONE cgroup and the cgroup is new every job**, so folding it into
+  a lifetime counter on every poll would add the same job's events once per poll. Per-job, then
+  added once at the end.
+- **Grade on the events, never on the peak.** `memory.peak` includes page cache, and
+  `app-agents.slice` records that exact reading being misread once already - 3,566M of apparent
+  pressure that was `uv sync` cache being reclaimed as designed. `memory.events max` is the hard
+  ceiling actually binding and `oom_kill` is the kernel having chosen a victim.

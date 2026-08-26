@@ -44,11 +44,46 @@
 # squeezes them rather than the kernel choosing a victim by badness across the
 # whole subtree. That is the sizing docs/agents.md insists on.
 #
-# EVERY NUMBER HERE IS A STARTING POINT AND THIS COMMENT SHOULD BE REWRITTEN.
-# app-agents.slice was, on 2026-08-20, once a real gate run could be measured.
-# The equivalent here is one e2e shard in a lane - read memory.peak, pids.peak,
-# memory.events and memory.pressure off the scope's cgroup, and read `anon`
-# against `inactive_file`, never the `high` counter.
+# MEASURED ON 2026-08-26, WHICH IS WHAT THIS PARAGRAPH USED TO ASK FOR. It said
+# every number here was a starting point and named the measurement that would
+# settle them: one e2e shard in a lane, read from the scope's own cgroup. Three
+# shards have now run, two of them concurrently, which is the worst case this
+# file is sized against.
+#
+#   scope memory.peak      2,816-2,818 MB   on all three, and on api-checks too
+#   scope memory.stat anon 2,607 MB worst
+#   scope memory.events    high climbing to 2,197; max 0; oom_kill 0
+#   scope pids.peak        316 of 1,024
+#   slice memory.peak      5,634 MB of 5,632M MemoryHigh
+#   slice pids.peak        623 of 2,048
+#   memory.pressure some   avg10 0.00-4.11%
+#   shard wall clock       6m against the job's own timeout-minutes: 25
+#
+# NOTHING CHANGES, AND THE READING THAT SAYS SO IS `max`, NOT THE PEAK. Every
+# shard pinned itself to MemoryHigh EXACTLY - 2,816M is this scope's MemoryHigh
+# and three independent jobs landed on it to within 2 MB - which is the throttle
+# doing precisely what it is for. `memory.events max` stayed 0 and oom_kill
+# stayed 0, so the hard ceiling was never reached and no allocation was ever
+# refused. app-agents.slice records the same reading being misread once already.
+#
+# THE MARGIN IS WHAT ABSORBED IT, and it is tighter here than next door. anon
+# alone is 2,607 MB, so 93% of MemoryHigh is memory genuinely in use rather than
+# reclaimable cache, and the 768M between MemoryHigh and MemoryMax is the whole
+# of the headroom. app-agents has 1,042M for a workload with no browser and no
+# service containers. This held across three shards; a heavier suite is what
+# would cross it, and that arrives as an oom_kill rather than as a slow job.
+#
+# RAISING THE SCOPE ALONE WOULD MOVE THE THROTTLE, NOT ADD HEADROOM. Two lanes
+# at MemoryHigh sum to 5,632M, which is this slice's MemoryHigh to the megabyte,
+# so the slice pins at the same moment the lanes do. The pair moves together or
+# neither does.
+#
+# ITS FAILURE IS NO LONGER SILENCE. bin/github-runner.sh keeps memory.peak and
+# pids.peak off each transient scope in the lane's marker - the scope is
+# --collect and vanishes with the container, so the driver's own poll is the
+# only window there is - and `ci.lane_headroom` in bin/verify-host.sh grades
+# them on the events. The next argument about these numbers starts from a
+# measurement rather than from this comment.
 #
 # ITS FAILURE IS SILENCE, which is the whole reason ci.slice_limits reads these
 # values back out of the cgroup rather than out of this file. A `Slice=` naming a
@@ -104,9 +139,14 @@ IOWeight=20
 # from a phase: the nested podman, a conmon per service container, three
 # datastores, two Vite servers, a uvicorn under coverage and a browser all count
 # here. app-agents.slice measured a pids.peak of 325 for a full gate with no
-# browsers and no service containers, so 2,048 across two lanes is a guess in the
-# generous direction. It is a guess, and it is the number to re-derive from
-# pids.peak after the first e2e shard - the symptom when it binds is
-# `fork: Resource temporarily unavailable` raised by something unrelated, naming
-# neither the slice nor the limit.
+# browsers and no service containers, so 2,048 across two lanes was a guess in
+# the generous direction.
+#
+# THE GUESS WAS RIGHT, AND IT IS NOW A MEASUREMENT. An e2e shard - the heaviest
+# shape there is, with all of the above running at once - peaked at 316 of the
+# scope's own TasksMax of 1,024, and two of them together took this slice to 623
+# of 2,048. Both sit near 31%, which is generous rather than wasteful: the
+# symptom when this binds is `fork: Resource temporarily unavailable` raised by
+# something unrelated, naming neither the slice nor the limit, so the cost of
+# being wrong in the tight direction is a job failure nobody can attribute.
 TasksMax=2048
