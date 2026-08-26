@@ -636,6 +636,18 @@ signal read green.
   podman, which honours `CONTAINER_HOST`. `.env`/`.path` in the never-cleaned runner tree
   rewrite every job step's environment.
 
+### The post-mortem measured the wrong mount namespace, and reported it as a finding
+- **Rootless podman mounts inside the PAUSE PROCESS's namespace**, so `/proc/self/mountinfo` and
+  `ls -A <layer>/merged` from a shell see nothing the nested engine mounted, however healthy.
+- Measured on a **running** postgres: `overlay mounts shim-ns=1 pause-ns=2`, `merged entries
+  shim-ns=0 pause-ns=18`. The failing job reported exactly what a WORKING container gives, so
+  "the nested podman mounted nothing" was never measured. Retracted from three files.
+- `/proc/<pid>/root` resolves paths in that namespace and needs only the same uid. **Print both
+  numbers labelled**, so the old reading can still be recognised.
+- **libpod unmounts on a failed start**, so the post-mortem runs AFTER cleanup - an empty
+  `merged/` cannot separate "never mounted" from "mounted then torn down". Read `State.Status`.
+- **The instrument had no control**: that block had never been printed on a SUCCEEDING start.
+
 ### A backlog is a corpus, and the parent task is in it
 - Nothing ever asked the tracker whether a follow-up already existed, so a re-run re-filed its own
   follow-ups and a duplicate of a task a PERSON wrote was never checked at all.

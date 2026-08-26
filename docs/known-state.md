@@ -2638,3 +2638,31 @@ nothing was wrong with the key, the ref, the branch name or the remote.
   implementations of one rule, taken deliberately over a repair nobody can see.
 - **The expected value is read from the IMAGE**, not written as a constant in the driver, so
   the check cannot drift from the `ENV` it is checking against.
+
+## The post-mortem measured the wrong mount namespace, and reported it as a finding
+
+- **Rootless podman mounts inside the PAUSE PROCESS's mount namespace, not the caller's.** That
+  is what the pause process exists for: a mount made in a transient namespace would vanish when
+  the CLI exited, taking a detached container's rootfs with it. So `grep -c ' overlay '
+  /proc/self/mountinfo` and `ls -A <layer>/merged` from a shell see **nothing the nested engine
+  has mounted**, however healthy it is.
+- **Measured on a HEALTHY, RUNNING postgres in a lane**: `overlay mounts shim-ns=1 pause-ns=2`,
+  `merged entries shim-ns=0 pause-ns=18`, `mountpoints.json` 198 bytes. The failing job reported
+  `overlay-mounts=1` and twelve empty `merged/` directories - **which is the same reading a
+  working container gives.** "The nested podman mounted nothing" was therefore never measured,
+  and it was written into `docs/ci.md`, this file and the `CLAUDE.md` index as though it had
+  been. Retracted.
+- **`/proc/<pid>/root` resolves a path in that process's mount namespace** and needs no
+  privilege beyond the same uid. That is the whole fix, and it costs one `cat` of `pause.pid`.
+- **Print BOTH numbers, labelled.** The old reading is in the record; a reader has to be able to
+  see why it said 1 rather than find a silently different number and distrust both.
+- **A SECOND reason the reading proved nothing, independent of the first.** libpod unmounts the
+  rootfs in its cleanup when the OCI runtime fails at start, so the post-mortem runs AFTER the
+  teardown. An empty `merged/` and a 2-byte `mountpoints.json` are equally what a container that
+  mounted, failed and was cleaned up leaves behind. **Post-failure state cannot distinguish
+  "never mounted" from "mounted, then unmounted"** - so the block now prints `State.Status` and
+  `State.Error` to say which side of cleanup it is standing on.
+- **The instrument had no control.** The layer-and-mount block had never once been printed on a
+  SUCCEEDING `docker start`, so there was no baseline saying what healthy looks like - in a file
+  whose own comment argues that "a failing job's line means nothing without a passing one beside
+  it", about a different measurement three lines away.
