@@ -227,11 +227,36 @@ suppression"; that was written while "find the cause" was still on the table. A 
 job log with its post-mortem intact. A genuinely broken service costs seven extra seconds; the
 alternative is that `services:` does not work on this runner at all.
 
-### What the post-mortem found, which is a different bug
+### The post-mortem was reading the wrong mount namespace, and said so for a day
 
-The first time that post-mortem fired it showed **all twelve overlay layers with an empty
-`merged/` and `overlay-mounts=1`** - the lane's own rootfs and nothing else. The nested podman
-mounted nothing, yet `docker create` returned success.
+**This section used to state that the nested podman "mounted nothing", on the strength of
+`overlay-mounts=1` and every layer's `merged/` being empty. That was an artefact of the
+instrument and is retracted.**
+
+Rootless podman performs every storage operation inside the **pause process's** mount
+namespace - which is what the pause process is for, since a mount made in a transient
+namespace would vanish the moment the CLI exited and take a detached container's rootfs with
+it. The post-mortem read `/proc/self/mountinfo` and `ls -A merged` from the shim's own shell,
+which is not that namespace. Measured on a **healthy, running** postgres in a lane:
+
+```
+overlay mounts   shim-ns=1   pause-ns=2
+merged entries   shim-ns=0   pause-ns=18
+```
+
+So `overlay-mounts=1` with every `merged/` empty is exactly what a container that is working
+perfectly looks like from where the shim was standing. It never distinguished anything.
+
+**A second reason the old reading proved nothing**, independent of the first: libpod unmounts
+the rootfs in its cleanup when the OCI runtime fails at start, so the post-mortem runs *after*
+the teardown. `mountpoints.json` back to 2 bytes and empty `merged/` directories are equally
+what a container that mounted, failed and was torn down leaves behind. Post-failure state
+cannot separate "never mounted" from "mounted, then cleaned up" - which is why the block now
+prints the container's `State.Status` and `State.Error`, and reads through
+`/proc/<pause>/root`, printing **both** numbers labelled so the old one can still be
+recognised.
+
+The honest position is that **nobody has yet established whether the mount happens.**
 
 Chasing that turned up a defect that was making every diagnosis unreadable. **libpod records its
 runroot and tmpdir in `db.sql` at the root of the graph root**, and the graph root is a lane bind

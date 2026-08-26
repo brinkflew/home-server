@@ -172,21 +172,48 @@ postmortem() {
 				echo "    mountpoints.json: $(wc -c <"$pm_mp") bytes"
 			fi
 		done
+		# READ THROUGH THE PAUSE PROCESS, AND THE FIRST VERSION OF THIS DID NOT.
+		# Rootless podman performs every storage operation inside the PAUSE
+		# process's mount namespace - that is what the pause process is for, since
+		# a mount made in a transient namespace would vanish when the CLI exited
+		# and a detached container's rootfs would go with it. This block used to
+		# read /proc/self/mountinfo and `ls -A merged` from the shim's own shell,
+		# which is NOT that namespace.
+		#
+		# MEASURED ON A HEALTHY, RUNNING POSTGRES: `overlay mounts shim-ns=1
+		# pause-ns=2`, `merged entries shim-ns=0 pause-ns=18`. So the readings
+		# this file reported as "the mount never happened" - overlay-mounts=1 and
+		# every merged/ empty - are exactly what a container that is working
+		# perfectly looks like from here. That conclusion was an artefact and is
+		# corrected in docs/ci.md rather than quietly dropped.
+		#
+		# BOTH NUMBERS ARE PRINTED, LABELLED, for the same reason: the old reading
+		# is in the record and a reader has to be able to see why it said 1.
+		# /proc/<pid>/root resolves a path in that process's mount namespace and
+		# needs no privilege beyond the same uid.
+		pm_pause=$(cat "${XDG_RUNTIME_DIR:-/run/podman-run}/libpod/tmp/pause.pid" 2>/dev/null)
+		pm_ns="/proc/${pm_pause:-self}/root"
+		[ -n "$pm_pause" ] && [ -d "/proc/$pm_pause" ] || pm_ns=""
+		echo "  pause pid=${pm_pause:-none} alive=$([ -n "$pm_pause" ] && [ -d "/proc/$pm_pause" ] && echo yes || echo NO)"
+
 		pm_n=0
+		pm_empty=0
 		for pm_d in "$S"/overlay/*/; do
 			pm_b=$(basename "$pm_d")
 			case "$pm_b" in l | tempdirs) continue ;; esac
 			pm_n=$((pm_n + 1))
 			[ -d "$pm_d/merged" ] || echo "  NO merged/: $pm_b"
-			# An overlay dir whose merged/ exists but is EMPTY is the shape the error
-			# implies - a mount that did not take, so the rootfs has no /run for
-			# .containerenv to land in. `merged` missing and `merged` empty are
-			# different failures and the message cannot tell them apart.
-			if [ -d "$pm_d/merged" ] && [ -z "$(ls -A "$pm_d/merged" 2>/dev/null)" ]; then
-				echo "  EMPTY merged/: $pm_b"
+			# Counted rather than listed now. Twelve lines saying "empty" was the
+			# bulk of this block and, read from the wrong namespace, all twelve
+			# were meaningless.
+			if [ -n "$pm_ns" ] && [ -d "$pm_ns$pm_d/merged" ] &&
+				[ -z "$(ls -A "$pm_ns$pm_d/merged" 2>/dev/null)" ]; then
+				pm_empty=$((pm_empty + 1))
 			fi
 		done
-		echo "  layers=$pm_n  overlay-mounts=$(grep -c ' overlay ' /proc/self/mountinfo 2>/dev/null)"
+		echo "  layers=$pm_n  empty merged/ in the pause ns=$pm_empty"
+		echo "  overlay mounts: shim-ns=$(grep -c ' overlay ' /proc/self/mountinfo 2>/dev/null) pause-ns=$(grep -c ' overlay ' "/proc/${pm_pause:-self}/mountinfo" 2>/dev/null)"
+		echo "  (a HEALTHY container reads shim-ns=1 pause-ns=2 - only the second number means anything)"
 
 		# THE ONE LAYER THAT MATTERS, named by podman's own error rather than
 		# guessed. `merged/` being empty says the rootfs is not there; what this
@@ -195,8 +222,16 @@ postmortem() {
 		# mounted has all of them and an empty `merged/`. Those are different
 		# bugs and the error message cannot tell them apart.
 		pm_layer=$(sed -n 's#.*/overlay/\([0-9a-f]\{64\}\)/merged.*#\1#p' "$ERRF" 2>/dev/null | head -1)
+		# HAS CLEANUP ALREADY RUN? libpod unmounts the rootfs when the OCI runtime
+		# fails at start, so everything above is read AFTER the teardown and
+		# cannot by itself distinguish "never mounted" from "mounted, failed,
+		# unmounted". This is the line that says which, and it is why the
+		# conclusion is no longer stated as fact.
+		echo "  container state: $(/usr/bin/podman inspect "${2:-}" --format 'status={{.State.Status}} exit={{.State.ExitCode}} err={{.State.Error}}' 2>&1 | cut -c1-120)"
+
 		if [ -n "$pm_layer" ]; then
 			echo "--- the layer the error names: $pm_layer ---"
+			echo "  merged in the pause ns: $(find "$pm_ns$S/overlay/$pm_layer/merged" -maxdepth 1 -mindepth 1 2>/dev/null | wc -l) entries"
 			# shellcheck disable=SC2012  # the point is the mode and size columns, which `find` does not give as legibly
 			ls -la "$S/overlay/$pm_layer" 2>&1 | sed 's/^/  /' | head -12
 			echo "  lower: $(cut -c1-120 "$S/overlay/$pm_layer/lower" 2>/dev/null || echo '(no lower file)')"
