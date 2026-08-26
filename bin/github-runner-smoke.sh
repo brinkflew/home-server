@@ -128,6 +128,7 @@ RUNNER_ARGS=(
 	--device /dev/fuse --device /dev/net/tun
 	--read-only --read-only-tmpfs
 	--tmpfs "/tmp:rw,exec,size=512m"
+	--tmpfs "/run:rw,nosuid,nodev,size=128m,tmpcopyup"
 	--shm-size=512m
 	--pids-limit=1024 --log-driver=none --no-healthcheck
 	-v "$LANE/home:/home/runner:rw"
@@ -484,6 +485,63 @@ case "$shim" in
 		bad "the docker shim probe returned '${shim:-nothing}' - it did not run" ;;
 esac
 
+# THE RETRY IS THE ONE THING IN THIS IMAGE THAT CAN TURN A FAILURE INTO A PASS,
+# so it is the one thing asserted from both directions.
+#
+# The shim retries a failing `docker start` twice, 2s then 5s apart, because
+# upskald's api-checks fails there reliably and nine reproductions have not
+# explained why. Three things have to remain true or the cure is worse:
+#
+#   it must still FAIL       - a service that is genuinely broken has to end the
+#                              job, not be retried into a green tick
+#   it must not touch STDOUT - the leg above covers the success path; this covers
+#                              the failure path, where a retry could plausibly
+#                              print an id twice
+#   it must actually RUN     - a retry that silently does not happen is the same
+#                              class as a check that cannot fire, so the elapsed
+#                              time is measured rather than the intent trusted
+#
+# A container that does not exist is the cheapest reliable failure there is: it
+# cannot half-succeed, and it costs the seven seconds the backoff declares.
+# shellcheck disable=SC2016  # this runs in the CONTAINER, so nothing may expand here
+rt=$(runner sh -c '
+	t0=$(date +%s)
+	out=$(docker start no-such-container-shimprobe 2>/tmp/shimerr); rc=$?
+	el=$(( $(date +%s) - t0 ))
+	n=$(grep -c "retry . of " /tmp/shimerr 2>/dev/null)
+	# And the SECOND one by name. Counting alone passed a shim whose retry
+	# counter was clobbered by the loop variable inside the post-mortem, so both
+	# announcements read "retry 1 of 2" - and on a store with layers in it the
+	# guard then broke the loop early and the second retry never ran at all. A
+	# fresh lane hid that completely, which is why this asks for the number.
+	n2=$(grep -c "retry 2 of " /tmp/shimerr 2>/dev/null)
+	# And the attach guard: `docker start -a` returns the exit code OF THE
+	# CONTAINER, so retrying one would run the container twice. Never retried.
+	t1=$(date +%s)
+	docker start -a no-such-container-shimprobe >/dev/null 2>&1
+	ael=$(( $(date +%s) - t1 ))
+	echo "rc=$rc len=${#out} el=$el n=$n n2=$n2 ael=$ael"
+' 2>/dev/null | tail -1 | tr -d '\r')
+
+eval "$(printf %s "$rt" | tr ' ' '\n' | grep -E '^(rc|len|el|n|n2|ael)=[0-9]+$' | sed 's/^/shim_/')"
+if [ -z "${shim_rc:-}" ]; then
+	bad "the docker shim retry probe returned '${rt:-nothing}' - it did not run, so nothing here is asserted"
+elif [ "$shim_rc" = 0 ]; then
+	bad "'docker start' on a container that does not exist EXITED 0 - the shim is converting a failure into a success, which would let a broken service container pass a job. See apps/github-runner/scripts/docker-shim.sh"
+elif [ "${shim_len:-1}" != 0 ]; then
+	bad "a failing 'docker start' put $shim_len bytes on stdout - the retry is echoing something DockerCommandManager.cs would parse as a container id"
+elif [ "${shim_n:-0}" -lt 2 ]; then
+	bad "the shim announced ${shim_n:-0} retries and should announce 2 - the retry path did not run, so this leg proves nothing about it"
+elif [ "${shim_n2:-0}" != 1 ]; then
+	bad "the shim never announced 'retry 2 of 2' - its retry counter is being overwritten, which in a POSIX shell means some function it calls shares the variable. Both announcements reading 'retry 1' also means the loop guard is comparing the wrong number"
+elif [ "${shim_el:-0}" -lt 6 ]; then
+	bad "a failing 'docker start' took ${shim_el}s and the declared backoff is 2s+5s - the retries were not actually attempted"
+elif [ "${shim_ael:-9}" -ge 2 ]; then
+	bad "'docker start -a' took ${shim_ael}s, so it WAS retried - an attached start returns the container's own exit code and retrying runs the container a second time"
+else
+	ok "the shim retries a failing 'docker start' twice (${shim_el}s), still fails, keeps stdout empty, and does not retry an attached start"
+fi
+
 # ------------------------------------------------------------------------------
 say "Containment"
 # ------------------------------------------------------------------------------
@@ -610,6 +668,35 @@ if [ "$root" = /var/lib/nested-storage ]; then
 	ok "the endpoint DOCKER_HOST points at is the nested engine, on the lane's own store"
 else
 	bad "docker info reports graph root '${root:-nothing}', not /var/lib/nested-storage - a job's containers are not going where this design says they go"
+fi
+
+# THE ENGINE'S RUNTIME STATE MUST NOT SHARE A FILESYSTEM WITH THE JOB'S SCRATCH.
+# It did: XDG_RUNTIME_DIR was /tmp/podman-run, so podman's locks, exit files,
+# rootless network state and the pause pid file that owns the user namespace
+# every nested layer is mounted into sat on the 1777, 512 MB tmpfs a job's steps
+# write to. A step that fills it or sweeps it takes the engine with it.
+#
+# THE SECOND HALF IS THE ONE THAT WOULD HAVE CAUGHT THE ORIGINAL. storage.conf
+# has always named a runroot and podman has always ignored it in favour of
+# XDG_RUNTIME_DIR - silently, exactly as graphroot loses to
+# rootless_storage_path. So asking the ENGINE where it actually put things is the
+# only assertion worth making; reading the file back would have passed throughout.
+# shellcheck disable=SC2016  # this runs in the CONTAINER, so nothing may expand here
+rr=$(runner sh -c 'printf "%s|%s|%s" "$XDG_RUNTIME_DIR" "$(podman info --format "{{.Store.RunRoot}}" 2>/dev/null)" "$(df -m /run 2>/dev/null | tail -1 | awk "{print \$2}")"' 2>/dev/null | tail -1 | tr -d '\r\n')
+xdg=${rr%%|*}
+rest=${rr#*|}
+runroot=${rest%%|*}
+runmb=${rest##*|}
+if [ -z "$xdg" ] || [ -z "$runroot" ] || [ -z "$runmb" ]; then
+	bad "the runtime-directory probe returned '${rr:-nothing}' - it did not run, so nothing here is asserted"
+elif [ "${xdg#/tmp}" != "$xdg" ]; then
+	bad "XDG_RUNTIME_DIR is '$xdg' - the engine's runtime state is back on the tmpfs a job's own steps write to and can delete"
+elif [ "${runroot#"$xdg"}" = "$runroot" ]; then
+	bad "podman resolved its run root to '$runroot', which is not under XDG_RUNTIME_DIR '$xdg' - storage.conf and the environment disagree, and the environment is the one that wins"
+elif [ -n "${runmb##*[!0-9]*}" ] && [ "$runmb" -gt 512 ]; then
+	bad "/run inside the lane is ${runmb} MB - an unsized tmpfs is charged to the container's MEMORY budget, and this one is meant to be capped at 128 MB by bin/github-runner.sh"
+else
+	ok "the engine's runtime state is at $runroot, off the job's /tmp, on a ${runmb} MB capped tmpfs"
 fi
 
 if runner sh -c 'test ! -d /var/home-server/config && test ! -d /mnt/media && test ! -d /var/home-server/cache/conduct'; then

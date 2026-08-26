@@ -588,6 +588,36 @@ signal read green.
   writing a body, only the right one; and two phases naming one finding differ by a word, which a
   case-folded title comparison cannot see.
 
+### A binary that answers is not a binary that works
+- `node` is assumed by every JS action and declared by none, so ENOENT names the prek HOOK rather
+  than the interpreter; `nodejs24` ships `node` alone, without `npm`/`npx`.
+- **Fedora builds node `small-icu`**, so `Intl.DisplayNames` answers `NL` for `NL` - one test of
+  4,460, no throw and no warning. The gate asserts the display NAME, never `icu_small`.
+- A binary list is only as good as its enumeration: 26 asserted, and a lane shipped that could not
+  lint.
+
+### Turning a feature off costs nothing when it bills per person
+- GHAS bills per ACTIVE COMMITTER, so disabling it on 17 of 19 repos saved $0; and a minimal
+  configuration silently defaults every setting it does not name to `disabled`.
+- `advanced_security` reports **absent**, not `disabled`, on a repo that is actively billing - the
+  `code-scanning/default-setup` **403 is the only reliable negative** - and a PATCH naming it is
+  rejected ATOMICALLY, so `secret_scanning` stayed on while the call looked sent.
+- **`gh api --jq` prints error bodies to STDOUT**, so "did it return anything" reads a refusal as an
+  answer; and `visibility` comes back lowercase, which made a billable count read 0 at $47/month.
+
+### The engine kept its state where the job could reach it, and the ninth reproduction still did not fire
+- `XDG_RUNTIME_DIR` was on the 1777, 512 MB `/tmp` a job's own steps write to - locks, exit files,
+  and the pause pid file that owns the namespace every nested layer is mounted into.
+- **`runroot` loses to `XDG_RUNTIME_DIR` silently**, exactly as `graphroot` loses to
+  `rootless_storage_path`; the gate must ask the ENGINE, not read the file back.
+- **`/run` was uncapped at 7.8G inside a 3,584M `MemoryMax`**, and an explicit `--tmpfs` REPLACES the
+  read-only-tmpfs mount, so `tmpcopyup` is required. uid 1000 cannot `mkdir` in `/run`.
+- **Nine reproductions of upskald's `api-checks` failure, none of which fired** - the last taking the
+  namespace hypothesis apart three ways in one run. The move is a correctness fix, NOT the cure.
+- **So the shim stopped being only a witness**, and that reversal is stated. A failing `podman
+  start` writes zero bytes to stdout, which is the only reason a retry is safe; `docker start -a`
+  returns the CONTAINER's exit code, so it must never be retried.
+
 ### A backlog is a corpus, and the parent task is in it
 - Nothing ever asked the tracker whether a follow-up already existed, so a re-run re-filed its own
   follow-ups and a duplicate of a task a PERSON wrote was never checked at all.

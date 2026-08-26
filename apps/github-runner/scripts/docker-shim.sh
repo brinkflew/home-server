@@ -1,90 +1,172 @@
 #!/bin/sh
 # ==============================================================================
-# /usr/bin/docker - podman, plus a post-mortem on the one failure that matters
+# /usr/bin/docker - podman, a post-mortem, and exactly one thing that is not one
 # ------------------------------------------------------------------------------
 # podman-docker ships this path as a two-line script that execs podman. This
-# replaces it with the same exec plus diagnostics on ONE case: a `start` that
-# fails. That case is upskald's api-checks, reliably, twice in two runs:
+# replaces it with the same exec plus two behaviours on ONE case: a `start` that
+# fails. That case is upskald's api-checks, reliably, on both lanes and on three
+# different images:
 #
 #   docker create  -> ok
 #   docker start   -> crun: open `<graphroot>/overlay/<id>/merged/run/.containerenv`:
 #                     No such file or directory
 #
-# and it has resisted six synthetic reproductions - both service images, `run -d`
-# against `create`+`start`, the full flag set, a store reused across recycles,
-# the faithful systemd scope with --cgroups=split, and 1,662 verified MemoryHigh
-# breaches of deliberate pressure. All of them started postgres cleanly.
+# NINE SYNTHETIC REPRODUCTIONS HAVE NOW FAILED TO FIRE. Both service images;
+# `run -d` against `create`+`start`; the driver's full flag set; a store reused
+# across six container recycles; the faithful hosting with the systemd scope,
+# --cgroups=split and the 3,584M cap; 1,662 VERIFIED MemoryHigh breaches of
+# deliberate slice pressure; /tmp filled to 90%; and finally the user-namespace
+# hypothesis taken apart three ways in one run - the pause pid file deleted, the
+# pause process killed, and the whole runtime directory wiped, each between
+# `create` and `start`. All of them started postgres cleanly.
 #
-# THE EVIDENCE KEEPS BEING DESTROYED BEFORE ANYONE LOOKS. The runner tears the
-# job down within seconds, so a host-side snapshot - even one polling every 8
-# seconds - arrives to find the layer deleted, containers.json back to `[]` and a
-# store that looks perfectly healthy. That is what a cleaned store looks like,
-# not what a broken one looks like, and the two are indistinguishable after the
-# fact. The only place with the answer is inside the container at the instant
-# start returns non-zero, which is here.
+# THE POST-MORTEM IS HERE BECAUSE THE EVIDENCE IS DESTROYED EVERY TIME ANYONE
+# LOOKS. Teardown runs within seconds, so a host-side snapshot polling every 8
+# seconds still arrived to find the layer deleted, containers.json back to `[]`
+# and a store that looked perfectly healthy - which is what a CLEANED store looks
+# like, not a broken one, and after the fact the two are indistinguishable.
+# Inside the container at the instant start fails is the only place with the
+# answer.
 #
-# STDOUT IS NEVER TOUCHED. DockerCommandManager.cs parses container ids off
-# stdout, so every byte of it has to pass through unaltered - podman inherits
-# this process's stdout and writes to it directly. Everything below goes to
-# STDERR, where it lands in the job log as an annotation and changes nothing.
+# THE RETRY IS A GATE, AND THIS FILE USED TO SAY IT WOULD NEVER BE ONE. That
+# sentence was written when the alternative was still "find the cause", and nine
+# reproductions later it is not. So it is stated rather than quietly reversed: a
+# failing `docker start` is now attempted up to three times, and a job that would
+# have failed can now pass. The trade is that a service which is genuinely broken
+# costs seven extra seconds before it says so, against a whole class of job that
+# is otherwise unavailable on this runner. It treats a symptom nobody has
+# explained - which is why the post-mortem above stays armed, and why every
+# retry is announced in the job log rather than swallowed.
 #
-# The exit code is podman's own, unchanged. This wrapper must never convert a
-# failure into a success or a success into a failure: it is a witness, not a
-# gate. If it is ever given a retry, that is a separate decision recorded
-# separately - see docs/ci.md.
+# WHAT IT MUST NEVER DO, and the second one nearly happened:
+#
+#   1. TOUCH STDOUT. DockerCommandManager.cs parses container ids off stdout, so
+#      one stray byte breaks EVERY services: job rather than only the failing
+#      ones. podman inherits this process's stdout and writes to it directly; all
+#      diagnostics go to stderr. The retry is safe for the same reason, measured
+#      rather than assumed: a FAILING `podman start` writes nothing at all to
+#      stdout (rc=125, zero bytes), so a second attempt that succeeds prints the
+#      id exactly once - the same output a first-attempt success would give.
+#      bin/github-runner-smoke.sh asserts both halves of that.
+#
+#   2. RETRY AN ATTACHED START. `docker start -a` returns the CONTAINER'S exit
+#      code, so a non-zero result there is an ordinary outcome and not a failure
+#      - and re-running it would execute the container a second time and
+#      duplicate its output onto stdout. Any `-a`/`--attach`/`-i`/`--interactive`
+#      therefore disables the retry and leaves this a witness, as before.
+#
+# See: apps/github-runner/Dockerfile, bin/github-runner-smoke.sh, docs/ci.md
 # ==============================================================================
+
+# Number of EXTRA attempts, and the pause before each. Two, because a third has
+# nothing left to be transient about: if the cause persists past seven seconds it
+# is not the race this is aimed at, and the job should be told so promptly.
+RETRIES=2
+BACKOFF="2 5"
+
+S=/var/lib/nested-storage
+
+# EVERY VARIABLE IN HERE IS PREFIXED, AND THE FIRST VERSION WAS NOT. A POSIX
+# shell function has no locals, so this function's own loop counter and the retry
+# loop's counter were both `n` - and calling the post-mortem from inside the retry
+# loop reset it. The visible symptom was two announcements both reading
+# "retry 1 of 2"; the invisible one was that the loop's own `-le "$RETRIES"` guard
+# was reading a layer count, so a longer backoff list would have retried more
+# times than the constant says. Caught by bin/github-runner-smoke.sh's new leg on
+# its first run, which is the entire reason that leg counts the announcements
+# instead of trusting them.
+postmortem() {
+	pm_rc=$1
+	shift
+	[ -d "$S" ] || return 0
+	{
+		echo "::group::home-server lane: post-mortem for a failed 'docker start'"
+		echo "rc=$pm_rc  argv=$*"
+		echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+		echo "--- store ---"
+		/usr/bin/podman info --format '{{.Store.GraphDriverName}} root={{.Store.GraphRoot}} run={{.Store.RunRoot}}' 2>&1
+		pm_n=0
+		for pm_d in "$S"/overlay/*/; do
+			pm_b=$(basename "$pm_d")
+			case "$pm_b" in l | tempdirs) continue ;; esac
+			pm_n=$((pm_n + 1))
+			[ -d "$pm_d/merged" ] || echo "  NO merged/: $pm_b"
+			# An overlay dir whose merged/ exists but is EMPTY is the shape the error
+			# implies - a mount that did not take, so the rootfs has no /run for
+			# .containerenv to land in. `merged` missing and `merged` empty are
+			# different failures and the message cannot tell them apart.
+			if [ -d "$pm_d/merged" ] && [ -z "$(ls -A "$pm_d/merged" 2>/dev/null)" ]; then
+				echo "  EMPTY merged/: $pm_b"
+			fi
+		done
+		echo "  layers=$pm_n  overlay-mounts=$(grep -c ' overlay ' /proc/self/mountinfo 2>/dev/null)"
+
+		echo "--- containers podman still knows about ---"
+		/usr/bin/podman ps -a --format '  {{.ID}} {{.Status}} {{.Image}}' 2>&1 | head -10
+
+		echo "--- resources ---"
+		echo "  df:   $(df -h "$S" 2>/dev/null | tail -1)"
+		echo "  inodes: $(df -i "$S" 2>/dev/null | tail -1)"
+		echo "  runtime dir: $(df -h "${XDG_RUNTIME_DIR:-/run}" 2>/dev/null | tail -1)"
+		echo "  pids: $(cat /sys/fs/cgroup/pids.current 2>/dev/null) of $(cat /sys/fs/cgroup/pids.max 2>/dev/null)"
+		echo "  mem:  current=$(cat /sys/fs/cgroup/memory.current 2>/dev/null) max=$(cat /sys/fs/cgroup/memory.max 2>/dev/null)"
+		echo "  memory.events:"
+		sed 's/^/    /' /sys/fs/cgroup/memory.events 2>/dev/null
+		echo "  pressure(io):  $(head -1 /sys/fs/cgroup/io.pressure 2>/dev/null)"
+		echo "  pressure(mem): $(head -1 /sys/fs/cgroup/memory.pressure 2>/dev/null)"
+		echo "  pressure(cpu): $(head -1 /sys/fs/cgroup/cpu.pressure 2>/dev/null)"
+
+		echo "--- dmesg tail, if readable ---"
+		dmesg 2>/dev/null | tail -5 | sed 's/^/  /' || echo "  (not readable from here)"
+		echo "::endgroup::"
+	} >&2
+}
 
 /usr/bin/podman "$@"
 rc=$?
 
-# Only a failing `start`, and only when the store is where we expect it. Any
-# other non-zero exit is the workflow's business and is left alone.
+# Only a failing `start`. Any other non-zero exit is the workflow's business and
+# is passed through untouched.
 [ "$rc" -eq 0 ] && exit 0
 [ "${1:-}" = start ] || exit "$rc"
 
-S=/var/lib/nested-storage
-[ -d "$S" ] || exit "$rc"
+postmortem "$rc" "$@"
 
-{
-	echo "::group::home-server lane: post-mortem for a failed 'docker start'"
-	echo "rc=$rc  argv=$*"
-	echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# The attach guard - see the header. A combined short flag such as `-ai` has to
+# match too, which is why this looks at the letters rather than the whole word.
+for a in "$@"; do
+	case "$a" in
+	--attach | --interactive) attach=1 ;;
+	--*) ;;
+	-*) case "$a" in *a* | *i*) attach=1 ;; esac ;;
+	esac
+done
+if [ "${attach:-0}" = 1 ]; then
+	echo "home-server lane: 'docker start' was attached, so its exit code is the" >&2
+	echo "  container's own and retrying would run it twice. Not retried." >&2
+	exit "$rc"
+fi
 
-	echo "--- store ---"
-	/usr/bin/podman info --format '{{.Store.GraphDriverName}} root={{.Store.GraphRoot}} run={{.Store.RunRoot}}' 2>&1
-	n=0
-	for d in "$S"/overlay/*/; do
-		b=$(basename "$d")
-		case "$b" in l | tempdirs) continue ;; esac
-		n=$((n + 1))
-		[ -d "$d/merged" ] || echo "  NO merged/: $b"
-		# An overlay dir whose merged/ exists but is EMPTY is the shape the error
-		# implies - a mount that did not take, so the rootfs has no /run for
-		# .containerenv to land in. `merged` missing and `merged` empty are
-		# different failures and the message cannot tell them apart.
-		if [ -d "$d/merged" ] && [ -z "$(ls -A "$d/merged" 2>/dev/null)" ]; then
-			echo "  EMPTY merged/: $b"
-		fi
-	done
-	echo "  layers=$n  overlay-mounts=$(grep -c ' overlay ' /proc/self/mountinfo 2>/dev/null)"
+try=0
+for pause in $BACKOFF; do
+	try=$((try + 1))
+	[ "$try" -le "$RETRIES" ] || break
+	echo "home-server lane: 'docker start' failed with $rc; retry $try of $RETRIES in ${pause}s." >&2
+	echo "  This is apps/github-runner/scripts/docker-shim.sh, not the workflow." >&2
+	sleep "$pause"
 
-	echo "--- containers podman still knows about ---"
-	/usr/bin/podman ps -a --format '  {{.ID}} {{.Status}} {{.Image}}' 2>&1 | head -10
+	/usr/bin/podman "$@"
+	rc=$?
+	if [ "$rc" -eq 0 ]; then
+		echo "home-server lane: retry $try succeeded. The first attempt's post-mortem is" >&2
+		echo "  above and is worth reading - this path exists because the cause is" >&2
+		echo "  still unknown. See docs/ci.md." >&2
+		exit 0
+	fi
+	postmortem "$rc" "$@"
+done
 
-	echo "--- resources ---"
-	echo "  df:   $(df -h "$S" 2>/dev/null | tail -1)"
-	echo "  inodes: $(df -i "$S" 2>/dev/null | tail -1)"
-	echo "  pids: $(cat /sys/fs/cgroup/pids.current 2>/dev/null) of $(cat /sys/fs/cgroup/pids.max 2>/dev/null)"
-	echo "  mem:  current=$(cat /sys/fs/cgroup/memory.current 2>/dev/null) max=$(cat /sys/fs/cgroup/memory.max 2>/dev/null)"
-	echo "  memory.events:"
-	sed 's/^/    /' /sys/fs/cgroup/memory.events 2>/dev/null
-	echo "  pressure(io):  $(head -1 /sys/fs/cgroup/io.pressure 2>/dev/null)"
-	echo "  pressure(mem): $(head -1 /sys/fs/cgroup/memory.pressure 2>/dev/null)"
-	echo "  pressure(cpu): $(head -1 /sys/fs/cgroup/cpu.pressure 2>/dev/null)"
-
-	echo "--- dmesg tail, if readable ---"
-	dmesg 2>/dev/null | tail -5 | sed 's/^/  /' || echo "  (not readable from here)"
-	echo "::endgroup::"
-} >&2
-
+echo "home-server lane: 'docker start' still failing after $RETRIES retries; giving" >&2
+echo "  the job podman's own exit code, $rc." >&2
 exit "$rc"

@@ -53,7 +53,24 @@
 
 set -eu
 
+# THE RUNTIME DIRECTORIES ARE MADE HERE OR THEY CANNOT BE MADE AT ALL, and that
+# is the whole reason this branch still does something before it drops. They live
+# under /run now rather than /tmp - see the Dockerfile's note on why - and /run
+# arrives as a tmpfs at 0755 root:root, so uid 1000 cannot mkdir in it. Measured
+# inside a lane: `mkdir: cannot create directory '/run/probe-dir': Permission
+# denied`, with `runner` in group 0 and everything else about the container
+# correct. Baking them into the image would not survive either: the tmpfs is
+# mounted OVER /run, and while podman's tmpcopyup carries the image's content
+# through, relying on it to carry ownership as well is a guess this does not need
+# to make.
+#
+# 0700 because podman requires it and warns on every single invocation otherwise
+# - thousands of lines in a job log - and because the socket's parent should not
+# be readable by anything that is not the runner.
 if [ "$(id -u)" = 0 ]; then
+	mkdir -p "${XDG_RUNTIME_DIR:?}" "$(dirname "${DOCKER_HOST#unix://}")"
+	chown 1000:0 "$XDG_RUNTIME_DIR" "$(dirname "${DOCKER_HOST#unix://}")"
+	chmod 0700 "$XDG_RUNTIME_DIR"
 	exec setpriv --reuid=1000 --regid=0 --init-groups -- "$0" "$@"
 fi
 
@@ -80,12 +97,23 @@ if [ -d /opt/hostedtoolcache-seed ] && [ ! -d "$RUNNER_TOOL_CACHE/Python" ]; the
 fi
 
 # $HOME, $TMPDIR and the runner tree are bind mounts from the lane, so they
-# exist - but XDG_RUNTIME_DIR is on the container's own tmpfs and does not.
-# podman needs it present and 0700; absent, podman picks a fallback and warns on
-# every single invocation, which is thousands of lines in a job log.
+# exist. XDG_RUNTIME_DIR and the socket directory are on the container's own /run
+# tmpfs and were created by the root branch above.
+#
+# ASSERTED RATHER THAN CREATED, because at this point creating them is not
+# possible and pretending otherwise is how this fails quietly. Under /tmp the
+# mkdir here always succeeded, so an entrypoint entered some other way still
+# worked; under /run it would fail, and `mkdir -p ... || true` would turn that
+# into podman silently choosing a fallback runtime directory and warning on every
+# invocation for the rest of the job.
 sock="${DOCKER_HOST#unix://}"
-mkdir -p "${XDG_RUNTIME_DIR:?}" "$(dirname "$sock")"
-chmod 0700 "$XDG_RUNTIME_DIR"
+if [ ! -w "${XDG_RUNTIME_DIR:?}" ] || [ ! -w "$(dirname "$sock")" ]; then
+	echo "runner-init: $XDG_RUNTIME_DIR or $(dirname "$sock") is not writable by" >&2
+	echo "  uid $(id -u). Both live on the container's /run tmpfs and are created" >&2
+	echo "  by this script's root branch - so this entrypoint was entered without" >&2
+	echo "  ever being root, or /run was mounted after it ran." >&2
+	exit 1
+fi
 
 # $HOME IS AN EMPTY BIND MOUNT ON A FRESH LANE, and podman stats $HOME/.config
 # before it does anything else. Absent, it exits with

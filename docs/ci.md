@@ -174,6 +174,74 @@ Postgres's startup instead - trading a reliable hang for an intermittent failure
   subuid container uid 1000 maps to, so the disk reclaim and the smoke test's cleanup both use
   `podman unshare rm -rf`. A plain `rm` produces a wall of `Permission denied` and leaves the
   budget un-reclaimed while reporting nothing.
+- **The engine's runtime state must not share a filesystem with the job's scratch.** It did:
+  `XDG_RUNTIME_DIR` was `/tmp/podman-run`, so podman's locks, exit files, rootless network state and
+  the pause process pid file that owns the user namespace every nested layer is mounted into all sat
+  on the 1777, 512 MB tmpfs a workflow's steps write to. It is `/run/podman-run` now, root-owned and
+  unreachable by a job. `storage.conf` had asked for a `/run` runroot all along and **podman ignored
+  it** - `XDG_RUNTIME_DIR` wins for a rootless engine, silently, the same way `graphroot` loses to
+  `rootless_storage_path`. Both name the same path now, and the smoke test asks the engine rather
+  than reading the file back.
+- **Every tmpfs in a lane is sized, and `/run` was the one that was not.** `--read-only-tmpfs`
+  mounts `/run`, `/tmp` and `/var/tmp`; `/tmp` was always capped and `/run` inherited podman's
+  default, measured at **7.8G inside a lane whose `MemoryMax` is 3,584M** - a container is not
+  memory-namespaced, and a tmpfs is charged to the cgroup that owns it. Capped at 128m **with
+  `tmpcopyup`**, because an explicit `--tmpfs` replaces the read-only-tmpfs mount rather than
+  adjusting it and the image's own `/run` would otherwise disappear behind an empty filesystem.
+- **uid 1000 cannot create those directories.** `/run` arrives 0755 root:root, so `runner-init`'s
+  root branch makes and chowns them before it drops, and the unprivileged half asserts rather than
+  creates. Under `/tmp` the `mkdir` always succeeded; a tolerant `|| true` carried across would have
+  become podman quietly choosing a fallback runtime directory and warning on every invocation for
+  the rest of the job.
+
+### `api-checks`, the failure nobody has explained
+
+`avanserv/upskald`'s `API Quality Gate` dies in `Initialize containers`, reliably, on both lanes and
+across three builds of this image:
+
+```
+docker create  -> ok
+docker start   -> crun: open `<graphroot>/overlay/<id>/merged/run/.containerenv`:
+                  No such file or directory
+                  Docker start fail with exit code 125
+```
+
+**Nine synthetic reproductions have failed to fire.** Both service images; `run -d` against
+`create`+`start`; the driver's full flag set; a store reused across six container recycles; the
+faithful hosting with the systemd scope, `--cgroups=split` and the 3,584M cap; **1,662 verified
+`MemoryHigh` breaches** of deliberate slice pressure; `/tmp` filled to 90%; and the user-namespace
+hypothesis taken apart three ways in one run - the pause pid file deleted, the pause process killed,
+and the whole runtime directory wiped, each between `create` and `start`. All of them started
+postgres cleanly.
+
+**The evidence is destroyed every time anyone looks.** Teardown runs within seconds, so a host-side
+snapshot polling every 8 seconds still arrived to find the layer deleted, `containers.json` back to
+`[]` and a store that looked perfectly healthy - which is what a *cleaned* store looks like, not a
+broken one, and after the fact the two are indistinguishable. So the shim dumps a post-mortem from
+inside the container at the instant `start` returns non-zero, which is the only place with an
+answer.
+
+**And it retries, which is a gate and not a witness.** The shim shipped saying "no retry, no
+suppression"; that was written while "find the cause" was still on the table. A failing
+`docker start` is now attempted up to three times, 2s then 5s apart, each attempt announced in the
+job log with its post-mortem intact. A genuinely broken service costs seven extra seconds; the
+alternative is that `services:` does not work on this runner at all.
+
+Two things it must never do, and the second would have been a real bug:
+
+- **Touch stdout.** `DockerCommandManager.cs` parses container ids off it, so one stray byte breaks
+  *every* `services:` job rather than only the failing ones. The retry is safe for a measured reason
+  rather than an assumed one: a failing `podman start` writes **zero bytes** to stdout (rc=125,
+  len=0), so a second attempt that succeeds prints the id exactly once.
+- **Retry an attached start.** `docker start -a` returns the exit code *of the container*, so a
+  non-zero result there is an ordinary outcome - and re-running it would execute the container a
+  second time and duplicate its output onto stdout. Any `-a`/`--attach`/`-i`/`--interactive`
+  disables the retry, combined short flags included.
+
+`bin/github-runner-smoke.sh` asserts all four directions against a container that cannot exist: it
+still exits non-zero, stdout stays empty, the **elapsed time** proves the retries actually ran rather
+than being merely intended, and `docker start -a` returns in under a second unretried. That leg
+exists because the retry is the only thing in this image that can turn a red job green.
 
 ## Containment: what it keeps, and what it gives up
 
@@ -480,17 +548,30 @@ Ubuntu base was reproduced with `semodule -DB` - dontaudit off - and logged **no
 is needed; `container_use_devices` was already on. Nothing about this design required a boolean
 change.
 
+**Proved by real work, on `avanserv/upskald` PR #253**, which moved all eleven `ci.yml` jobs onto
+the lanes behind `vars.CI_RUNNER`:
+
+- **`fromJSON(vars.CI_RUNNER || '[...]')` is accepted in `runs-on:`**, and the fallback keeps a
+  repository working when the variable is unset.
+- **`podman-docker` satisfies the runner's own `docker` call sequence**, and a service container
+  reaches `healthy` through `apps/github-runner/scripts/podman-healthcheck-loop.sh` rather than
+  sitting at `starting` for six hours.
+- **Per-job cost is not the problem the capacity section feared.** `pre-commit` 248s against 251s
+  hosted (1.0x), `scripts-tests` 1.1x, `web-build` 1.2x. Two cores cost almost nothing, and the
+  pipeline is dependency-bound - a 1,513s critical path against a 25m32s hosted wall clock - so two
+  lanes are enough.
+- **Ten of the eleven jobs pass.** The eleventh is `api-checks`, above.
+
 **Not yet proved, and none of it can be settled from a workstation:**
 
-- **A full green smoke run.** The last recorded run had the nested engine working and the four
-  by-IP containment probes still returning rc 125 - which the probe deliberately refuses to read
-  as either "dropped" or "refused". It now prints podman's own message, which is what the next run
-  will say.
-- **That `podman-docker` satisfies the runner's own `docker` call sequence** end to end, and that
-  a service container reaches `healthy` through
-  `apps/github-runner/scripts/podman-healthcheck-loop.sh` rather than sitting at `starting`.
-- **That `fromJSON(vars.CI_RUNNER || '[...]')` is accepted in `runs-on:`.** One throwaway workflow
-  before touching `ci.yml`.
-- **A real job**, which is the only thing that proves the whole chain.
+- **The cause of the `api-checks` failure.** The retry is a treatment, and the section above says so
+  rather than implying otherwise.
+- **That an e2e shard fits.** With e2e skipped entirely the slice reached **4,775 MB of 5,632 MB
+  `MemoryHigh` (85%)**, `high=12148`, `max=0`, `oom_kill=0`, worst `memory.pressure some avg10` at
+  1.72% - throttling rather than starvation, but 85% before the heaviest job has run at all. It is
+  blocked behind `api-checks`, which `e2e-tests` needs.
 - **Every memory and CPU number in `host/systemd/app-ci.slice`.** That file says so itself and
   asks to be rewritten from `memory.peak` and `pids.peak` after the first e2e shard.
+- **Whether `/run` at 128m is enough for a job that does something unusual with it.** It is two
+  orders of magnitude above the engine's own runtime state, and the smoke test grades the ceiling
+  rather than the usage, so an overrun would surface as a job failure and not as a warning.

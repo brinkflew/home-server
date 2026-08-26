@@ -34,7 +34,13 @@
 
 set -u
 
-STATE="${HC_LOOP_STATE:-/tmp/hc-state}"
+# THE STATE GOES WHERE THE ENGINE'S STATE GOES, for the reason the Dockerfile
+# gives: this used to default to /tmp/hc-state, on the 1777 tmpfs a job's own
+# steps write to. Losing it does not fail loudly - the per-container interval
+# files simply come back missing, every container is inspected again on the next
+# sweep, and a `.at` file that vanishes makes the loop re-run a healthcheck
+# early, which is the one direction this file exists to avoid.
+STATE="${HC_LOOP_STATE:-${XDG_RUNTIME_DIR:-/tmp}/hc-state}"
 SWEEP="${HC_LOOP_SWEEP:-2}"
 FALLBACK=30
 
