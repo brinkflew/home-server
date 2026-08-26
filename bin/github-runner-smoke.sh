@@ -394,13 +394,37 @@ fi
 # assertion that it does. It is deliberately run through the REAL entrypoint
 # rather than by calling the loop directly, because the loop being present and
 # the loop being STARTED are different facts and only the second one matters.
-say "  (starting a real service container - this takes about a minute)"
+# THIS LEG USED TO TEST A DIFFERENT SHAPE FROM THE ONE THAT FAILS. It ran
+# `podman run -d ... alpine sleep 120` against an image already in the store, and
+# passed on every build of an image whose `services:` jobs have never once
+# worked. The runner does none of those things: it `pull`s, then `create`s, then
+# `start`s, and its image is postgres:16-alpine at eleven layers rather than
+# alpine at one. So the sequence and the image now match what upskald's
+# api-checks actually issues.
+#
+# IT IS STILL SHELL-DRIVEN AND THEREFORE STILL BLIND to whatever Runner.Worker
+# does differently - which is the open question, since the identical sequence
+# fails in fifteen seconds under the real runner and has never once failed here.
+# This leg proves the engine CAN do it; it cannot prove a job will.
+say "  (pulling and starting a real service container - this takes about a minute)"
 # shellcheck disable=SC2016  # this script runs in the CONTAINER, so nothing in it may expand here
 hc=$(runner bash -c '
-	out=$(podman run -d --replace --name hc --health-cmd "true" --health-interval 3s \
-		--health-retries 3 alpine sleep 120 2>&1) || {
+	podman pull -q postgres:16-alpine >/dev/null 2>&1
+	cid=$(podman create --name hc -p 5432:5432 \
+		--health-cmd "pg_isready -U u -d d" --health-interval 10s \
+		--health-timeout 5s --health-retries 5 \
+		-e POSTGRES_USER=u -e POSTGRES_PASSWORD=p -e POSTGRES_DB=d \
+		postgres:16-alpine 2>&1) || {
+		echo "START-FAILED: create: $(printf "%s" "$cid" | tr "\n" " " | cut -c1-140)"; exit 0; }
+	out=$(podman start "$cid" 2>&1) || {
 		echo "START-FAILED: $(printf "%s" "$out" | tr "\n" " " | cut -c1-150)"; exit 0; }
-	for _ in $(seq 1 40); do
+	# NINETY, NOT FORTY. The old leg watched alpine with a `true` healthcheck on a
+	# 3s interval, which goes healthy almost at once. postgres declares a 10s
+	# interval and 5 retries, so the FIRST verdict cannot arrive before 10s and a
+	# slow start legitimately takes several of them. Forty seconds would fail a
+	# healthy database and block a promotion for it - the exact direction
+	# podman-healthcheck-loop.sh argues against.
+	for _ in $(seq 1 90); do
 		s=$(podman inspect --format "{{if .Config.Healthcheck}}{{print .State.Health.Status}}{{end}}" hc 2>/dev/null)
 		case "$s" in healthy) echo healthy; exit 0 ;; unhealthy) echo unhealthy; exit 0 ;; esac
 		sleep 1
@@ -411,7 +435,7 @@ case "$hc" in
 	healthy)
 		ok "a service container reached 'healthy' - the healthcheck loop is running and the runner's wait will terminate" ;;
 	stuck:starting)
-		bad "health status is STILL 'starting' after 40s. This is the six-hour hang: apps/github-runner/scripts/podman-healthcheck-loop.sh is not running, or podman is not recording the healthcheck at all. Do NOT promote this image." ;;
+		bad "health status is STILL 'starting' after 90s. This is the six-hour hang: apps/github-runner/scripts/podman-healthcheck-loop.sh is not running, or podman is not recording the healthcheck at all. Do NOT promote this image." ;;
 	unhealthy)
 		bad "a container whose healthcheck is 'true' came back UNHEALTHY - the loop is running the check far more often than the declared interval, which is how a slow-starting postgres gets failed before it is up" ;;
 	START-FAILED*)
