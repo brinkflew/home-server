@@ -248,9 +248,34 @@ RUN chmod 0755 /usr/local/bin/runner-init /usr/local/bin/podman-healthcheck-loop
 # an unlinked file has no directory entry. A later "simplification" back to a
 # tmpfs would keep the path and lose the point, which is why the smoke test
 # checks `stat -f` and not the mount table.
+#
+# THE ENGINE'S RUNTIME STATE IS ON /run, NOT ON /tmp, AND THAT IS NOT TIDINESS.
+# It was `/tmp/podman-run`, which put podman's locks, its exit files, its
+# rootless network state and the pause process pid file that owns the user
+# namespace every nested layer is mounted into onto the SAME 512 MB tmpfs a job's
+# steps write to - and `/tmp` inside this container is 1777, so any step can
+# reach it. Two independent ways that ends badly: a step that fills /tmp leaves
+# the engine no room to write state it does not check the return value of, and a
+# step that sweeps /tmp deletes it outright. `/run` is a separate tmpfs, mode
+# 0755 and root-owned, which uid 1000 cannot write to at all.
+#
+# storage.conf ASKED FOR THIS AND WAS IGNORED. It carries
+# `runroot = /run/...`, and podman reported `Store.RunRoot:
+# /tmp/podman-run/containers` regardless: for a rootless engine XDG_RUNTIME_DIR
+# wins over the file. That is the same shape as `graphroot` losing to
+# `rootless_storage_path` one file over - a setting that is read, a setting that
+# is honoured, and no warning distinguishing them. The two now name the same
+# place, so whichever is consulted the answer is identical.
+#
+# THIS IS NOT THE api-checks FIX AND MUST NOT BE RECORDED AS ONE. Nine
+# reproductions have now failed to fire, the last of them deleting the pause pid
+# file, killing the pause process and wiping the whole runtime directory between
+# `create` and `start` - all four started postgres cleanly. This is defensible on
+# its own merits and it did not explain that failure. See scripts/docker-shim.sh
+# for what actually unblocks it, and docs/ci.md for the honest ledger.
 ENV HOME=/home/runner \
-    XDG_RUNTIME_DIR=/tmp/podman-run \
-    DOCKER_HOST=unix:///tmp/podman/podman.sock \
+    XDG_RUNTIME_DIR=/run/podman-run \
+    DOCKER_HOST=unix:///run/podman/podman.sock \
     RUNNER_TOOL_CACHE=/opt/hostedtoolcache \
     AGENT_TOOLSDIRECTORY=/opt/hostedtoolcache \
     TMPDIR=/scratch \

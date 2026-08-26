@@ -575,6 +575,23 @@ while [ "$stopping" = 0 ]; do
 	#
 	# The cheap probe and the real workload were not the same test.
 	#
+	# EVERY TMPFS IN HERE IS SIZED, AND /run WAS THE ONE THAT WAS NOT. A tmpfs
+	# inside a container is charged to its MEMORY budget and is unreclaimable
+	# without swap - the measurement that taught this host so is in
+	# docs/known-state.md - so an unbounded one inside a 3,584M MemoryMax is a way
+	# to reach the hard limit with every process behaving. `--read-only-tmpfs`
+	# mounts /run, /tmp and /var/tmp; /tmp is capped explicitly below and always
+	# was, but /run inherited podman's default and measured `7.8G` inside a lane,
+	# which is half the HOST's memory, because a container is not memory-
+	# namespaced. 128m is two orders of magnitude more than the engine's runtime
+	# state needs and is a ceiling rather than a reservation.
+	#
+	# `tmpcopyup` IS THE HALF THAT IS EASY TO DROP. An explicit --tmpfs replaces
+	# the read-only-tmpfs mount rather than adjusting it, and without tmpcopyup
+	# the image's own /run content - console, lock, log, secrets, sudo and the
+	# rest - is hidden behind an empty filesystem. Measured with it: all fifteen
+	# entries present at 64M, so the flag does what it says here.
+	#
 	# shellcheck disable=SC2016  # the $(cat) is for the container's shell, not this one
 	systemd-run --user --scope --collect \
 		--slice=app-ci.slice --unit "$scope" --quiet \
@@ -594,6 +611,7 @@ while [ "$stopping" = 0 ]; do
 			--device /dev/fuse --device /dev/net/tun \
 			--read-only --read-only-tmpfs \
 			--tmpfs /tmp:rw,exec,size=512m \
+			--tmpfs /run:rw,nosuid,nodev,size=128m,tmpcopyup \
 			--shm-size=512m \
 			--pids-limit=1024 \
 			--log-driver=none \
