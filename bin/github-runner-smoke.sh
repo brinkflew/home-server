@@ -600,7 +600,14 @@ if ! podman unshare test -f "$shim_flag" 2>/dev/null; then
 elif ! podman unshare test -s "$shim_pm" 2>/dev/null; then
 	bad "the shim left its breadcrumb but no .docker-shim-postmortem.log - the forensic capture would then hold only post-cleanup store metadata, which was MEASURED to be byte-for-byte the shape of a healthy store"
 else
-	ok "a lane that cannot start a container says so in \$HOME, with the post-mortem beside it ($(podman unshare wc -l <"$shim_pm" 2>/dev/null) lines) - the driver heals on both"
+	# THE `wc` GOES THROUGH THE NAMESPACE TOO. Writing `wc -l <"$shim_pm"` looks
+	# equivalent and is not: the redirection is performed by THIS shell, as
+	# `core`, against a file owned by the subuid container uid 1000 maps to. It
+	# happens to work today because the file is 0644 and `core` reads it as
+	# other - so the day the shim's umask changes, the count silently becomes an
+	# empty string inside a PASSING message. Same class as the `du` that read
+	# half a lane.
+	ok "a lane that cannot start a container says so in \$HOME, with the post-mortem beside it ($(podman unshare wc -l "$shim_pm" 2>/dev/null | awk '{print $1}') lines) - the driver heals on both"
 fi
 
 # ------------------------------------------------------------------------------
