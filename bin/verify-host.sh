@@ -2636,6 +2636,15 @@ if [ -z "$GREENBOOT" ]; then
 	ci_disk_lane=""
 	ci_version=""
 	ci_markers=0
+	ci_mem_peak=""
+	ci_mem_lane=""
+	ci_pids_peak=""
+	ci_mem_max_ev=0
+	ci_oom=0
+	ci_resets=0
+	ci_reset_at=""
+	ci_reset_reason=""
+	ci_store_jobs=""
 	for l in 1 2; do
 		m="${HOME:-/var/home/core}/.cache/home-server/ci-state-$l"
 		[ -f "$m" ] || continue
@@ -2677,6 +2686,52 @@ if [ -z "$GREENBOOT" ]; then
 				fi ;;
 		esac
 
+		# THE HIGH-WATER MARKS, WORST LANE WINS. Each is a maximum the driver
+		# already keeps across every job that lane has run, so this is picking
+		# the worse of two lifetimes rather than sampling anything.
+		mp=$(sed -n 's/^lane_mem_peak_mb=//p' "$m" 2>/dev/null | tail -1)
+		case "$mp" in
+			''|*[!0-9]*) ;;
+			*) if [ -z "$ci_mem_peak" ] || [ "$mp" -gt "$ci_mem_peak" ]; then
+					ci_mem_peak="$mp"; ci_mem_lane="$l"
+				fi ;;
+		esac
+
+		pp=$(sed -n 's/^lane_pids_peak=//p' "$m" 2>/dev/null | tail -1)
+		case "$pp" in
+			''|*[!0-9]*) ;;
+			*) if [ -z "$ci_pids_peak" ] || [ "$pp" -gt "$ci_pids_peak" ]; then
+					ci_pids_peak="$pp"
+				fi ;;
+		esac
+
+		me=$(sed -n 's/^lane_mem_max_events=//p' "$m" 2>/dev/null | tail -1)
+		case "$me" in ''|*[!0-9]*) ;; *) ci_mem_max_ev=$((ci_mem_max_ev + me)) ;; esac
+		ok_=$(sed -n 's/^lane_oom_kills=//p' "$m" 2>/dev/null | tail -1)
+		case "$ok_" in ''|*[!0-9]*) ;; *) ci_oom=$((ci_oom + ok_)) ;; esac
+
+		sr=$(sed -n 's/^store_resets=//p' "$m" 2>/dev/null | tail -1)
+		case "$sr" in ''|*[!0-9]*) ;; *) ci_resets=$((ci_resets + sr)) ;; esac
+		sj=$(sed -n 's/^store_jobs=//p' "$m" 2>/dev/null | tail -1)
+		case "$sj" in
+			''|*[!0-9]*) ;;
+			*) if [ -z "$ci_store_jobs" ] || [ "$sj" -gt "$ci_store_jobs" ]; then
+					ci_store_jobs="$sj"
+				fi ;;
+		esac
+
+		# ONLY A HEAL IS KEPT, and the newest one wins. A window reset is the
+		# design working on a schedule and a budget reset is a disk fact; a heal
+		# is the `services:` failure having come back, which is the only one of
+		# the three anybody needs to be told about.
+		rr=$(sed -n 's/^last_reset_reason=//p' "$m" 2>/dev/null | tail -1)
+		if [ "$rr" = heal ]; then
+			ra=$(sed -n 's/^last_reset_at=//p' "$m" 2>/dev/null | tail -1)
+			if [ -z "$ci_reset_at" ] || [ "$ra" \> "$ci_reset_at" ]; then
+				ci_reset_at="$ra"; ci_reset_reason="lane $l"
+			fi
+		fi
+
 		rv=$(sed -n 's/^runner_version=//p' "$m" 2>/dev/null | tail -1)
 		[ -n "$rv" ] && ci_version="$rv"
 	done
@@ -2686,6 +2741,11 @@ if [ -z "$GREENBOOT" ]; then
 	fact github_runner_job_age_s "${ci_job_age:-}" num
 	fact github_runner_disk_mb "${ci_disk_worst:-}" num
 	fact github_runner_heartbeat_age_s "${ci_hb_worst:-}" num
+	fact github_runner_mem_peak_mb "${ci_mem_peak:-}" num
+	fact github_runner_pids_peak "${ci_pids_peak:-}" num
+	fact github_runner_mem_max_events "$ci_mem_max_ev" num
+	fact github_runner_oom_kills "$ci_oom" num
+	fact github_runner_store_resets "$ci_resets" num
 
 	if [ "$ci_markers" -eq 0 ]; then
 		note ci.heartbeat "no CI lane has written a marker - none has run yet"
@@ -2722,6 +2782,56 @@ if [ -z "$GREENBOOT" ]; then
 		ok ci.lane_disk "the largest CI lane holds ${ci_disk_worst}MB of its 20480MB budget"
 	else
 		warn ci.lane_disk "CI lane $ci_disk_lane holds ${ci_disk_worst}MB, over its 20480MB budget - the driver clears work, tmp and the nested image store at the top of its next cycle, so this clears itself unless the budget is simply too small"
+	fi
+
+	# The ceilings, read back from what jobs actually used.
+	# --------------------------------------------------------------------------
+	# host/systemd/app-ci.slice SIZES TWO LANES ON A 15.8 GB HOST FROM NUMBERS IT
+	# CALLS STARTING POINTS, and names its own failure mode as silence. The
+	# driver keeps memory.peak and pids.peak off each transient scope - the only
+	# window there is, since --collect removes the scope the moment the container
+	# exits - so this grades the ceilings against the load rather than against
+	# the file that declares them.
+	#
+	# GRADED ON THE EVENTS, NOT ON THE PEAK, AND THE DIFFERENCE IS THE WHOLE
+	# POINT. memory.peak includes page cache, so a lane sitting at its ceiling
+	# having just run `uv sync` and `bun install` is reclaim working exactly as
+	# MemoryHigh intends - app-agents.slice records that same reading being
+	# misread once already. `memory.events max` is the hard ceiling actually
+	# binding, and oom_kill is the kernel having chosen a victim.
+	ci_mem_ceiling=3584
+	ci_pids_ceiling=1024
+	if [ -z "$ci_mem_peak" ] && [ "$ci_markers" -gt 0 ]; then
+		note ci.lane_headroom "no CI lane has recorded a scope peak yet - a lane records one when it finishes a job, so this clears itself after the next one"
+	elif [ -z "$ci_mem_peak" ]; then
+		note ci.lane_headroom "no CI lane has run, so nothing has been measured against the ceilings"
+	elif [ "$ci_oom" -gt 0 ]; then
+		bad ci.lane_headroom "the kernel has killed $ci_oom process(es) in a CI lane for breaching MemoryMax - a job died for a reason its own log will not explain. Raise MemoryMax on the scope in bin/github-runner.sh AND MemoryHigh/MemoryMax on host/systemd/app-ci.slice together: two lanes at the scope ceiling already exceed the slice, so raising one alone moves which limit binds without adding headroom."
+	elif [ "$ci_mem_max_ev" -gt 0 ]; then
+		warn ci.lane_headroom "a CI lane has hit MemoryMax $ci_mem_max_ev time(s) - allocation was refused at the hard ceiling rather than throttled at MemoryHigh, which is the reading that justifies raising it. Lane $ci_mem_lane peaked at ${ci_mem_peak}MB of ${ci_mem_ceiling}MB; read 'anon' against 'inactive_file' in the scope's memory.stat before changing a number."
+	elif [ -n "$ci_pids_peak" ] && [ "$ci_pids_peak" -gt "$(( ci_pids_ceiling * 8 / 10 ))" ]; then
+		warn ci.lane_headroom "a CI lane reached $ci_pids_peak processes against a TasksMax of $ci_pids_ceiling - the symptom when this binds is 'fork: Resource temporarily unavailable' raised by something unrelated, naming neither the slice nor the limit. Re-derive TasksMax on the scope and on host/systemd/app-ci.slice from this peak."
+	else
+		ok ci.lane_headroom "CI lane $ci_mem_lane peaked at ${ci_mem_peak}MB of ${ci_mem_ceiling}MB and ${ci_pids_peak:-?} of $ci_pids_ceiling processes, with no allocation refused at the hard ceiling"
+	fi
+
+	# A lane that healed itself is the `services:` failure having come back.
+	# --------------------------------------------------------------------------
+	# THE ONE THING THAT MUST NOT BE SILENT. The failure this watches for was
+	# diagnosed by hand over weeks, cured by a manual wipe, and has no known
+	# cause; the driver now does the wipe itself so a job does not stay red, and
+	# the entire cost of that convenience is that the recurrence would otherwise
+	# leave no trace anybody looks at. It keeps the store's metadata under
+	# FLEET_ROOT/forensics before resetting, which is what this points at.
+	#
+	# A WINDOW RESET IS NOT REPORTED, because it fires on a job counter by design
+	# and reporting it would train the reader to ignore this line.
+	if [ -n "$ci_reset_at" ]; then
+		warn ci.lane_store "$ci_reset_reason healed itself at $ci_reset_at - the docker shim exhausted its retries on a 'docker start', which is the api-checks failure recurring. The store's metadata was kept before the reset: look under '\$GITHUB_RUNNER_ROOT/forensics' (default /var/home-server/cache/github-runner/forensics), because twelve reproductions have failed to recreate that state and this is the first capture of it. See docs/ci.md."
+	elif [ "$ci_markers" -eq 0 ]; then
+		note ci.lane_store "no CI lane has written a marker, so nothing is known about its store"
+	else
+		ok ci.lane_store "no CI lane has had to heal itself; the oldest nested store has served ${ci_store_jobs:-0} job(s) of its 50-job window, over $ci_resets reset(s) in total"
 	fi
 
 	# --------------------------------------------------------------------------

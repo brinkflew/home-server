@@ -1555,6 +1555,32 @@ CI_NUMBERS = (
      "What this lane holds on disk - its home, tool cache, nested image store "
      "and runner tree. The driver clears the regenerable parts when it passes "
      "its budget, so a sawtooth here is the design working."),
+    ("lane_mem_peak_mb", "lane_memory_peak_megabytes",
+     "The highest memory.peak any job on this lane has reached, off the "
+     "transient scope - which is --collect, so nothing but the driver's own "
+     "poll can ever read it. INCLUDES PAGE CACHE: a lane at its ceiling after "
+     "`uv sync` and `bun install` is reclaim working, not pressure. Grade on "
+     "lane_memory_max_events, never on this."),
+    ("lane_pids_peak", "lane_pids_peak",
+     "The highest pids.peak any job on this lane has reached. What binds first "
+     "when it binds is TasksMax on the scope, and the symptom is 'fork: "
+     "Resource temporarily unavailable' raised by something unrelated."),
+    ("lane_mem_max_events", "lane_memory_max_events_total",
+     "Times an allocation in this lane was refused at MemoryMax rather than "
+     "throttled at MemoryHigh. This, not the peak, is the reading that "
+     "justifies raising a ceiling."),
+    ("lane_oom_kills", "lane_oom_kills_total",
+     "Processes the kernel killed in this lane for breaching MemoryMax. "
+     "Non-zero means a job died for a reason its own log cannot explain."),
+    ("store_jobs", "store_jobs",
+     "Jobs this lane's nested image store has served since it was last reset. "
+     "Bounded by GITHUB_RUNNER_STORE_MAX_JOBS, because something in an aging "
+     "store correlates with a `services:` block failing to start and nobody "
+     "has identified what."),
+    ("store_resets", "store_resets_total",
+     "Times this lane's nested image store has been reset, for any of the "
+     "three reasons. A rise faster than one per store window is the lane "
+     "healing itself, which means the `services:` failure has come back."),
 )
 
 # (marker key, metric infix)

@@ -888,6 +888,42 @@ signal read green.
   so a self-hosted run can break the next HOSTED one. Labelling a lane `ubuntu-latest` is a trap:
   the fallback keys on whether a runner is CONNECTED, so a workflow silently alternates environments.
 
+### A tool that assumes a distribution, and does not check before it fails
+- **`playwright install --with-deps` supports Debian and Ubuntu only and does not detect that it
+  cannot work**: on Fedora it warns, uses the Ubuntu package list anyway and exits 127 on
+  `apt-get`. Gated on `runner.environment` rather than deleted, because hosted is the escape hatch.
+  The next missing library surfaces as Chromium failing to launch, naming neither the step nor
+  Playwright.
+
+### The lane healed itself, because the remedy had been a person
+- **`api-checks` has passed since both lanes were emptied BY HAND**, which repaired nothing. A
+  one-minute reproduction eliminated `ports:`, the runner's container-init path and the inherited
+  environment, and produced the one positive result: wiped lanes pass, lanes with ~2.5 GB of state
+  from twenty-odd jobs fail. **Not a threshold** - it failed at 2.4 GB after 21 jobs and passes at
+  2.5 GB after 39.
+- **So the state is BOUNDED rather than explained**, on three triggers, and the shim's channel out
+  of an ephemeral lane is a file in `$HOME` because that is the only part of one that outlives it.
+  The manual remedy destroyed the evidence twelve reproductions have failed to recreate, so a reset
+  with a reason keeps the store's metadata first - and a routine window reset keeps nothing, or
+  fifty of them would evict the two that matter.
+- **Three defects in one reclaim, and the first hid the other two** - it had never once fired.
+  `du` outside the user namespace read 1,383 MB against 2,500 MB actual; it cleared `home/work`,
+  which has never existed, because the workspace is `runner/_work`; and it recreated `tmp/` and
+  `storage/` without chowning them back. A check that under-reports hides everything gated behind
+  it, and code that never runs stops being reviewed.
+- **`bin/github-runner-smoke.sh` structurally cannot see either**, building a fresh lane every run,
+  which is the same blind spot that let the `db.sql` split through with a green tick.
+
+### A ceiling nothing measures is a ceiling nobody can tell is wrong
+- **Three e2e shards all pinned to `MemoryHigh` EXACTLY, to within 2 MB, with `max` and `oom_kill`
+  at 0** - the throttle working, not a ceiling under strain. Nothing was raised. `anon` alone is
+  2,607 MB of the 2,816M, so the 768M to `MemoryMax` is the whole margin.
+- **The scope is `--collect`**, so its peaks have to be sampled while the job runs; they are kernel
+  high-water marks, so the rate does not decide the answer, but the last interval before exit is
+  missed and that makes it a floor. `memory.events` is per-cgroup and the cgroup is new every job.
+- **`ai-review` now runs on a lane**, which `docs/ci.md` used to forbid. What widens is what runs,
+  not what is held: the credential is upskald's repo secret, not this host's.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

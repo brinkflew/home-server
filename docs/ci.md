@@ -305,6 +305,60 @@ still exits non-zero, stdout stays empty, the **elapsed time** proves the retrie
 than being merely intended, and `docker start -a` returns in under a second unretried. That leg
 exists because the retry is the only thing in this image that can turn a red job green.
 
+### It stopped, on a wipe, and nobody knows what was wiped away
+
+**`api-checks` has passed cleanly since both lanes were emptied by hand on 2026-08-25** - zero
+retries, zero post-mortems, `docker start` succeeding first attempt, twice in a row. That is the
+first time a `services:` block has ever worked under the real runner on this host, and **it is not
+a fix**: nothing was repaired, a person ran `rm -rf`.
+
+**A one-minute reproduction is what got that far**, after eleven that each cost a thirty-minute
+job. `lane-probe.yml`, a scratch workflow in upskald triggered by a push to one branch, carrying
+`api-checks`' service block verbatim and a body that does nothing. Four variants across an
+afternoon eliminated three hypotheses outright: `ports:` and the `rootlessport` child netns, the
+runner's own container-init path (the identical eleven calls issued **from a step** behave the
+same), and the inherited environment (`env -i` with only what podman needs behaves the same). It
+also produced the one positive result there has been: **on wiped lanes all four variants pass; on
+lanes carrying ~2.4-2.7 GB of state from twenty-odd real jobs, all four fail.**
+
+**It is not a threshold on size or on job count, which was the obvious next guess and is wrong.**
+It failed at 2.4 GB after 21 jobs. It passes at 2.5 GB after 39. Something specific accumulates and
+nothing has identified it.
+
+**So the state is bounded rather than explained, and the word used for that in
+`bin/github-runner.sh` is "bound".** `gc_lane` resets `runner/_work`, `tmp` and `storage` on three
+triggers - the disk budget that was always there, a **50-job window**, and the shim asking to be
+healed. The caches are not in what a targeted reset removes: `home/.cache` and `home/.bun` survive,
+and `actions/cache` lives on GitHub anyway, so a heal or a window reset costs one re-pull of
+postgres, redis and mailpit. **A budget reclaim does take them**, because it has to - measured on
+lane 1, home is 1,789 MB against storage's 660 MB, so a reclaim that spared the caches could not
+get back under the budget and would fire on every cycle for ever.
+
+**The self-heal is the half that matters.** When `docker start` exhausts its retries the shim
+leaves `.docker-shim-start-failed` in `$HOME` - the one part of an ephemeral lane that outlives it,
+being a bind mount - and the driver reads it at the top of the next cycle, which is the only moment
+it knows no job is running. A red job stops needing a person.
+
+**And the evidence survives it, which the manual remedy did not.** The lanes were wiped in
+front of the failure with nothing preserved, and twelve reproductions have since failed to
+recreate that state. A reset with a reason now copies `db.sql` and the layer, container and image
+json to `$GITHUB_RUNNER_ROOT/forensics/lane<N>-<stamp>-<reason>/` first - kilobytes, against the
+2.5 GB a tar of the store would cost every time, and those are the files that would carry a stale
+runroot, an orphaned mount refcount or a container the store still believes in. **A routine window
+reset keeps nothing**, deliberately: there is no anomaly in it, and fifty of them would evict the
+two that matter.
+
+**`ci.lane_store` is what stops the convenience becoming a silence.** Automating the wipe means a
+recurrence leaves no red job for anyone to notice, so a lane that healed itself is reported with
+the path to its capture. A window reset is not reported at all - it fires on a counter by design,
+and reporting it would train the reader to skip the line.
+
+**`bin/github-runner-smoke.sh` cannot see any of this**, and both affected legs now say so.
+`runner()` builds a fresh lane every run, and a fresh store is the single condition under which
+this failure has never been observed. That is the same blind spot that let the `db.sql` split pass
+with a green tick from a leg that already had the right assertion - a smoke test grades an image,
+and both of these defects live in a lane.
+
 ## Containment: what it keeps, and what it gives up
 
 Read off a live phase container while a `ship` phase was running:
@@ -547,23 +601,75 @@ code never runs here, so carrying a write token is safe", and it mints a GitHub 
 reasoning about the workflow, not about the runner. `release-please.yml` is the same shape.
 
 **Cache keys collide, and the poisoning runs both ways.** Every key in `upskald`'s
-`setup-toolchains` composite is `...-${{ runner.os }}-...`, and `runner.os` is `Linux` on hosted
+`setup-toolchains` composite was `...-${{ runner.os }}-...`, and `runner.os` is `Linux` on hosted
 and self-hosted alike. `~/.cache/prek` holds hook environments with **absolute interpreter paths**
 and `~/.cache/ms-playwright` holds browsers built against a specific glibc - so a self-hosted run
-can break the next *hosted* run, and nothing in the workflow can see it. A lane discriminator
-belongs in those keys in the same pull request that moves the first job.
+can break the next *hosted* run, and nothing in the workflow can see it. **Closed** by
+`${{ runner.environment }}` in all three key families - `bun-`, `playwright-` and `prek-` - in the
+same pull request that moved the first job, which is where a discriminator belongs.
 
-**One workflow change that is not `runs-on:`.** `e2e-tests` runs `bunx playwright install
---with-deps chromium`, and `--with-deps` shells out to `sudo apt-get` - impossible on a read-only
-rootfs and, without it, a WAN download on every job. The image bakes `playwright install-deps
-chromium` for exactly this reason. Drop `--with-deps`, and prove that one-line diff on
-`ubuntu-latest` first, in its own pull request, before the runner exists.
+**One workflow change that is not `runs-on:`, and the first e2e run off GitHub's hardware found
+it.** `e2e-tests` runs `bunx playwright install --with-deps chromium`. `--with-deps` shells out to
+`sudo apt-get`, so it supports Debian and Ubuntu and nothing else - and it **does not detect that
+it cannot work**. On the lane it warns, falls back to the `ubuntu24.04-x64` dependency list anyway,
+and only then fails on the package manager:
+
+```
+BEWARE: your OS is not officially supported by Playwright; installing dependencies
+        for ubuntu24.04-x64 as a fallback.
+sh: line 1: apt-get: command not found
+Error: Installation process exited with code: 127
+```
+
+All three shards, on the first run that ever reached this step. The libraries were never missing:
+`apps/github-runner/Dockerfile` installs the chromium set with `dnf` and **names each one**,
+precisely because Playwright cannot install them here.
+
+**Gated on `runner.environment`, not deleted, and this paragraph used to advise deleting it.**
+Dropping `--with-deps` outright would leave the hosted path - the escape hatch the whole
+`vars.CI_RUNNER` indirection exists to preserve - depending on GitHub's image happening to carry
+Playwright's library set, which is the assumption Playwright's own documentation says not to make.
+The conditional leaves hosted byte-for-byte as it was and needs no proof run at all:
+
+```yaml
+run: bunx playwright install ${{ runner.environment == 'github-hosted' && '--with-deps' || '' }} chromium
+```
+
+**A Playwright bump that needs a new library will not fail at that step.** Nothing on the lane
+re-derives the list, so the symptom is Chromium failing to launch on a missing `.so` several steps
+later, naming the library and not the step. The fix is a line in that Dockerfile. `e2e-full.yml`
+carries the same conditional while staying pinned to `ubuntu-latest`, where it is inert - written
+so that pointing the nightly matrix at a lane is a `runs-on:` change and not a rediscovery of this.
 
 Suggested order, because it puts the cheap failures first: the compute-heavy jobs with no
 `services:` (`pre-commit`, `scripts-tests`, `web-checks`, `web-build`); then `api-checks`, the
-first single-service job; then `e2e-tests`, only once a shard has been measured to fit. `ai-review`
-stays hosted - it needs the Anthropic credential, and this host's rule is that a model credential
-reaches exactly one container, which is the phase runner.
+first single-service job; then `e2e-tests`, only once a shard has been measured to fit.
+
+### `ai-review` on the lane, which this file used to forbid
+
+**It said: `ai-review` stays hosted - it needs the Anthropic credential, and this host's rule is
+that a model credential reaches exactly one container, which is the phase runner.** That was
+decided against on 2026-08-26 and every job in `ci.yml` now follows `CI_RUNNER`. Recorded as a
+widening rather than quietly deleted, because the sentence it replaces was a boundary.
+
+**The rule it appeared to breach is about a different credential.** "One container" governs *this
+host's* model credential - the `claude setup-token` under the phase runner, which is the
+account this repository pays for and which `docs/agents.md` bounds. `ai-review`'s key is
+**upskald's own repository secret**, injected by GitHub into a job, owned by that repository and
+revocable there. A lane already receives `GITHUB_TOKEN` and every other secret its jobs name; this
+is one more of them, not the host's.
+
+**What genuinely widens is what runs, not what is held.** `claude-code-action` starts a model-driven
+agent inside a lane, with the checkout and network egress. What bounds it is the containment the
+rest of this document describes and nothing else: an ephemeral rootless container on an
+`isolate=true` network, SELinux `container_engine_t`, a read-only rootfs, no host socket, and a
+scope that dies at `RuntimeMaxSec`. That is the same boundary a `pull_request` job already runs
+inside - the difference is that this one is *supposed* to be autonomous.
+
+**Two consequences worth saying out loud.** The Anthropic credential now exists in a second place,
+so revoking it is a two-repository operation. And the lane's egress is not filtered, so a
+compromised action reaches the internet - which was true of `bun install` before it and is why the
+network is isolated from every stack segment rather than from the WAN.
 
 ## Commands
 
@@ -622,18 +728,49 @@ the lanes behind `vars.CI_RUNNER`:
   hosted (1.0x), `scripts-tests` 1.1x, `web-build` 1.2x. Two cores cost almost nothing, and the
   pipeline is dependency-bound - a 1,513s critical path against a 25m32s hosted wall clock - so two
   lanes are enough.
-- **Ten of the eleven jobs pass.** The eleventh is `api-checks`, above.
+- **Every one of the eleven jobs passes**, as of 2026-08-26. `api-checks` twice in a row with zero
+  retries and zero post-mortems, and all three `e2e-tests` shards - three service containers each,
+  postgres, redis and mailpit - green on their first run off GitHub's hardware.
+
+**An e2e shard fits, and the numbers that say so are not the peak.** Measured off the transient
+scopes' own cgroups, three shards, two of them concurrent, which is the worst case the slice is
+sized against:
+
+```
+scope memory.peak      2,816-2,818 MB   all three shards, and api-checks too
+scope memory.stat anon 2,607 MB worst
+scope memory.events    high climbing to 2,197; max 0; oom_kill 0
+scope pids.peak        316 of 1,024
+slice memory.peak      5,634 MB of 5,632M MemoryHigh
+slice pids.peak        623 of 2,048
+memory.pressure some   avg10 0.00-4.11%
+shard wall clock       6m against the job's own timeout-minutes: 25
+```
+
+**Every shard pinned itself to `MemoryHigh` exactly** - 2,816M is the scope's `MemoryHigh` and
+three independent jobs landed on it to within 2 MB - which is the throttle doing what it is for
+and not a ceiling under strain. `max` stayed 0 and `oom_kill` stayed 0, so no allocation was ever
+refused. **Nothing was raised**, and `host/systemd/app-ci.slice` has been rewritten from these
+numbers rather than from the guesses it shipped with.
+
+**The margin is what absorbed it and it is tighter here than next door.** `anon` alone is 2,607 MB,
+so 93% of `MemoryHigh` is memory genuinely in use rather than reclaimable cache, and the 768M
+between `MemoryHigh` and `MemoryMax` is the whole of the headroom - against `app-agents.slice`'s
+1,042M for a workload with no browser and no service containers. A heavier suite is what crosses
+it, and it arrives as an `oom_kill` rather than as a slow job.
+
+**And raising the scope alone would move the throttle rather than add headroom**: two lanes at
+`MemoryHigh` sum to 5,632M, which is the slice's `MemoryHigh` to the megabyte. The pair moves
+together or neither does.
 
 **Not yet proved, and none of it can be settled from a workstation:**
 
-- **The cause of the `api-checks` failure.** The retry is a treatment, and the section above says so
+- **The cause of the `api-checks` failure.** It stopped on a manual wipe and the state that was
+  wiped is gone; the retry is a treatment and the reset is a bound. The two sections above say so
   rather than implying otherwise.
-- **That an e2e shard fits.** With e2e skipped entirely the slice reached **4,775 MB of 5,632 MB
-  `MemoryHigh` (85%)**, `high=12148`, `max=0`, `oom_kill=0`, worst `memory.pressure some avg10` at
-  1.72% - throttling rather than starvation, but 85% before the heaviest job has run at all. It is
-  blocked behind `api-checks`, which `e2e-tests` needs.
-- **Every memory and CPU number in `host/systemd/app-ci.slice`.** That file says so itself and
-  asks to be rewritten from `memory.peak` and `pids.peak` after the first e2e shard.
+- **That the bound holds.** `gc_lane`'s 50-job window and the shim's self-heal have not yet been
+  exercised by a real recurrence - only by a hand-planted breadcrumb. What would prove them is
+  `ci.lane_store` firing on its own, which is a thing to hope does not happen.
 - **Whether `/run` at 128m is enough for a job that does something unusual with it.** It is two
   orders of magnitude above the engine's own runtime state, and the smoke test grades the ceiling
   rather than the usage, so an overrun would surface as a job failure and not as a warning.
