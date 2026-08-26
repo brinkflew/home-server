@@ -706,6 +706,20 @@ nap() {
 	while [ "$left" -gt 0 ] && [ "$stopping" = 0 ]; do
 		sleep 2
 		left=$(( left - 2 ))
+		# EVERY TWO SECONDS, NOT EVERY THIRTY, AND THE DIFFERENCE WAS MEASURED
+		# RATHER THAN ARGUED. Sampling once per poll left the marker up to
+		# POLL_SEC behind: caught mid-e2e-shard, the driver held 2,266 MB
+		# against an independent sampler's 2,817 MB - 551 MB, or 15% of
+		# MemoryMax, of a ceiling this is supposed to be grading. pids.peak
+		# agreed exactly at 120, which is what said the gap was staleness and
+		# not the reader.
+		#
+		# It costs three small reads of an already-open cgroup every two seconds
+		# per lane, and it only narrows the window - it does not close it. A peak
+		# reached in the last two seconds before the container exits is still
+		# missed, so this remains a floor on the true peak. Said here as well as
+		# at sample_scope, because this is the line that decides how good a floor.
+		sample_scope
 	done
 }
 
@@ -934,7 +948,6 @@ while [ "$stopping" = 0 ]; do
 
 	while kill -0 "$run_pid" 2>/dev/null && [ "$stopping" = 0 ]; do
 		nap "$POLL_SEC"
-		sample_scope
 		[ "$stopping" = 0 ] || break
 		kill -0 "$run_pid" 2>/dev/null || break
 

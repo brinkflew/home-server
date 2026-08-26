@@ -2775,6 +2775,12 @@ now keeps both off each transient scope, in the marker, as a high-water mark acr
 - **`memory.events` counts within ONE cgroup and the cgroup is new every job**, so folding it into
   a lifetime counter on every poll would add the same job's events once per poll. Per-job, then
   added once at the end.
+- **Sampling once per 30-second poll left the marker 551 MB low**, measured mid-shard against an
+  independent sampler: driver 2,266 MB, sampler 2,817 MB, **`pids.peak` agreeing exactly at 120**,
+  which is what said the gap was staleness rather than a bad reader. 15% of MemoryMax on the one
+  number the check exists to grade. It now samples on `nap()`'s two-second tick - the tick that
+  already exists so a SIGTERM does not have to outwait a sleep - which narrows the window
+  fifteen-fold and still does not close it.
 - **Grade on the events, never on the peak.** `memory.peak` includes page cache, and
   `app-agents.slice` records that exact reading being misread once already - 3,566M of apparent
   pressure that was `uv sync` cache being reclaimed as designed. `memory.events max` is the hard
