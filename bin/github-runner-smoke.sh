@@ -509,15 +509,21 @@ rt=$(runner sh -c '
 	out=$(docker start no-such-container-shimprobe 2>/tmp/shimerr); rc=$?
 	el=$(( $(date +%s) - t0 ))
 	n=$(grep -c "retry . of " /tmp/shimerr 2>/dev/null)
+	# And the SECOND one by name. Counting alone passed a shim whose retry
+	# counter was clobbered by the loop variable inside the post-mortem, so both
+	# announcements read "retry 1 of 2" - and on a store with layers in it the
+	# guard then broke the loop early and the second retry never ran at all. A
+	# fresh lane hid that completely, which is why this asks for the number.
+	n2=$(grep -c "retry 2 of " /tmp/shimerr 2>/dev/null)
 	# And the attach guard: `docker start -a` returns the exit code OF THE
 	# CONTAINER, so retrying one would run the container twice. Never retried.
 	t1=$(date +%s)
 	docker start -a no-such-container-shimprobe >/dev/null 2>&1
 	ael=$(( $(date +%s) - t1 ))
-	echo "rc=$rc len=${#out} el=$el n=$n ael=$ael"
+	echo "rc=$rc len=${#out} el=$el n=$n n2=$n2 ael=$ael"
 ' 2>/dev/null | tail -1 | tr -d '\r')
 
-eval "$(printf %s "$rt" | tr ' ' '\n' | grep -E '^(rc|len|el|n|ael)=[0-9]+$' | sed 's/^/shim_/')"
+eval "$(printf %s "$rt" | tr ' ' '\n' | grep -E '^(rc|len|el|n|n2|ael)=[0-9]+$' | sed 's/^/shim_/')"
 if [ -z "${shim_rc:-}" ]; then
 	bad "the docker shim retry probe returned '${rt:-nothing}' - it did not run, so nothing here is asserted"
 elif [ "$shim_rc" = 0 ]; then
@@ -526,6 +532,8 @@ elif [ "${shim_len:-1}" != 0 ]; then
 	bad "a failing 'docker start' put $shim_len bytes on stdout - the retry is echoing something DockerCommandManager.cs would parse as a container id"
 elif [ "${shim_n:-0}" -lt 2 ]; then
 	bad "the shim announced ${shim_n:-0} retries and should announce 2 - the retry path did not run, so this leg proves nothing about it"
+elif [ "${shim_n2:-0}" != 1 ]; then
+	bad "the shim never announced 'retry 2 of 2' - its retry counter is being overwritten, which in a POSIX shell means some function it calls shares the variable. Both announcements reading 'retry 1' also means the loop guard is comparing the wrong number"
 elif [ "${shim_el:-0}" -lt 6 ]; then
 	bad "a failing 'docker start' took ${shim_el}s and the declared backoff is 2s+5s - the retries were not actually attempted"
 elif [ "${shim_ael:-9}" -ge 2 ]; then

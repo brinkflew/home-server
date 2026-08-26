@@ -66,32 +66,41 @@ BACKOFF="2 5"
 
 S=/var/lib/nested-storage
 
+# EVERY VARIABLE IN HERE IS PREFIXED, AND THE FIRST VERSION WAS NOT. A POSIX
+# shell function has no locals, so this function's own loop counter and the retry
+# loop's counter were both `n` - and calling the post-mortem from inside the retry
+# loop reset it. The visible symptom was two announcements both reading
+# "retry 1 of 2"; the invisible one was that the loop's own `-le "$RETRIES"` guard
+# was reading a layer count, so a longer backoff list would have retried more
+# times than the constant says. Caught by bin/github-runner-smoke.sh's new leg on
+# its first run, which is the entire reason that leg counts the announcements
+# instead of trusting them.
 postmortem() {
-	rc=$1
+	pm_rc=$1
 	shift
 	[ -d "$S" ] || return 0
 	{
 		echo "::group::home-server lane: post-mortem for a failed 'docker start'"
-		echo "rc=$rc  argv=$*"
+		echo "rc=$pm_rc  argv=$*"
 		echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 		echo "--- store ---"
 		/usr/bin/podman info --format '{{.Store.GraphDriverName}} root={{.Store.GraphRoot}} run={{.Store.RunRoot}}' 2>&1
-		n=0
-		for d in "$S"/overlay/*/; do
-			b=$(basename "$d")
-			case "$b" in l | tempdirs) continue ;; esac
-			n=$((n + 1))
-			[ -d "$d/merged" ] || echo "  NO merged/: $b"
+		pm_n=0
+		for pm_d in "$S"/overlay/*/; do
+			pm_b=$(basename "$pm_d")
+			case "$pm_b" in l | tempdirs) continue ;; esac
+			pm_n=$((pm_n + 1))
+			[ -d "$pm_d/merged" ] || echo "  NO merged/: $pm_b"
 			# An overlay dir whose merged/ exists but is EMPTY is the shape the error
 			# implies - a mount that did not take, so the rootfs has no /run for
 			# .containerenv to land in. `merged` missing and `merged` empty are
 			# different failures and the message cannot tell them apart.
-			if [ -d "$d/merged" ] && [ -z "$(ls -A "$d/merged" 2>/dev/null)" ]; then
-				echo "  EMPTY merged/: $b"
+			if [ -d "$pm_d/merged" ] && [ -z "$(ls -A "$pm_d/merged" 2>/dev/null)" ]; then
+				echo "  EMPTY merged/: $pm_b"
 			fi
 		done
-		echo "  layers=$n  overlay-mounts=$(grep -c ' overlay ' /proc/self/mountinfo 2>/dev/null)"
+		echo "  layers=$pm_n  overlay-mounts=$(grep -c ' overlay ' /proc/self/mountinfo 2>/dev/null)"
 
 		echo "--- containers podman still knows about ---"
 		/usr/bin/podman ps -a --format '  {{.ID}} {{.Status}} {{.Image}}' 2>&1 | head -10
@@ -139,18 +148,18 @@ if [ "${attach:-0}" = 1 ]; then
 	exit "$rc"
 fi
 
-n=0
+try=0
 for pause in $BACKOFF; do
-	n=$((n + 1))
-	[ "$n" -le "$RETRIES" ] || break
-	echo "home-server lane: 'docker start' failed with $rc; retry $n of $RETRIES in ${pause}s." >&2
+	try=$((try + 1))
+	[ "$try" -le "$RETRIES" ] || break
+	echo "home-server lane: 'docker start' failed with $rc; retry $try of $RETRIES in ${pause}s." >&2
 	echo "  This is apps/github-runner/scripts/docker-shim.sh, not the workflow." >&2
 	sleep "$pause"
 
 	/usr/bin/podman "$@"
 	rc=$?
 	if [ "$rc" -eq 0 ]; then
-		echo "home-server lane: retry $n succeeded. The first attempt's post-mortem is" >&2
+		echo "home-server lane: retry $try succeeded. The first attempt's post-mortem is" >&2
 		echo "  above and is worth reading - this path exists because the cause is" >&2
 		echo "  still unknown. See docs/ci.md." >&2
 		exit 0
