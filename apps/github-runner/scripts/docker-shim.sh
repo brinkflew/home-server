@@ -65,6 +65,51 @@ RETRIES=2
 BACKOFF="2 5"
 
 S=/var/lib/nested-storage
+U=$(id -u)
+
+# ONE LINE PER `create` AND `start`, AND IT COSTS NO PODMAN INVOCATION.
+# A job makes roughly twenty `docker` calls; starting an engine to ask `podman
+# info` on each of them would be twenty engine starts and would perturb the very
+# thing being measured. Everything below is `[ -e ]` tests and one read of
+# /proc/1/environ.
+#
+# WHAT IT IS LOOKING FOR is two engines in one lane disagreeing about where the
+# runtime state lives. libpod's `db.sql` records the runroot it was created with,
+# and that beats both the environment and storage.conf; the rootless pause
+# process is registered from the environment instead. When those differ, `alive`
+# and `pause.pid` land in different directories - and since containers/storage
+# keeps overlay mount refcounts under the runroot, one engine can believe a layer
+# is mounted that the other never mounted. runner-init repairs the known cause at
+# start-up; this is what would show a second one.
+#
+# PID 1 IS Runner.Listener IN A LANE, and its environment is what every job step
+# inherits, so a difference between it and this process is the actions runner
+# rewriting the runtime directory - a cause runner-init cannot see. It is
+# readable because runner-init drops to this uid BEFORE it execs.
+#
+# Printed on the SUCCESS path too, deliberately: a failing job's line means
+# nothing without a passing one beside it.
+fingerprint() {
+	fp_a=
+	fp_p=
+	fp_n=0
+	for fp_d in "${XDG_RUNTIME_DIR:-}" /tmp/podman-run "/tmp/podman-run-$U" \
+		"/run/user/$U" "${TMPDIR:-/tmp}/podman-run-$U"; do
+		[ -n "$fp_d" ] || continue
+		if [ -e "$fp_d/libpod/tmp/alive" ]; then
+			fp_a="$fp_a$fp_d,"
+			fp_n=$((fp_n + 1))
+		fi
+		[ -e "$fp_d/libpod/tmp/pause.pid" ] && fp_p="$fp_p$fp_d,"
+	done
+	fp_1=$(tr '\0' '\n' < /proc/1/environ 2>/dev/null | sed -n 's/^XDG_RUNTIME_DIR=//p')
+	fp_t=ok
+	[ "$fp_n" = 1 ] || fp_t=SPLIT
+	[ "$fp_a" = "$fp_p" ] || fp_t=SPLIT
+	[ "${fp_1:-${XDG_RUNTIME_DIR:-}}" = "${XDG_RUNTIME_DIR:-}" ] || fp_t=SPLIT
+	printf '%s x=%s p1=%s alive=%s pause=%s' "$fp_t" \
+		"${XDG_RUNTIME_DIR:-unset}" "${fp_1:-unset}" "${fp_a:-none}" "${fp_p:-none}"
+}
 
 # EVERY VARIABLE IN HERE IS PREFIXED, AND THE FIRST VERSION WAS NOT. A POSIX
 # shell function has no locals, so this function's own loop counter and the retry
@@ -85,7 +130,27 @@ postmortem() {
 		echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 		echo "--- store ---"
-		/usr/bin/podman info --format '{{.Store.GraphDriverName}} root={{.Store.GraphRoot}} run={{.Store.RunRoot}}' 2>&1
+		/usr/bin/podman info --format '{{.Store.GraphDriverName}} root={{.Store.GraphRoot}} run={{.Store.RunRoot}} conf={{.Store.ConfigFile}}' 2>&1
+
+		# HERE THE EXTRA ENGINE STARTS ARE AFFORDABLE - this runs once, on a job
+		# that has already failed. The debug lines name all four directories at
+		# once, and `mountpoints.json` is the file containers/storage uses to
+		# decide a layer is already mounted. Twelve layers listed there beside the
+		# `overlay-mounts=1` printed below is the two-engine mechanism, caught in
+		# the act rather than inferred.
+		echo "--- runtime dirs ---"
+		echo "  $(fingerprint)"
+		/usr/bin/podman --log-level=debug info 2>&1 |
+			grep -E 'Using (run root|graph root|static dir|tmp dir)' | sed 's/^/  /'
+		for pm_r in "${XDG_RUNTIME_DIR:-}" /tmp/podman-run "/run/user/$U"; do
+			[ -n "$pm_r" ] || continue
+			[ -d "$pm_r" ] || continue
+			echo "  $pm_r/libpod/tmp: $(find "$pm_r/libpod/tmp" -maxdepth 1 -mindepth 1 -printf '%f ' 2>/dev/null)"
+			pm_mp="$pm_r/containers/overlay-layers/mountpoints.json"
+			if [ -f "$pm_mp" ]; then
+				echo "    mountpoints.json: $(wc -c <"$pm_mp") bytes"
+			fi
+		done
 		pm_n=0
 		for pm_d in "$S"/overlay/*/; do
 			pm_b=$(basename "$pm_d")
@@ -122,6 +187,12 @@ postmortem() {
 		echo "::endgroup::"
 	} >&2
 }
+
+# BEFORE the call, so it cannot disturb $?, and only for the two verbs that
+# create and mount a rootfs. stderr only - stdout is the runner's.
+case "${1:-}" in
+create | start) echo "home-server lane: engine-fp $1 $(fingerprint)" >&2 ;;
+esac
 
 /usr/bin/podman "$@"
 rc=$?

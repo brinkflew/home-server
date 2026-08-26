@@ -663,11 +663,26 @@ else
 	bad "a host container socket is visible inside the lane - that is root-equivalent for 'core' and the whole three-tier design rests on it being unreachable"
 fi
 
+# THIS LEG USED TO PROVE SOMETHING ELSE THAN IT CLAIMED. It ran
+# `docker info` and reported "the endpoint DOCKER_HOST points at" - but `docker`
+# is apps/github-runner/scripts/docker-shim.sh, which execs the LOCAL podman;
+# podman honours CONTAINER_HOST, not DOCKER_HOST, and the shim passes neither
+# --remote nor --url. So it measured the local engine's graph root and asserted
+# nothing whatsoever about the socket. Both are worth knowing, so both are asked
+# - the local engine by the shim, and the socket by an explicit --remote.
 root=$(runner docker info --format '{{.Store.GraphRoot}}' 2>/dev/null | tr -d '\r\n')
 if [ "$root" = /var/lib/nested-storage ]; then
-	ok "the endpoint DOCKER_HOST points at is the nested engine, on the lane's own store"
+	ok "the engine a job's 'docker' calls reach is the nested one, on the lane's own store"
 else
 	bad "docker info reports graph root '${root:-nothing}', not /var/lib/nested-storage - a job's containers are not going where this design says they go"
+fi
+
+# shellcheck disable=SC2016  # $DOCKER_HOST is the CONTAINER's, not this shell's
+sockroot=$(runner sh -c 'podman --remote --url "$DOCKER_HOST" info --format "{{.Store.GraphRoot}}"' 2>/dev/null | tr -d '\r\n')
+if [ "$sockroot" = /var/lib/nested-storage ]; then
+	ok "the socket DOCKER_HOST names answers, and serves the same store"
+else
+	bad "nothing usable answered on DOCKER_HOST (got '${sockroot:-nothing}') - runner-init starts 'podman system service' on it and an action using the Docker API rather than the CLI would find no daemon"
 fi
 
 # THE ENGINE'S RUNTIME STATE MUST NOT SHARE A FILESYSTEM WITH THE JOB'S SCRATCH.
@@ -676,11 +691,22 @@ fi
 # every nested layer is mounted into sat on the 1777, 512 MB tmpfs a job's steps
 # write to. A step that fills it or sweeps it takes the engine with it.
 #
-# THE SECOND HALF IS THE ONE THAT WOULD HAVE CAUGHT THE ORIGINAL. storage.conf
-# has always named a runroot and podman has always ignored it in favour of
-# XDG_RUNTIME_DIR - silently, exactly as graphroot loses to
-# rootless_storage_path. So asking the ENGINE where it actually put things is the
-# only assertion worth making; reading the file back would have passed throughout.
+# THE SECOND HALF ASKS THE ENGINE RATHER THAN THE FILE. storage.conf names a
+# runroot and podman may ignore it - silently, the way graphroot loses to
+# rootless_storage_path - so reading the file back would pass whatever happens.
+#
+# WHAT THIS LEG CANNOT SEE, AND IT IS THE FAILURE THAT ACTUALLY HAPPENED.
+# `runner()` builds a FRESH lane every run, and the defect needs a lane that has
+# already run work: libpod records its runroot in `db.sql` at the root of the
+# graph root, that file outlives an image upgrade, and podman then uses the
+# recorded value over both the environment and this file. A fresh lane has no
+# db.sql to be stale, so this leg passed on an image whose live lanes were
+# running two engines over one store. `ci.runtime_dir` in bin/verify-host.sh is
+# the assertion that can see it, because it reads a RUNNING lane.
+#
+# It is kept because it still catches the configuration-level case - an image
+# that ships its runtime directory on the job's own /tmp, or an uncapped /run -
+# and those are real. It is not evidence about a split.
 # shellcheck disable=SC2016  # this runs in the CONTAINER, so nothing may expand here
 rr=$(runner sh -c 'printf "%s|%s|%s" "$XDG_RUNTIME_DIR" "$(podman info --format "{{.Store.RunRoot}}" 2>/dev/null)" "$(df -m /run 2>/dev/null | tail -1 | awk "{print \$2}")"' 2>/dev/null | tail -1 | tr -d '\r\n')
 xdg=${rr%%|*}
@@ -697,6 +723,26 @@ elif [ -n "${runmb##*[!0-9]*}" ] && [ "$runmb" -gt 512 ]; then
 	bad "/run inside the lane is ${runmb} MB - an unsized tmpfs is charged to the container's MEMORY budget, and this one is meant to be capped at 128 MB by bin/github-runner.sh"
 else
 	ok "the engine's runtime state is at $runroot, off the job's /tmp, on a ${runmb} MB capped tmpfs"
+fi
+
+# THE RUNNER TREE IS THE ONE MOUNT NOTHING EVER CLEANS, and two files in it can
+# rewrite the environment of every job step. `Runner.Listener` reads `.env` at
+# start-up and applies each KEY=VALUE to itself; `.path` replaces PATH the same
+# way. Both are GitHub's documented mechanism for proxy settings on a self-hosted
+# runner, and both are inherited by every `docker` call a workflow makes.
+#
+# `bin/github-runner.sh` seeds that tree once - `[ ! -x run.sh ]` - and its
+# garbage collection clears `home/work`, `tmp` and `storage` and deliberately
+# leaves `runner` alone, because the runner self-updates into it and must run
+# ahead of the image's ARG. So a file written there under one image is read by
+# every image after it, for ever, and nothing else on this host would notice.
+#
+# The seed is a verbatim extraction of GitHub's tarball plus `.seed-version`, and
+# the tarball ships neither file - so their presence means something wrote them.
+if runner sh -c 'test ! -e /opt/actions-runner/.env && test ! -e /opt/actions-runner/.path'; then
+	ok "the runner tree carries no .env or .path, so nothing rewrites a job step's environment"
+else
+	bad "/opt/actions-runner/.env or .path exists - Runner.Listener applies both to every job step, and that tree is never re-seeded or garbage collected, so whatever they set outlives every image built after them. Read them before deleting: they are the only place a stale XDG_RUNTIME_DIR or DOCKER_HOST could survive an image upgrade"
 fi
 
 if runner sh -c 'test ! -d /var/home-server/config && test ! -d /mnt/media && test ! -d /var/home-server/cache/conduct'; then

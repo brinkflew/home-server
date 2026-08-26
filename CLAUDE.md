@@ -618,6 +618,24 @@ signal read green.
   start` writes zero bytes to stdout, which is the only reason a retry is safe; `docker start -a`
   returns the CONTAINER's exit code, so it must never be retried.
 
+### The store remembered the old runroot, and podman believed it over everything
+- **libpod records its runroot in `db.sql` at the root of the GRAPH ROOT**, a lane bind mount
+  that outlives every image upgrade - and podman uses the recorded value over the environment
+  AND `storage.conf`, silently. Third of a family, after `graphroot` and `runroot`.
+- The result is **two engines over one store**: `pause.pid` under one runtime dir, `alive` and
+  `exits` under another, with mount refcounts split between them.
+- **Reproduced on demand after ten reproductions that fired at nothing** - and the repair is
+  deleting `db.sql` alone, never the store. **A split is NOT sufficient to break
+  `docker start`**, so it is not the `api-checks` fix.
+- **The smoke test already had the assertion and reported `ok`**, because `runner()` builds a
+  FRESH lane and a fresh lane has no stale `db.sql`. The gate is `ci.runtime_dir` in
+  `verify-host.sh`, which reads a RUNNING lane - **proved to FAIL before it was trusted**.
+- **`podman exec` without `--user` is container root and reports `rootless: false`**, a
+  different code path; it answered `/tmp` for a lane whose jobs used `/run`.
+- A smoke leg ran `docker info` and claimed to prove `DOCKER_HOST` - but the shim execs LOCAL
+  podman, which honours `CONTAINER_HOST`. `.env`/`.path` in the never-cleaned runner tree
+  rewrite every job step's environment.
+
 ### A backlog is a corpus, and the parent task is in it
 - Nothing ever asked the tracker whether a follow-up already existed, so a re-run re-filed its own
   follow-ups and a duplicate of a task a PERSON wrote was never checked at all.
