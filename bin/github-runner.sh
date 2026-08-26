@@ -104,6 +104,13 @@ STORE_MAX_JOBS="${GITHUB_RUNNER_STORE_MAX_JOBS:-50}"
 # job log this process never sees.
 HEAL_FLAG="home/.docker-shim-start-failed"
 
+# THE ONLY EVIDENCE TAKEN AT THE INSTANT OF FAILURE. The shim tees its
+# post-mortem here as well as to the job log, because the job log is on GitHub,
+# expires, and cannot be read against the next occurrence - while the capture
+# this driver takes 21 seconds later is POST-CLEANUP by construction and was
+# measured to be byte-for-byte the shape of a healthy store.
+HEAL_LOG="home/.docker-shim-postmortem.log"
+
 # The transient scope's cgroup lives here. Same path bin/verify-host.sh builds
 # for ci.slice_limits, and it is derived rather than written out because the
 # `app-` prefix is what nests it under app.slice.
@@ -475,6 +482,7 @@ lane_forensics() {
 			"$dest/$(printf '%s' "$n" | tr / -)" 2>/dev/null || true
 	done
 	cp "$MARKER" "$dest/marker" 2>/dev/null || true
+	podman unshare cp "$LANE_ROOT/$HEAL_LOG" "$dest/postmortem.log" 2>/dev/null || true
 	{
 		printf 'reason=%s\n' "$reason"
 		printf 'lane=%s\n' "$LANE"
@@ -546,7 +554,11 @@ lane_reset() {
 		podman unshare chown -R 1000:1000 "$LANE_ROOT/$d" 2>/dev/null ||
 			log "WARNING: could not chown $LANE_ROOT/$d back into the container's namespace - the next lane will not be able to write its own store"
 	done
-	podman unshare rm -f "${LANE_ROOT:?}/$HEAL_FLAG" 2>/dev/null
+	# BOTH, and the log with the flag rather than kept: it is appended to, so
+	# leaving it would put every previous failure into the next capture and make
+	# the one that caused this reset impossible to pick out. The copy above is
+	# what preserves it.
+	podman unshare rm -f "${LANE_ROOT:?}/$HEAL_FLAG" "${LANE_ROOT:?}/$HEAL_LOG" 2>/dev/null
 
 	store_jobs=0
 	store_resets=$(( store_resets + 1 ))
