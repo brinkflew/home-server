@@ -2725,6 +2725,69 @@ if [ -z "$GREENBOOT" ]; then
 	fi
 
 	# --------------------------------------------------------------------------
+	# One engine per lane, or none of the containment below means anything.
+	# --------------------------------------------------------------------------
+	# libpod RECORDS ITS RUNROOT IN db.sql AT THE ROOT OF THE GRAPH ROOT, and the
+	# graph root is a lane bind mount that outlives every image upgrade. Change
+	# XDG_RUNTIME_DIR and podman does not complain: it reads the recorded value
+	# and uses it, while the rootless pause process is still registered from the
+	# environment. The lane then runs two engines over one store -
+	# `pause.pid` under one runtime directory, `alive`/`events`/`exits` under
+	# another - and containers/storage keeps overlay mount refcounts under the
+	# runroot, so each can believe a layer is mounted that the other never
+	# mounted. The symptom is `docker create` succeeding and `docker start`
+	# opening `.containerenv` in an empty rootfs.
+	#
+	# THIS CANNOT LIVE IN bin/github-runner-smoke.sh, and that is the whole reason
+	# it is here. That script builds a fresh lane per run, and a fresh lane has no
+	# db.sql to be stale - so the assertion passes there whatever the deployed
+	# image does. Only a lane that has already run work can show it, and this is
+	# the only battery on this host that looks at one.
+	#
+	# AS uid 1000, NOT THE DEFAULT. `podman exec` without --user is container
+	# root, which reports `rootless: false` and resolves its runtime directory by
+	# a different code path entirely - it answered /tmp for a lane whose jobs were
+	# using /run and sent this investigation the wrong way for an hour.
+	ci_rt_containers=$(podman ps --format '{{.Names}}' 2>/dev/null | grep -E '^ci-[0-9]+-' || true)
+	if [ -z "$ci_rt_containers" ]; then
+		fact github_runner_runtime_split ""
+		note ci.runtime_dir "no CI lane container is running, so the engine's runtime directory was not measured - this is not a pass"
+	else
+		ci_rt_bad=""
+		ci_rt_seen=0
+		while read -r ci_rt_c; do
+			[ -n "$ci_rt_c" ] || continue
+			ci_rt_seen=$((ci_rt_seen + 1))
+			# File tests only - asking `podman info` would start an engine inside
+			# a lane that may be mid-job, and it would answer with the stale value
+			# rather than reveal it.
+			ci_rt_out=$(podman exec --user 1000 "$ci_rt_c" sh -c '
+				printf "X=%s\n" "$XDG_RUNTIME_DIR"
+				for d in "$XDG_RUNTIME_DIR" /tmp/podman-run /tmp/podman-run-$(id -u) /run/user/$(id -u); do
+					[ -n "$d" ] || continue
+					[ -e "$d/libpod/tmp/alive" ] && printf "A=%s\n" "$d"
+					[ -e "$d/libpod/tmp/pause.pid" ] && printf "P=%s\n" "$d"
+				done' 2>/dev/null)
+			ci_rt_x=$(printf '%s\n' "$ci_rt_out" | sed -n 's/^X=//p' | head -1)
+			ci_rt_a=$(printf '%s\n' "$ci_rt_out" | sed -n 's/^A=//p' | sort -u)
+			ci_rt_p=$(printf '%s\n' "$ci_rt_out" | sed -n 's/^P=//p' | sort -u)
+			if [ -z "$ci_rt_x" ]; then
+				ci_rt_bad="$ci_rt_bad $ci_rt_c(unreadable)"
+			elif [ "$ci_rt_a" != "$ci_rt_p" ] || [ "$ci_rt_a" != "$ci_rt_x" ]; then
+				ci_rt_bad="$ci_rt_bad $ci_rt_c(env=$ci_rt_x live=${ci_rt_a:-none} pause=${ci_rt_p:-none})"
+			fi
+		done <<<"$ci_rt_containers"
+
+		if [ -n "$ci_rt_bad" ]; then
+			fact github_runner_runtime_split 1
+			bad ci.runtime_dir "a CI lane runs TWO podman engines over one store -$ci_rt_bad. libpod's db.sql in the lane's graph root records the runroot it was created with and silently beats both the environment and storage.conf, so overlay mount refcounts land in two places and a service container creates but will not start. apps/github-runner/scripts/runner-init.sh removes a stale db.sql at lane start; a lane reaching this state means that guard did not fire"
+		else
+			fact github_runner_runtime_split 0
+			ok ci.runtime_dir "$ci_rt_seen CI lane(s) keep the engine's runtime state in one directory"
+		fi
+	fi
+
+	# --------------------------------------------------------------------------
 	# The ceiling, read out of the cgroup.
 	# --------------------------------------------------------------------------
 	# THE FAILURE THIS EXISTS FOR IS SILENCE, and it is the same one

@@ -123,6 +123,45 @@ fi
 # is only the directory it expects to find.
 mkdir -p "$HOME/.config" "$HOME/.local/share"
 
+# THE STORE REMEMBERS WHERE THE ENGINE'S RUNTIME STATE USED TO LIVE, AND IT WINS.
+# libpod keeps its state in `db.sql` at the root of the graph root, and that
+# database records the runroot and tmpdir it was CREATED with. The graph root is
+# a lane bind mount that survives every image upgrade, so changing
+# XDG_RUNTIME_DIR leaves a database naming the old one - and podman does not
+# error on the mismatch. It reads the recorded value and uses it.
+#
+# WHAT THAT PRODUCES IS A SPLIT ENGINE, reproduced synthetically three times:
+#
+#   /run/podman-run/libpod/tmp/   pause.pid ONLY   <- from XDG_RUNTIME_DIR
+#   /tmp/podman-run/libpod/tmp/   alive, events, exits, persist  <- from db.sql
+#
+# with `podman info` reporting the database's runroot while the process holding
+# the user namespace is registered under the environment's. containers/storage
+# keeps overlay mount refcounts under the runroot, so two engines disagreeing
+# about it can each believe the other mounted a layer - which is `docker create`
+# succeeding and `docker start` opening `.containerenv` in an empty rootfs.
+#
+# ONLY db.sql IS REMOVED, NOT THE STORE. The images below it are the reason the
+# store is a mount of its own, and re-pulling postgres on every path change would
+# be a self-inflicted cost. libpod rebuilds the database on the next start; at
+# this point in a lane's life no container exists for it to forget.
+#
+# THE TEST IS A STRING IN A FILE, NOT A PODMAN INVOCATION, because asking podman
+# would start the very engine whose configuration is in question - and it would
+# answer with the stale value it is being asked to detect.
+store_db=/var/lib/nested-storage/db.sql
+if [ -f "$store_db" ] && ! grep -qF "$XDG_RUNTIME_DIR/containers" "$store_db" 2>/dev/null; then
+	echo "runner-init: the nested store's libpod database was created against a" >&2
+	echo "  different runtime directory than $XDG_RUNTIME_DIR, and podman would" >&2
+	echo "  silently use the recorded one - splitting the engine in two. Removing" >&2
+	echo "  $store_db; the image cache below it is kept. See docs/ci.md." >&2
+	rm -f "$store_db" || {
+		echo "runner-init: could not remove $store_db - refusing to start an engine" >&2
+		echo "  whose runtime directory this script cannot make consistent." >&2
+		exit 1
+	}
+fi
+
 podman system service --time=0 "$DOCKER_HOST" &
 
 # Ten seconds in tenths: two orders of magnitude more than a bind takes, and
