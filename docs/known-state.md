@@ -2577,3 +2577,54 @@ nothing was wrong with the key, the ref, the branch name or the remote.
   green.** The leg asserts four directions against a container that cannot exist: it still exits
   non-zero, stdout stays empty, the ELAPSED TIME proves the retries actually ran rather than being
   merely intended, and `docker start -a` returns in under a second having not been retried.
+
+## The store remembered the old runroot, and podman believed it over everything
+
+- **libpod records its runroot and tmpdir in `db.sql` at the root of the GRAPH ROOT**, which
+  in a lane is a bind mount that outlives every image upgrade. Change `XDG_RUNTIME_DIR` and
+  podman does not error on the mismatch: it reads the recorded value and uses it, over the
+  environment **and** over `storage.conf`, silently. This is the third member of a family -
+  `graphroot` losing to `rootless_storage_path`, `runroot` losing to `XDG_RUNTIME_DIR`, and
+  now both of them losing to a database written weeks earlier.
+- **The result is TWO ENGINES OVER ONE STORE.** `/run/podman-run/libpod/tmp/` held
+  `pause.pid` alone, from the environment; `/tmp/podman-run/libpod/tmp/` held `alive`,
+  `events`, `exits` and `persist`, from the database - with `podman info` answering the
+  database's path while the process holding the user namespace was registered under the
+  environment's. `containers/storage` keeps overlay mount refcounts under the runroot, so
+  two engines disagreeing about it can each believe the other mounted a layer.
+- **REPRODUCED ON DEMAND, after ten reproductions that fired at nothing.** Three passes over
+  one store: seeded with the old path, together and clean; same store with the new path,
+  SPLIT; same store, new path, `db.sql` deleted, together and clean again. That is also the
+  repair, and it is why only `db.sql` is removed rather than the store - the images below it
+  are the whole reason the store is a mount of its own.
+- **The test is a string in a file, not a podman invocation.** Asking podman would start the
+  very engine whose configuration is in question, and it would answer with the stale value
+  it is being asked to detect.
+- **A SPLIT IS NOT SUFFICIENT TO BREAK `docker start`.** In the reproduction the split was
+  real and the container started anyway. `api-checks` also failed before the split existed.
+  So this is a defect that was making every diagnosis unreadable, not the cause of that
+  failure - a distinction worth keeping, because a fix that lands next to a symptom is the
+  easiest thing in the world to over-claim.
+- **The smoke test ALREADY had this assertion and reported `ok` on the broken image.**
+  `bin/github-runner-smoke.sh` checks that `RunRoot` sits under `XDG_RUNTIME_DIR` - exactly
+  the split - and it cannot fire, because `runner()` builds a FRESH lane and a fresh lane has
+  no `db.sql` to be stale. Only a lane that has already run work can show it. So the gate is
+  `ci.runtime_dir` in `bin/verify-host.sh`, the one battery here that reads a RUNNING lane,
+  and it was **proved to FAIL against the two deployed lanes before it was trusted to pass**.
+- **`podman exec` without `--user` is container ROOT and reports `rootless: false`**,
+  resolving its runtime directory by a different code path entirely. It answered `/tmp` for a
+  lane whose jobs were using `/run` and cost an hour. Every measurement inside a lane has to
+  name uid 1000 explicitly.
+- **The runner's environment was correct the whole time.** Read from the host out of
+  `Runner.Listener`'s own `/proc/<pid>/environ`: `XDG_RUNTIME_DIR=/run/podman-run`. The
+  actions runner, `run.sh`, `run-helper.sh`, `.env` and `.path` were all eliminated before
+  the store was looked at - the environment was never the carrier.
+- **A smoke leg was proving something other than its own sentence.** It ran `docker info` and
+  reported "the endpoint DOCKER_HOST points at" - but `docker` is the shim, which execs the
+  LOCAL podman, and podman honours `CONTAINER_HOST`, not `DOCKER_HOST`. It measured the local
+  engine and asserted nothing about the socket. Both are asked now.
+- **`.env` and `.path` in the runner tree rewrite every job step's environment.**
+  `Runner.Listener` applies both at start-up, GitHub's tarball ships neither, and
+  `$LANE_ROOT/runner` is seeded once and never re-seeded or garbage collected - `gc_disk()`
+  clears `home/work`, `tmp` and `storage` and deliberately leaves it. A file written there
+  under one image is read by every image after it, for ever.

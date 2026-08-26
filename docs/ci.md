@@ -227,6 +227,43 @@ suppression"; that was written while "find the cause" was still on the table. A 
 job log with its post-mortem intact. A genuinely broken service costs seven extra seconds; the
 alternative is that `services:` does not work on this runner at all.
 
+### What the post-mortem found, which is a different bug
+
+The first time that post-mortem fired it showed **all twelve overlay layers with an empty
+`merged/` and `overlay-mounts=1`** - the lane's own rootfs and nothing else. The nested podman
+mounted nothing, yet `docker create` returned success.
+
+Chasing that turned up a defect that was making every diagnosis unreadable. **libpod records its
+runroot and tmpdir in `db.sql` at the root of the graph root**, and the graph root is a lane bind
+mount that outlives every image upgrade. Change `XDG_RUNTIME_DIR` and podman does not complain -
+it reads the recorded value and uses it, over the environment *and* over `storage.conf`. The lane
+then runs **two engines over one store**:
+
+```
+/run/podman-run/libpod/tmp/   pause.pid ONLY          <- from the environment
+/tmp/podman-run/libpod/tmp/   alive, events, exits    <- from db.sql
+```
+
+`containers/storage` keeps overlay mount refcounts under the runroot, so two engines disagreeing
+about it can each believe the other mounted a layer.
+
+**Reproduced on demand, in three passes over one store** - seeded with the old path, together and
+clean; same store with the new path, split; same store with `db.sql` deleted, clean again. That
+is also the repair: `runner-init` removes a `db.sql` whose recorded runroot does not match the
+live one, and **only that file** - the images below it are the reason the store is a mount of its
+own. Existing lanes repair themselves on their next restart.
+
+**It is not the `api-checks` fix.** In the reproduction the split was real and `docker start`
+succeeded anyway, and `api-checks` was failing before the split existed. Two separate things.
+
+**The gate for it is `ci.runtime_dir` in `bin/verify-host.sh`, not a smoke leg**, and the reason
+matters: the smoke test *already* asserted that `RunRoot` sits under `XDG_RUNTIME_DIR` and
+reported `ok` on the image whose live lanes were split, because `runner()` builds a fresh lane and
+a fresh lane has no stale `db.sql`. Only a running lane can show it. The check was proved to
+**fail** against the two deployed lanes before it was trusted to pass, and it measures as uid 1000 -
+`podman exec` without `--user` is container root, reports `rootless: false`, and resolves by a
+different code path.
+
 Two things it must never do, and the second would have been a real bug:
 
 - **Touch stdout.** `DockerCommandManager.cs` parses container ids off it, so one stray byte breaks
