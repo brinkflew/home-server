@@ -626,6 +626,21 @@ probe() {
 	# 30 SECONDS, NOT 6, because the container has to start first - runner-init
 	# waits for the nested engine's socket before it execs anything, so a few
 	# seconds are gone before the connect is even attempted.
+	#
+	# A DROPPED PROBE COSTS 135 SECONDS, NOT 30, AND THAT IS NOT A HANG. Measured
+	# off the journal on 2026-08-26 - 12:28:13, 12:30:28, 12:32:43, 12:34:58,
+	# 12:37:13, exactly 2m15s apart. GNU timeout sends SIGTERM at 30s and then
+	# WAITS for the child; podman has to stop a container whose only process is
+	# blocked in connect() and then honour `--rm`, and that teardown is the other
+	# hundred seconds. The verdict is still correct - 124 means podman was killed
+	# because the connect never came back - but four dropped edges are nine
+	# minutes of a ten-minute smoke run, and somebody watching the journal will
+	# think it has stopped.
+	#
+	# `timeout -k` IS NOT THE FIX, and it is the obvious one. SIGKILL during
+	# teardown leaves a container `--rm` never removed, which agents.runners_leaked
+	# then reports - trading seven minutes on a WEEKLY job for a leak that needs a
+	# person. Recorded rather than optimised.
 	err=$(timeout 30 podman run --name "$SMOKE_TAG-$RANDOM" "${RUNNER_ARGS[@]}" \
 		"$IMAGE" bash -c "exec 3<>/dev/tcp/$host/$port" 2>&1 >/dev/null) || rc=$?
 	err=$(printf '%s' "$err" | tr '\n' ' ' | cut -c1-160)

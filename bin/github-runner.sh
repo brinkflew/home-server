@@ -458,11 +458,17 @@ lane_forensics() {
 	# writes is readable afterwards without a second chown.
 	# `cp`, NOT `cp -a`, AND THAT IS THE WHOLE OF WHY THIS CAPTURE IS READABLE.
 	# Inside the namespace this runs as uid 0, which maps to `core` outside - but
-	# `-a` preserves the SOURCE's owner and mode, and db.sql is 0600 owned by the
-	# mapped subuid. The copy would land outside the namespace owned by a subuid
-	# `core` cannot read, which is exactly the shape docs/known-state.md records
-	# under "podman unshare writes as container root, and 0600 then locks out the
-	# runner". A forensic capture nobody can open is not a capture.
+	# `-a` preserves the SOURCE's owner and mode, so the copy lands outside the
+	# namespace owned by the mapped subuid rather than by `core`. Measured on
+	# lane 1: db.sql is 0644, and layers.json, containers.json and images.json
+	# are all 0600 - so THREE OF THE FIVE would have been unreadable by the
+	# person the capture exists for. That is the shape docs/known-state.md
+	# records under "podman unshare writes as container root, and 0600 then locks
+	# out the runner", and a forensic capture nobody can open is not a capture.
+	#
+	# mountpoints.json IS ABSENT ON AN IDLE LANE and that is not an error - it is
+	# written when something is mounted. Its absence in a capture is itself a
+	# reading, which is why every copy is `|| true` and none of them is asserted.
 	for n in db.sql overlay-layers/layers.json overlay-layers/mountpoints.json \
 	         overlay-containers/containers.json overlay-images/images.json; do
 		podman unshare cp "$LANE_ROOT/storage/$n" \
