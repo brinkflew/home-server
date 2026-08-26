@@ -456,12 +456,19 @@ lane_forensics() {
 	# below is unshared and the du above it had to be corrected. Inside the
 	# namespace this runs as uid 0, which maps back to `core` outside, so what it
 	# writes is readable afterwards without a second chown.
+	# `cp`, NOT `cp -a`, AND THAT IS THE WHOLE OF WHY THIS CAPTURE IS READABLE.
+	# Inside the namespace this runs as uid 0, which maps to `core` outside - but
+	# `-a` preserves the SOURCE's owner and mode, and db.sql is 0600 owned by the
+	# mapped subuid. The copy would land outside the namespace owned by a subuid
+	# `core` cannot read, which is exactly the shape docs/known-state.md records
+	# under "podman unshare writes as container root, and 0600 then locks out the
+	# runner". A forensic capture nobody can open is not a capture.
 	for n in db.sql overlay-layers/layers.json overlay-layers/mountpoints.json \
 	         overlay-containers/containers.json overlay-images/images.json; do
-		podman unshare cp -a "$LANE_ROOT/storage/$n" \
+		podman unshare cp "$LANE_ROOT/storage/$n" \
 			"$dest/$(printf '%s' "$n" | tr / -)" 2>/dev/null || true
 	done
-	cp -a "$MARKER" "$dest/marker" 2>/dev/null || true
+	cp "$MARKER" "$dest/marker" 2>/dev/null || true
 	{
 		printf 'reason=%s\n' "$reason"
 		printf 'lane=%s\n' "$LANE"
@@ -484,16 +491,42 @@ lane_forensics() {
 }
 
 lane_reset() {
-	local reason="$1" d
+	local reason="$1" d targets
 	case "$reason" in heal|budget) lane_forensics "$reason" ;; esac
+
+	# THE WORKSPACE IS `runner/_work`, AND THE RECLAIM THIS REPLACES NAMED
+	# `home/work`, WHICH HAS NEVER EXISTED. The just-in-time configuration sets
+	# `work_folder:"_work"`, and the runner resolves that against its OWN
+	# directory - so every checkout, every node_modules and every uv venv has
+	# always been somewhere the garbage collector was not looking. `home/` holds
+	# only `.bun`, `.cache`, `.config` and `.local`, which is why the removal
+	# reported nothing and reclaimed nothing.
+	targets="runner/_work tmp storage"
+
+	# A BUDGET RECLAIM TAKES THE CACHES TOO, AND THE OTHER TWO REASONS MUST NOT.
+	# Measured on lane 1: home 1,789 MB, runner 799 MB (of which _work is 81),
+	# storage 660 MB. So the caches are the largest thing here by a factor of
+	# two, and a reclaim that spared them could not get back under the budget -
+	# which would leave gc_lane firing on every single cycle, re-pulling three
+	# images each time, and never converging. A heal and a window reset are
+	# targeted at the store and keep the caches, because their cost is a re-pull
+	# of three small images rather than every dependency in the repository.
+	[ "$reason" = budget ] && targets="$targets home/.cache home/.bun"
 
 	# `podman unshare rm`, NOT a plain rm. Everything under the lane belongs to
 	# the subuid that container uid 1000 maps to, so `core` cannot remove it from
 	# outside the namespace - a plain rm produces a wall of `Permission denied`
 	# and leaves the budget un-reclaimed while reporting nothing, which is a disk
 	# that fills with a garbage collector running.
-	podman unshare rm -rf \
-		"${LANE_ROOT:?}/home/work" "${LANE_ROOT:?}/tmp" "${LANE_ROOT:?}/storage"
+	for d in $targets; do
+		podman unshare rm -rf "${LANE_ROOT:?}/$d"
+	done
+
+	# ONLY THESE TWO ARE RECREATED, because podman does not create a missing
+	# bind-mount source - it fails the container, and `Restart=always` turns that
+	# into a silent five-second retry loop. `runner/_work` and the cache
+	# directories are made by the processes that use them, inside trees that are
+	# already theirs.
 	mkdir -p "$LANE_ROOT/tmp" "$LANE_ROOT/storage"
 
 	# AND CHOWN THEM BACK, WHICH THE RECLAIM THIS REPLACES DID NOT DO. `mkdir` as

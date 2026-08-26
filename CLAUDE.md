@@ -906,9 +906,11 @@ signal read green.
   The manual remedy destroyed the evidence twelve reproductions have failed to recreate, so a reset
   with a reason keeps the store's metadata first - and a routine window reset keeps nothing, or
   fifty of them would evict the two that matter.
-- **Two defects in the reclaim, and the second hid the first**: `du` outside the user namespace
-  read 1,383 MB against 2,500 MB actual, and the reclaim it gated recreated `tmp/` and `storage/`
-  without chowning them back - never seen, because it had never once fired.
+- **Three defects in one reclaim, and the first hid the other two** - it had never once fired.
+  `du` outside the user namespace read 1,383 MB against 2,500 MB actual; it cleared `home/work`,
+  which has never existed, because the workspace is `runner/_work`; and it recreated `tmp/` and
+  `storage/` without chowning them back. A check that under-reports hides everything gated behind
+  it, and code that never runs stops being reviewed.
 - **`bin/github-runner-smoke.sh` structurally cannot see either**, building a fresh lane every run,
   which is the same blind spot that let the `db.sql` split through with a green tick.
 

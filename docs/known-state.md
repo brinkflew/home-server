@@ -2726,19 +2726,31 @@ runner on this host, and **nothing was repaired**.
 - **Automating the wipe is what makes silence the new risk**, so `ci.lane_store` reports a lane
   that healed itself and names the capture. A window reset is deliberately not reported at all.
 
-## Two defects in the reclaim, and the second one hid the first
+## Three defects in one reclaim, and the first one hid the other two
 
-- **`gc_disk` measured with `du` as `core` and removed with `podman unshare rm`.** Half the
-  function was inside the user namespace and half was not, and the half that was not skipped every
-  directory it could not traverse and reported the remainder WITHOUT AN ERROR: **1,383 MB against
-  2,500 MB actual** on lane 1, the same shape on lane 2. The 20 GB budget was being compared
-  against a number low by roughly half, and `ci.lane_disk` reported the same understatement.
-- **It also recreated `tmp/` and `storage/` with a plain `mkdir` and never chowned them back**, so
-  the next lane would have met `mkdir /home/runner/.local: permission denied` - the exact state
-  preflight's chown loop exists to repair. **Nobody had ever seen it, because the reclaim had
-  never once fired**: the budget gating it was being read by the `du` above.
-- The lesson is the ordering: a check that under-reports does not merely warn late, it hides
-  whatever runs after the threshold.
+**`gc_disk` had never once fired**, so nothing downstream of its threshold had ever executed. That
+is what made it possible for three separate defects to sit in twelve lines.
+
+- **It measured with `du` as `core` and removed with `podman unshare rm`.** Half the function was
+  inside the user namespace and half was not, and the half that was not skipped every directory it
+  could not traverse and reported the remainder WITHOUT AN ERROR: **1,383 MB against 2,500 MB
+  actual** on lane 1, the same shape on lane 2. The 20 GB budget was compared against a number low
+  by roughly half, and `ci.lane_disk` reported the same understatement to the dashboard.
+- **It cleared `home/work`, WHICH HAS NEVER EXISTED.** The just-in-time configuration sets
+  `work_folder:"_work"` and the runner resolves that against its OWN directory, so every checkout,
+  every `node_modules` and every uv venv lives at `runner/_work`. `home/` holds `.bun`, `.cache`,
+  `.config` and `.local` and nothing else. The removal named a path that was not there, reclaimed
+  nothing, and reported nothing - `rm -rf` on a missing path is a success.
+- **It recreated `tmp/` and `storage/` with a plain `mkdir` and never chowned them back**, so the
+  next lane would have met `mkdir /home/runner/.local: permission denied` - the exact state
+  preflight's chown loop exists to repair, and a failure that names neither the cause nor the
+  chown.
+- **A budget reclaim has to take the caches and a targeted one must not.** Measured on lane 1:
+  home 1,789 MB, runner 799 MB of which `_work` is 81, storage 660 MB. The caches are the largest
+  thing in a lane by a factor of two, so a reclaim that spared them could not get back under the
+  budget - and would then fire on every cycle, re-pulling three images each time, for ever.
+- The lesson is the ordering. A check that under-reports does not merely warn late: it hides
+  everything gated behind it, and the code downstream stops being reviewed because it never runs.
 
 ## A ceiling nothing measures is a ceiling nobody can tell is wrong
 

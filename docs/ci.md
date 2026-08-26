@@ -326,11 +326,13 @@ It failed at 2.4 GB after 21 jobs. It passes at 2.5 GB after 39. Something speci
 nothing has identified it.
 
 **So the state is bounded rather than explained, and the word used for that in
-`bin/github-runner.sh` is "bound".** `gc_lane` resets `home/work`, `tmp` and `storage` on three
+`bin/github-runner.sh` is "bound".** `gc_lane` resets `runner/_work`, `tmp` and `storage` on three
 triggers - the disk budget that was always there, a **50-job window**, and the shim asking to be
-healed. The caches are not in what is removed: `home/.cache` and `home/.bun` survive, and
-`actions/cache` lives on GitHub anyway, so a reset costs one re-pull of postgres, redis and
-mailpit.
+healed. The caches are not in what a targeted reset removes: `home/.cache` and `home/.bun` survive,
+and `actions/cache` lives on GitHub anyway, so a heal or a window reset costs one re-pull of
+postgres, redis and mailpit. **A budget reclaim does take them**, because it has to - measured on
+lane 1, home is 1,789 MB against storage's 660 MB, so a reclaim that spared the caches could not
+get back under the budget and would fire on every cycle for ever.
 
 **The self-heal is the half that matters.** When `docker start` exhausts its retries the shim
 leaves `.docker-shim-start-failed` in `$HOME` - the one part of an ephemeral lane that outlives it,
