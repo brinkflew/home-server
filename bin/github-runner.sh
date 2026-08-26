@@ -290,6 +290,39 @@ preflight() {
 			die 4 "could not seed the runner tree into $LANE_ROOT/runner"
 	fi
 
+	# THE STORE REMEMBERS A RUNTIME DIRECTORY THE IMAGE MAY NO LONGER USE.
+	# libpod writes its runroot and tmpdir into `db.sql` at the root of the graph
+	# root, and that graph root is a lane mount which outlives every image
+	# upgrade. Podman does not error on the mismatch - it reads the recorded value
+	# and uses it, over the environment AND over storage.conf - so the lane ends up
+	# running two engines over one store: `pause.pid` under the environment's
+	# directory and `alive`/`events`/`exits` under the database's. Reproduced on
+	# demand; see docs/ci.md.
+	#
+	# THIS IS DONE HERE RATHER THAN ONLY IN runner-init BECAUSE OF `--log-driver=none`.
+	# The lane container's stdout and stderr are discarded, so a repair announced
+	# from inside it is a repair nobody can read - and this file's whole argument
+	# for `die` over silence is that an invisible failure is the expensive kind.
+	# runner-init keeps its own copy of the test as the backstop for a lane started
+	# some other way; this is the one that reaches the journal.
+	#
+	# THE EXPECTED VALUE COMES FROM THE IMAGE, not from a constant here, so the two
+	# cannot drift: whatever ENV the image ships is what its store must agree with.
+	local store_db lane_xdg
+	store_db="$LANE_ROOT/storage/db.sql"
+	if [ -f "$store_db" ]; then
+		lane_xdg=$(podman image inspect "$IMAGE" \
+			--format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null |
+			sed -n 's/^XDG_RUNTIME_DIR=//p' | head -1)
+		if [ -z "$lane_xdg" ]; then
+			log "WARNING: $IMAGE declares no XDG_RUNTIME_DIR, so the nested store's recorded runroot cannot be checked"
+		elif ! grep -qF "$lane_xdg/containers" "$store_db" 2>/dev/null; then
+			log "the nested store's libpod database predates $lane_xdg - removing it so podman cannot run two engines over one store (the image cache below it is kept)"
+			podman unshare rm -f "$store_db" ||
+				die 4 "could not remove the stale $store_db"
+		fi
+	fi
+
 	runner_version=$(cat "$LANE_ROOT/runner/.seed-version" 2>/dev/null)
 	[ -n "$runner_version" ] || runner_version="unknown"
 }

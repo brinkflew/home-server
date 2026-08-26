@@ -149,6 +149,16 @@ mkdir -p "$HOME/.config" "$HOME/.local/share"
 # THE TEST IS A STRING IN A FILE, NOT A PODMAN INVOCATION, because asking podman
 # would start the very engine whose configuration is in question - and it would
 # answer with the stale value it is being asked to detect.
+#
+# THIS IS THE BACKSTOP, NOT THE VISIBLE ONE. bin/github-runner.sh runs the lane
+# with `--log-driver=none`, so everything this script writes to stderr is
+# discarded - the message below included, and the socket and writability failures
+# above it too. Those at least exit non-zero, which the driver reads as a fault;
+# a silent repair would leave nothing at all. So the driver does the same test
+# host-side before the container starts, where it reaches the journal, and this
+# copy covers a lane started some other way. Two implementations of one rule is a
+# drift risk, and it is taken deliberately: the alternative is a repair nobody
+# can see.
 store_db=/var/lib/nested-storage/db.sql
 if [ -f "$store_db" ] && ! grep -qF "$XDG_RUNTIME_DIR/containers" "$store_db" 2>/dev/null; then
 	echo "runner-init: the nested store's libpod database was created against a" >&2
