@@ -354,6 +354,30 @@ for pause in $BACKOFF; do
 	postmortem "$rc" "$@"
 done
 
+# THE ONLY CHANNEL OUT OF HERE THAT OUTLIVES THE CONTAINER. This process runs
+# inside an ephemeral lane whose stdout belongs to a job log the driver never
+# reads and whose filesystem is gone seconds from now - except for $HOME, which
+# is a bind mount of the lane's persistent tree. So a lane that has failed the
+# way this whole file exists to witness says so by leaving a file behind, and
+# bin/github-runner.sh reads it at the top of the next cycle, keeps the store's
+# metadata, and resets the lane.
+#
+# WHY THE DRIVER AND NOT HERE. A reset has to happen when no job is running, and
+# the only process that knows that is the one that starts them. This one is
+# inside a container that is mid-job by definition.
+#
+# IT MUST NOT BE ABLE TO CHANGE ANYTHING THIS SCRIPT RETURNS. `>&2` on the
+# failure note, `|| true` so an unwritable $HOME cannot alter the exit status,
+# and `exit "$rc"` reading a value captured before any of this - the contract at
+# the top of this file is that podman's exit code arrives untouched and that
+# stdout is never written to, because DockerCommandManager.cs parses container
+# ids off it.
+if [ -n "${HOME:-}" ] && [ -d "$HOME" ]; then
+	: > "$HOME/.docker-shim-start-failed" 2>/dev/null || true
+	echo "home-server lane: left .docker-shim-start-failed in \$HOME - the driver will" >&2
+	echo "  capture this store's metadata and reset the lane before its next job." >&2
+fi
+
 echo "home-server lane: 'docker start' still failing after $RETRIES retries; giving" >&2
 echo "  the job podman's own exit code, $rc." >&2
 exit "$rc"

@@ -92,6 +92,22 @@ CONDUCT_STATE="${HOME_SERVER_CONDUCT_STATE:-${HOME:-/var/home/core}/.cache/home-
 LABELS="${GITHUB_RUNNER_LABELS:-self-hosted,Linux,X64,home-server}"
 IDLE_SEC="${GITHUB_RUNNER_IDLE_SEC:-1800}"
 LANE_MAX_MB="${GITHUB_RUNNER_LANE_MAX_MB:-20480}"
+
+# HOW MANY JOBS A NESTED IMAGE STORE MAY LIVE FOR. Not a tuning knob and not a
+# performance number - see the block above gc_lane for what it is bounding and
+# why the honest word for it is "bound" rather than "fix". Zero disables it.
+STORE_MAX_JOBS="${GITHUB_RUNNER_STORE_MAX_JOBS:-50}"
+
+# Written by the docker shim inside the lane when a `docker start` has exhausted
+# its retries, read here at the top of the next cycle. It is the only channel
+# there is: the shim runs in an ephemeral container whose stdout belongs to a
+# job log this process never sees.
+HEAL_FLAG="home/.docker-shim-start-failed"
+
+# The transient scope's cgroup lives here. Same path bin/verify-host.sh builds
+# for ci.slice_limits, and it is derived rather than written out because the
+# `app-` prefix is what nests it under app.slice.
+SCOPE_CG="/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/app.slice/app-ci.slice"
 RUNTIME_MAX_SEC="${GITHUB_RUNNER_RUNTIME_MAX_SEC:-5400}"
 POLL_SEC="${GITHUB_RUNNER_POLL_SEC:-30}"
 
@@ -110,10 +126,26 @@ last_error=""
 last_error_at=""
 runner_version=""
 lane_disk_mb=""
+store_jobs=0
+store_resets=0
+last_reset_at=""
+last_reset_reason=""
+
+# WHAT A JOB ACTUALLY COST, kept as a high-water mark across every job this lane
+# has ever run. host/systemd/app-ci.slice asks for exactly these numbers in its
+# own comment, and names its failure mode as silence: a ceiling nothing measures
+# is a ceiling nobody can tell is wrong.
+lane_mem_peak_mb=""
+lane_pids_peak=""
+lane_mem_max_events=0
+lane_oom_kills=0
 
 # Per-cycle, and cleared by the trap
 cname=""
+scope=""
 runner_id=""
+job_mem_max_ev=0
+job_oom_kills=0
 jitfile="$LANE_ROOT/runner/.jitconfig"
 stopping=0
 
@@ -128,11 +160,25 @@ marker_read() {
 			deregister_orphans)   deregister_orphans="$v" ;;
 			last_job_at)          last_job_at="$v" ;;
 			last_job_seconds)     last_job_seconds="$v" ;;
+			store_jobs)           store_jobs="$v" ;;
+			store_resets)         store_resets="$v" ;;
+			last_reset_at)        last_reset_at="$v" ;;
+			last_reset_reason)    last_reset_reason="$v" ;;
+			lane_mem_peak_mb)     lane_mem_peak_mb="$v" ;;
+			lane_pids_peak)       lane_pids_peak="$v" ;;
+			lane_mem_max_events)  lane_mem_max_events="$v" ;;
+			lane_oom_kills)       lane_oom_kills="$v" ;;
 		esac
 	done < "$MARKER"
 	case "$jobs_today" in ''|*[!0-9]*) jobs_today=0 ;; esac
 	case "$jobs_total" in ''|*[!0-9]*) jobs_total=0 ;; esac
 	case "$deregister_orphans" in ''|*[!0-9]*) deregister_orphans=0 ;; esac
+	case "$store_jobs" in ''|*[!0-9]*) store_jobs=0 ;; esac
+	case "$store_resets" in ''|*[!0-9]*) store_resets=0 ;; esac
+	case "$lane_mem_peak_mb" in *[!0-9]*) lane_mem_peak_mb="" ;; esac
+	case "$lane_pids_peak" in *[!0-9]*) lane_pids_peak="" ;; esac
+	case "$lane_mem_max_events" in ''|*[!0-9]*) lane_mem_max_events=0 ;; esac
+	case "$lane_oom_kills" in ''|*[!0-9]*) lane_oom_kills=0 ;; esac
 }
 
 # OMITTED IS NOT ZERO. A key with no value is left out entirely rather than
@@ -157,11 +203,19 @@ marker_write() {
 		printf 'jobs_total=%s\n' "$jobs_total"
 		printf 'lane=%s\n' "$LANE"
 		[ -n "$lane_disk_mb" ] && printf 'lane_disk_mb=%s\n' "$lane_disk_mb"
+		printf 'lane_mem_max_events=%s\n' "$lane_mem_max_events"
+		[ -n "$lane_mem_peak_mb" ] && printf 'lane_mem_peak_mb=%s\n' "$lane_mem_peak_mb"
+		printf 'lane_oom_kills=%s\n' "$lane_oom_kills"
+		[ -n "$lane_pids_peak" ] && printf 'lane_pids_peak=%s\n' "$lane_pids_peak"
 		[ -n "$last_error" ] && printf 'last_error=%s\n' "$last_error"
 		[ -n "$last_error_at" ] && printf 'last_error_at=%s\n' "$last_error_at"
 		[ -n "$last_job_at" ] && printf 'last_job_at=%s\n' "$last_job_at"
 		[ -n "$last_job_seconds" ] && printf 'last_job_seconds=%s\n' "$last_job_seconds"
+		[ -n "$last_reset_at" ] && printf 'last_reset_at=%s\n' "$last_reset_at"
+		[ -n "$last_reset_reason" ] && printf 'last_reset_reason=%s\n' "$last_reset_reason"
 		[ -n "$runner_version" ] && printf 'runner_version=%s\n' "$runner_version"
+		printf 'store_jobs=%s\n' "$store_jobs"
+		printf 'store_resets=%s\n' "$store_resets"
 	} > "$tmp" 2>/dev/null
 	sync "$tmp" 2>/dev/null
 	mv -f "$tmp" "$MARKER" 2>/dev/null
@@ -353,14 +407,119 @@ phase_in_flight() {
 }
 
 # ------------------------------------------------------------------------------
-# Disk
+# The lane store: what resets it, and the evidence that outlives the reset
 # ------------------------------------------------------------------------------
+# THREE TRIGGERS, ONE BODY. Disk over budget, the shim asking to be healed, and
+# a job counter. Only the first of those is about disk at all.
+#
+# WHAT THE OTHER TWO ARE FOR, STATED PLAINLY BECAUSE NEITHER IS A FIX. A
+# `services:` block failed on this host for weeks: `docker create` fine,
+# `docker start` returning 125, and crun unable to open anything under a rootfs
+# podman's own debug had just reported mounting. It stopped when both lanes were
+# wiped BY HAND and has not come back across the 39 and 40 jobs since. Nobody
+# has identified what accumulates. It is not simply size or job count - it
+# failed at 2.4 GB after 21 jobs and passes at 2.5 GB after 39 - so the window
+# in which anything CAN accumulate is bounded instead, and the lane heals itself
+# when the shim reports the failure is back. Neither of those explains it.
+#
+# THE EVIDENCE COMES FIRST AND THE ORDERING IS THE WHOLE OF IT. The last time
+# this failure was in front of somebody the lanes were wiped without preserving
+# them, and twelve reproductions have since failed to recreate the state that
+# was thrown away. A reset firing on a job counter would do that again, on a
+# timer, silently. So a reset that fires for a REASON captures the store's
+# metadata before it removes anything.
+#
+# METADATA, NOT THE STORE. db.sql and the layer, container and image json -
+# kilobytes, against the 2.5 GB a tar of the whole store would cost every time.
+# Those are the files that would carry a stale runroot, an orphaned mount
+# refcount or a container the store still believes in, which is the entire space
+# of theories anyone has had.
+#
+# A ROUTINE WINDOW RESET CAPTURES NOTHING, deliberately: there is no anomaly to
+# preserve, and keeping fifty of them would evict the two or three captures that
+# would actually matter.
+#
+# `rm -rf` on the nested store rather than a prune against it: pruning from the
+# host would take host-side locks and leave host-labelled files inside a tree
+# the container owns, and a fresh graph root costs one re-pull of three small
+# images. The caches are NOT in what is removed - home/.cache and home/.bun
+# survive, and actions/cache lives on GitHub in any case.
+FORENSIC_KEEP=5
+
+lane_forensics() {
+	local reason="$1" dest n stale
+	dest="$FLEET_ROOT/forensics/lane$LANE-$(date -u +%Y%m%dT%H%M%SZ)-$reason"
+	mkdir -p "$dest" 2>/dev/null || return 0
+
+	# THROUGH `podman unshare`, because the store belongs to the subuid container
+	# uid 1000 maps to and `core` cannot traverse it - the same reason the rm
+	# below is unshared and the du above it had to be corrected. Inside the
+	# namespace this runs as uid 0, which maps back to `core` outside, so what it
+	# writes is readable afterwards without a second chown.
+	for n in db.sql overlay-layers/layers.json overlay-layers/mountpoints.json \
+	         overlay-containers/containers.json overlay-images/images.json; do
+		podman unshare cp -a "$LANE_ROOT/storage/$n" \
+			"$dest/$(printf '%s' "$n" | tr / -)" 2>/dev/null || true
+	done
+	cp -a "$MARKER" "$dest/marker" 2>/dev/null || true
+	{
+		printf 'reason=%s\n' "$reason"
+		printf 'lane=%s\n' "$LANE"
+		printf 'jobs_total=%s\n' "$jobs_total"
+		printf 'store_jobs=%s\n' "$store_jobs"
+		printf 'lane_disk_mb=%s\n' "${lane_disk_mb:-unmeasured}"
+		printf 'image=%s\n' "$IMAGE"
+	} > "$dest/context" 2>/dev/null
+
+	# Newest FORENSIC_KEEP kept. The directory names sort by their own timestamp,
+	# so the ordering is the name and no mtime is consulted - a copied file's
+	# mtime is the source's, which would sort these by when the store was
+	# written rather than by when it was captured.
+	stale=$(find "$FLEET_ROOT/forensics" -maxdepth 1 -name "lane$LANE-*" -type d 2>/dev/null |
+		sort | head -n -"$FORENSIC_KEEP")
+	[ -n "$stale" ] && printf '%s\n' "$stale" | while read -r old; do
+		[ -n "$old" ] && rm -rf "${old:?}"
+	done
+	log "kept the store's metadata in $dest before resetting"
+}
+
+lane_reset() {
+	local reason="$1" d
+	case "$reason" in heal|budget) lane_forensics "$reason" ;; esac
+
+	# `podman unshare rm`, NOT a plain rm. Everything under the lane belongs to
+	# the subuid that container uid 1000 maps to, so `core` cannot remove it from
+	# outside the namespace - a plain rm produces a wall of `Permission denied`
+	# and leaves the budget un-reclaimed while reporting nothing, which is a disk
+	# that fills with a garbage collector running.
+	podman unshare rm -rf \
+		"${LANE_ROOT:?}/home/work" "${LANE_ROOT:?}/tmp" "${LANE_ROOT:?}/storage"
+	mkdir -p "$LANE_ROOT/tmp" "$LANE_ROOT/storage"
+
+	# AND CHOWN THEM BACK, WHICH THE RECLAIM THIS REPLACES DID NOT DO. `mkdir` as
+	# `core` makes a directory the container sees as owned by uid 0, and the
+	# runner inside is uid 1000 - the exact state preflight's chown loop exists
+	# to repair, and whose absence produced "mkdir /home/runner/.local:
+	# permission denied" on the first live lane. It was never noticed because
+	# that reclaim had never once fired: the budget gating it was being read by a
+	# du that reported half the truth. Two defects, and the second hid the first.
+	for d in tmp storage; do
+		podman unshare chown -R 1000:1000 "$LANE_ROOT/$d" 2>/dev/null ||
+			log "WARNING: could not chown $LANE_ROOT/$d back into the container's namespace - the next lane will not be able to write its own store"
+	done
+	podman unshare rm -f "${LANE_ROOT:?}/$HEAL_FLAG" 2>/dev/null
+
+	store_jobs=0
+	store_resets=$(( store_resets + 1 ))
+	last_reset_at=$(now_iso)
+	last_reset_reason="$reason"
+	lane_disk_mb=$(lane_du_mb "$LANE_ROOT")
+	log "lane store reset ($reason); it now holds ${lane_disk_mb:-?}MB"
+}
+
 # At the top of a cycle, which is the only moment this lane knows no job is
-# running. `rm -rf` on the nested store rather than a prune against it: pruning
-# from the host would take host-side locks and leave host-labelled files inside a
-# tree the container owns, and a fresh graph root costs one re-pull of three
-# small images. lane_disk_mb is in the marker either way, so ci.lane_disk can
-# warn before this has to act.
+# running. lane_disk_mb is in the marker either way, so ci.lane_disk can warn
+# before this has to act.
 # `podman unshare du`, FOR THE SAME REASON THE rm BELOW IS UNSHARED, and this
 # half was wrong for as long as the other half was right. Everything under the
 # lane belongs to the subuid container uid 1000 maps to, so `core` cannot
@@ -373,22 +532,78 @@ lane_du_mb() {
 	podman unshare du -sm "$1" 2>/dev/null | cut -f1
 }
 
-gc_disk() {
+gc_lane() {
 	lane_disk_mb=$(lane_du_mb "$LANE_ROOT")
-	case "$lane_disk_mb" in ''|*[!0-9]*) lane_disk_mb=""; return 0 ;; esac
+	case "$lane_disk_mb" in ''|*[!0-9]*) lane_disk_mb="" ;; esac
 
-	if [ "$lane_disk_mb" -gt "$LANE_MAX_MB" ]; then
-		log "lane is ${lane_disk_mb}MB over the ${LANE_MAX_MB}MB budget - clearing work, tmp and the nested image store"
-		# `podman unshare rm`, NOT a plain rm. Everything under the lane belongs
-		# to the subuid that container uid 1000 maps to, so `core` cannot remove
-		# it from outside the namespace - a plain rm produces a wall of
-		# `Permission denied` and leaves the budget un-reclaimed while reporting
-		# nothing, which is a disk that fills with a garbage collector running.
-		podman unshare rm -rf \
-			"${LANE_ROOT:?}/home/work" "${LANE_ROOT:?}/tmp" "${LANE_ROOT:?}/storage"
-		mkdir -p "$LANE_ROOT/tmp" "$LANE_ROOT/storage"
-		lane_disk_mb=$(lane_du_mb "$LANE_ROOT")
+	# THE HEAL FLAG IS READ FIRST, so a lane that has actually failed is recorded
+	# as a heal rather than swallowed by whichever other trigger happened to be
+	# true in the same cycle - which decides both whether the evidence is kept
+	# and what ci.lane_store reports. `podman unshare test`, because
+	# $LANE_ROOT/home belongs to a subuid `core` cannot stat inside.
+	if podman unshare test -f "$LANE_ROOT/$HEAL_FLAG" 2>/dev/null; then
+		log "the docker shim reported a start it could not retry into working - healing this lane"
+		lane_reset heal
+		return 0
 	fi
+
+	if [ -n "$lane_disk_mb" ] && [ "$lane_disk_mb" -gt "$LANE_MAX_MB" ]; then
+		log "lane is ${lane_disk_mb}MB over the ${LANE_MAX_MB}MB budget"
+		lane_reset budget
+		return 0
+	fi
+
+	if [ "$STORE_MAX_JOBS" -gt 0 ] && [ "$store_jobs" -ge "$STORE_MAX_JOBS" ]; then
+		log "this store has served $store_jobs jobs against a ${STORE_MAX_JOBS}-job window"
+		lane_reset window
+		return 0
+	fi
+}
+
+# ------------------------------------------------------------------------------
+# What a job actually cost
+# ------------------------------------------------------------------------------
+# READ WHILE THE JOB IS STILL RUNNING, because the scope is transient and
+# --collect: the instant the container exits systemd removes it and every number
+# in it goes too. That is the whole reason this is sampled on the poll rather
+# than read once at the end, where it would find nothing.
+#
+# THE SAMPLE RATE DOES NOT DECIDE THE ANSWER. memory.peak and pids.peak are
+# kernel high-water marks, so a read at any moment is the maximum over
+# everything before it. What a 30-second poll can miss is a peak reached in the
+# last interval before exit, which is teardown rather than test. Said plainly
+# rather than left implied: this is a floor on the true peak, and it is the
+# floor host/systemd/app-ci.slice asked for.
+#
+# WHY IT IS HERE AT ALL. That file sizes two lanes against a 15.8 GB host from
+# numbers it calls starting points, and names its own failure mode as silence: a
+# `Slice=` pointing at nothing still starts every member, healthy and fully
+# observed and contained by nothing. Peaks in the marker are what turn the next
+# sizing argument into a measurement.
+sample_scope() {
+	local d="$SCOPE_CG/$scope.scope" v
+	[ -n "$scope" ] || return 0
+	[ -d "$d" ] || return 0
+
+	v=$(cat "$d/memory.peak" 2>/dev/null)
+	case "$v" in ''|*[!0-9]*) ;; *)
+		v=$(( v / 1048576 ))
+		if [ "$v" -gt "${lane_mem_peak_mb:-0}" ]; then lane_mem_peak_mb="$v"; fi ;;
+	esac
+
+	v=$(cat "$d/pids.peak" 2>/dev/null)
+	case "$v" in ''|*[!0-9]*) ;; *)
+		if [ "$v" -gt "${lane_pids_peak:-0}" ]; then lane_pids_peak="$v"; fi ;;
+	esac
+
+	# THESE TWO ARE PER-JOB, AND THE LIFETIME TOTAL IS ADDED ONCE AT THE END.
+	# memory.events counts within one cgroup and the cgroup is new every job, so
+	# folding them into the lifetime counter here would add this job's events
+	# again on every single poll.
+	v=$(awk '$1=="max"{print $2}' "$d/memory.events" 2>/dev/null)
+	case "$v" in ''|*[!0-9]*) ;; *) job_mem_max_ev="$v" ;; esac
+	v=$(awk '$1=="oom_kill"{print $2}' "$d/memory.events" 2>/dev/null)
+	case "$v" in ''|*[!0-9]*) ;; *) job_oom_kills="$v" ;; esac
 }
 
 # ------------------------------------------------------------------------------
@@ -470,7 +685,7 @@ while [ "$stopping" = 0 ]; do
 	done
 	[ "$stopping" = 0 ] || break
 
-	gc_disk
+	gc_lane
 	reap_offline
 
 	stamp=$(date +%s)
@@ -674,10 +889,13 @@ while [ "$stopping" = 0 ]; do
 	busy=0
 	job_started_at=""
 	idle_since=$stamp
+	job_mem_max_ev=0
+	job_oom_kills=0
 	marker_write 0
 
 	while kill -0 "$run_pid" 2>/dev/null && [ "$stopping" = 0 ]; do
 		nap "$POLL_SEC"
+		sample_scope
 		[ "$stopping" = 0 ] || break
 		kill -0 "$run_pid" 2>/dev/null || break
 
@@ -725,8 +943,17 @@ while [ "$stopping" = 0 ]; do
 		fi
 	done
 
+	# One more attempt before waiting, on the chance the scope has outlived the
+	# container by a few milliseconds. It usually has not, which is why the poll
+	# above is the measurement and this is only an opportunity.
+	sample_scope
+
 	wait "$run_pid" 2>/dev/null
 	run_rc=$?
+	scope=""
+
+	lane_mem_max_events=$(( lane_mem_max_events + job_mem_max_ev ))
+	lane_oom_kills=$(( lane_oom_kills + job_oom_kills ))
 
 	workers_after=$(find "$LANE_ROOT/runner/_diag" -maxdepth 1 -name 'Worker_*.log' 2>/dev/null | wc -l)
 	[ "$workers_after" -gt "$workers_before" ] && busy=1
@@ -736,6 +963,7 @@ while [ "$stopping" = 0 ]; do
 		[ "$jobs_day" = "$today" ] || { jobs_day="$today"; jobs_today=0; }
 		jobs_today=$(( jobs_today + 1 ))
 		jobs_total=$(( jobs_total + 1 ))
+		store_jobs=$(( store_jobs + 1 ))
 		last_job_at=$(now_iso)
 		last_job_seconds=$(( $(date +%s) - stamp ))
 		log "job finished after ${last_job_seconds}s (container rc $run_rc)"

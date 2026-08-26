@@ -406,6 +406,21 @@ fi
 # does differently - which is the open question, since the identical sequence
 # fails in fifteen seconds under the real runner and has never once failed here.
 # This leg proves the engine CAN do it; it cannot prove a job will.
+#
+# AND IT IS BLIND A SECOND WAY, WHICH IS THE ONE THAT MATTERS MORE. `runner()`
+# builds a FRESH lane every run. The failure this leg is shaped after went away
+# when both live lanes were wiped by hand and returned on lanes carrying ~2.5 GB
+# of state from twenty-odd jobs, so a fresh store is the one condition under
+# which it has never been seen. That is not a flaw in this leg, it is a property
+# of a smoke test: it grades an IMAGE, and the defect is in a lane. Two separate
+# failures have now hidden here for exactly that reason - the db.sql runroot
+# split, which this file records at the runtime-directory leg, and this one.
+#
+# WHAT CAN SEE IT is bin/verify-host.sh, which reads live lanes: `ci.runtime_dir`
+# for the first and `ci.lane_store` for this one, the latter reporting a lane
+# that has healed itself after the docker shim exhausted its retries. Do not add
+# an assertion here that appears to cover it - a green tick on a fresh lane is
+# how both of these got through.
 say "  (pulling and starting a real service container - this takes about a minute)"
 # shellcheck disable=SC2016  # this script runs in the CONTAINER, so nothing in it may expand here
 hc=$(runner bash -c '
@@ -731,6 +746,11 @@ fi
 # It is kept because it still catches the configuration-level case - an image
 # that ships its runtime directory on the job's own /tmp, or an uncapped /run -
 # and those are real. It is not evidence about a split.
+#
+# THE CLASS, NOT THE INSTANCE: a fresh lane is this whole script's blind spot,
+# and the service-container leg above carries the second example of it. Anything
+# that needs a lane with history behind it belongs in bin/verify-host.sh, which
+# reads the running ones.
 # shellcheck disable=SC2016  # this runs in the CONTAINER, so nothing may expand here
 rr=$(runner sh -c 'printf "%s|%s|%s" "$XDG_RUNTIME_DIR" "$(podman info --format "{{.Store.RunRoot}}" 2>/dev/null)" "$(df -m /run 2>/dev/null | tail -1 | awk "{print \$2}")"' 2>/dev/null | tail -1 | tr -d '\r\n')
 xdg=${rr%%|*}
