@@ -2826,7 +2826,22 @@ if [ -z "$GREENBOOT" ]; then
 	#
 	# A WINDOW RESET IS NOT REPORTED, because it fires on a job counter by design
 	# and reporting it would train the reader to ignore this line.
+	# IT AGES OUT, AND A CHECK THAT CANNOT IS THE REASON. `last_reset_reason`
+	# lives in the marker and the driver reads it back across a restart, so
+	# without a window this warns for ever after one heal - and a warning that
+	# never clears is a warning nobody reads, which is the failure mode it exists
+	# to prevent. Seven days is long enough that nobody misses one and short
+	# enough that it stops being furniture; past that it is history with a
+	# capture attached, which is a note.
+	ci_reset_age=""
 	if [ -n "$ci_reset_at" ]; then
+		ci_reset_e=$(date -d "$ci_reset_at" +%s 2>/dev/null)
+		[ -n "${ci_reset_e:-}" ] && ci_reset_age=$(( ( $(date +%s) - ci_reset_e ) / 86400 ))
+	fi
+
+	if [ -n "$ci_reset_at" ] && [ -n "$ci_reset_age" ] && [ "$ci_reset_age" -ge 7 ]; then
+		note ci.lane_store "$ci_reset_reason healed itself ${ci_reset_age} days ago, which is history rather than a live finding - the capture is still under '\$GITHUB_RUNNER_ROOT/forensics' (default /var/home-server/cache/github-runner/forensics) and is the only record of that state there is"
+	elif [ -n "$ci_reset_at" ]; then
 		warn ci.lane_store "$ci_reset_reason healed itself at $ci_reset_at - the docker shim exhausted its retries on a 'docker start', which is the api-checks failure recurring. The store's metadata was kept before the reset: look under '\$GITHUB_RUNNER_ROOT/forensics' (default /var/home-server/cache/github-runner/forensics), because twelve reproductions have failed to recreate that state and this is the first capture of it. See docs/ci.md."
 	elif [ "$ci_markers" -eq 0 ]; then
 		note ci.lane_store "no CI lane has written a marker, so nothing is known about its store"
