@@ -311,7 +311,7 @@ postmortem() {
 	# `|| true` on the tee's target and no test of its result: an unwritable
 	# $HOME must not change what this script returns, and the contract at the top
 	# of the file is that podman's exit code arrives untouched.
-	} 2>&1 | tee -a "${HOME:-/tmp}/.docker-shim-postmortem.log" >&2 || true
+	} 2>&1 | tee -a "${HOME:-/tmp}/.docker-shim-postmortem.log" 2>/dev/null >&2 || true
 }
 
 # BEFORE the call, so it cannot disturb $?, and only for the two verbs that
