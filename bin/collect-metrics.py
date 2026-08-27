@@ -1390,7 +1390,21 @@ AGENT_STAMPS = (("last_ok_at", "last_ok"), ("heartbeat_at", "heartbeat"),
                 # WHEN THE HOLD ENDS, which is the whole reason the status needs
                 # no staleness rule: the window either has rolled over or has not,
                 # and the API said when rather than leaving it to be estimated.
-                ("quota_resets_at", "quota_resets"))
+                ("quota_resets_at", "quota_resets"),
+                # WHEN THE FLEET LAST LOOKED FOR WORK TO DO, and it is a stamp
+                # rather than a number for the reason every other one here is:
+                # what matters is that it keeps advancing. An intake that has
+                # stopped is indistinguishable from an empty backlog by every
+                # other signal on this host - no failed unit, no unhealthy
+                # container, no run - so this series going flat IS the fault.
+                #
+                # intake_last_why IS DELIBERATELY NOT HERE. It is a sentence
+                # about a task, unbounded and sometimes carrying a title, so a
+                # label dimensioned on it would mint a new series for every task
+                # the fleet declined, in a store that keeps 400 days. It is read
+                # by agents.intake into a message and nowhere else - the
+                # phase_label family, by that precedent.
+                ("intake_last_at", "intake_last"))
 
 
 def _marker(path):

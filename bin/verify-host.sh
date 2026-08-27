@@ -2251,6 +2251,52 @@ if [ -z "$GREENBOOT" ]; then
 		*) q_rank=2 ;;
 	esac
 	# --------------------------------------------------------------------------
+	# The pass that chooses the fleet's own work, and why it stopped choosing
+	# --------------------------------------------------------------------------
+	# AN INTAKE THAT HAS STOPPED LOOKS EXACTLY LIKE AN EMPTY BACKLOG, and that is
+	# the whole reason this check exists. Both states are "no run started"; both
+	# leave every unit active, every container healthy and the journal quiet. The
+	# tracker being unreachable, the API key being revoked, a stage somebody
+	# renamed, an exception in the pass - all of them present as a fleet that has
+	# simply run out of things to do, which is the one explanation nobody
+	# investigates.
+	#
+	# SO WHAT IS GRADED IS THE LOOK AND NOT THE RUN. conduct stamps
+	# intake_last_at on EVERY look, including one that picked nothing, so a stamp
+	# that has stopped advancing is the fault and a fresh stamp with a reason
+	# beside it is health. Same shape as the mirror whose fetch stopped:
+	# FETCH_HEAD's mtime dates the attempt rather than the change.
+	#
+	# ABSENT IS A note AND NOT A warn, on agents.tracker_configured's precedent.
+	# No stamp at all means no project has `intake` armed, which is the shipped
+	# default and a configuration rather than a fault - the fleet then behaves
+	# exactly as it did before this existed and a person types the task id.
+	#
+	# THE STALENESS BOUND IS FOUR CADENCES rather than one. conduct looks every
+	# INTAKE_SEC (900s), but a look is SKIPPED while anything is in flight - and a
+	# round is most of an hour - so one missed cadence is the normal state of a
+	# working fleet. An hour without a look, on the other hand, means either a
+	# very long round or a pass that is no longer running, and both are worth a
+	# sentence.
+	intake_at=$(cget intake_last_at)
+	intake_age=$(cage intake_last_at)
+	intake_why=$(cget intake_last_why)
+	fact agents_intake_age "${intake_age:-}"
+	if [ -z "$intake_at" ]; then
+		note agents.intake "conduct has never recorded an intake look - no project has \`intake\` armed, so the fleet takes the work it is given and chooses none; that is the shipped default"
+	elif [ -n "$intake_age" ] && [ "$intake_age" -gt 3600 ]; then
+		warn agents.intake "conduct last looked for work ${intake_age}s ago and the cadence is 900s - either a round has been running for over an hour, or the intake pass has stopped and the fleet will now sit idle looking exactly as it would with an empty backlog${intake_why:+ (last reason: $intake_why)}"
+	elif [ -n "$intake_why" ]; then
+		# HOLDING IS NOT A FAULT AND MUST NOT READ AS ONE. Every reason conduct
+		# writes here is a decision it was told to make - the Review cap, the
+		# quota window, an empty pool - so this stays `ok` and puts the reason in
+		# the message. A fleet that is deliberately idle and a fleet that is
+		# broken are told apart by the AGE above, never by this string.
+		ok agents.intake "conduct looked ${intake_age:-?}s ago and started nothing: $intake_why"
+	else
+		ok agents.intake "conduct looked ${intake_age:-?}s ago and took work"
+	fi
+	# --------------------------------------------------------------------------
 	# The model credential, and the one thing a podman secret cannot prove
 	# --------------------------------------------------------------------------
 	# THREE ARMS, AND THE THIRD IS WHY THIS EXISTS. That a token is in .env and
