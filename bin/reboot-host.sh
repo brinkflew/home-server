@@ -210,7 +210,7 @@ mid_flight=$(sshq '
 	   fresh "$(sed -n "s/^heartbeat_at=//p" "$m" 2>/dev/null | tail -1)"; then
 		printf "a conduct phase "
 	fi
-	for l in 1 2; do
+	for l in 1 2 3; do
 		c=$HOME/.cache/home-server/ci-state-$l
 		if [ "$(sed -n "s/^job_in_flight=//p" "$c" 2>/dev/null | tail -1)" = 1 ] &&
 		   fresh "$(sed -n "s/^heartbeat_at=//p" "$c" 2>/dev/null | tail -1)"; then
