@@ -341,7 +341,7 @@ fi
 # gets exercised, on a schedule, without anybody deciding to.
 ci_busy_lane=""
 ci_busy_age=""
-for ci_lane in 1 2; do
+for ci_lane in 1 2 3; do
 	ci_state="${HOME_SERVER_CI_STATE_DIR:-${HOME:-/var/home/core}/.cache/home-server}/ci-state-$ci_lane"
 	[ -f "$ci_state" ] || continue
 	[ "$(sed -n 's/^job_in_flight=//p' "$ci_state" 2>/dev/null | tail -1)" = 1 ] || continue

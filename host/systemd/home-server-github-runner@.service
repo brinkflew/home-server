@@ -2,8 +2,8 @@
 # One CI lane, and the reason the loop is not in this file
 # ------------------------------------------------------------------------------
 # A template, instantiated once per lane: `home-server-github-runner@1.service`
-# and `@2`. %i is the lane number and nothing else - it is not a repository, not
-# a label and not a scope, so it never needs systemd-escape and cannot collide
+# through `@3`. %i is the lane number and nothing else - not a repository, not a
+# label and not a scope, so it never needs systemd-escape and cannot collide
 # with a repository name containing a dash.
 #
 # A plain user unit rather than a quadlet, and for the reason
