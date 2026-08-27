@@ -193,6 +193,15 @@ RUN dnf install -y --setopt=install_weak_deps=False \
 #
 # There is no EXTERNALLY-MANAGED marker for 3.13 on this image, so an install is
 # not refused - `pip install six` was run end to end before this was written.
+#
+# AND A BARE `pip install` SURVIVES THE READ-ONLY ROOTFS, which is the obvious
+# next worry and is measured rather than assumed. A lane runs `--read-only`, so
+# the /usr/local site-packages this writes to is not writable at run time - pip
+# detects that and falls back to the user scheme by itself, into the lane's
+# persistent $HOME. Verified against this image with the lane's own flags:
+# `pip install six` then `import six` both succeed, with no warning and no
+# --user on the command line. A workflow copied from a hosted runner needs no
+# change.
 RUN PYV=$(python3.13 -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])') \
  && D="/opt/hostedtoolcache-seed/Python/${PYV}/x64" \
  && mkdir -p "$D/bin" \
