@@ -156,7 +156,7 @@ fingerprint() {
 # two that carry the argument anyway.
 sample_layer() {
 	[ -n "${1:-}" ] || return 0
-	tr '{' '\n' < "$S/overlay-containers/containers.json" 2>/dev/null |
+	tr '{' '\n' 2>/dev/null < "$S/overlay-containers/containers.json" |
 		grep -F "\"id\":\"$1\"" |
 		sed -n 's/.*"layer":"\([0-9a-f]\{64\}\)".*/\1/p' | head -1
 }
@@ -185,7 +185,7 @@ sample_one() {
 		"$(grep -c ' overlay ' "$sm_mi" 2>/dev/null || echo '?')" \
 		"$(if [ -f "$sm_mp" ]; then wc -c < "$sm_mp"; else echo absent; fi)" \
 		"$(if [ -n "$sm_merged" ]; then find "$sm_merged" -maxdepth 1 -mindepth 1 2>/dev/null | wc -l; else echo -; fi)" \
-		>> "$SAMPF"
+		2>/dev/null >> "$SAMPF"
 }
 
 # THE 600-SAMPLE CEILING IS A MINUTE. A `docker start` that has not returned by
@@ -235,7 +235,16 @@ sample_begin() {
 
 	# TRUNCATING, NOT APPENDING: every attempt gets its own file, so the
 	# post-mortem printed after retry 2 shows retry 2 and not all three at once.
-	echo "#pause=${sm_pause:-none} layer=${sm_layer:-unresolved}" > "$SAMPF"
+	#
+	# `2>/dev/null` BEFORE the redirect, not after, and it is the same lesson as
+	# the tee at the bottom of this file: redirections apply LEFT TO RIGHT, so
+	# stderr has to be sent away before the failing `>` is attempted or the
+	# shell prints "No such file or directory" into a job log. Measured on a
+	# container started without runner-init, where $XDG_RUNTIME_DIR does not
+	# exist: two lines per attempt, six per failure. The post-mortem already
+	# reports the absence of samples in words, so this is quiet by design and
+	# not silent by accident.
+	echo "#pause=${sm_pause:-none} layer=${sm_layer:-unresolved}" 2>/dev/null > "$SAMPF"
 	sample_one
 	(
 		trap - EXIT
