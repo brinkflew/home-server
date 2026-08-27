@@ -2882,3 +2882,122 @@ readings that could never have said anything.
   `repoquery --whatprovides "python3.13dist(pip)"` is empty - and `python3-pip` targets Fedora 44's
   default 3.14. `ensurepip --altinstall` is the route, and `--altinstall` is load-bearing: without
   it, 3.14's `pip3` becomes 3.13's.
+
+## A thing that shipped, a thing that could not arrive, and no way to tell them apart
+
+Added 2026-08-27, working `avanserv/upskald`'s five requests in
+`docs/runbooks/home-server-lane-requests.md`.
+
+- **`gh` was never in the lane image, and the cost is the CONSUMER rather than the package.**
+  Nothing in a workflow declares it - hosted runners ship it, so `gh api` is written as though it
+  were `cat` - and its absence FAILS GREEN twice over. upskald's `scripts/ai_review_state.py`
+  resolves the incremental review's baseline through `gh run download`, and its `_run` helper
+  catches `OSError` and returns `(False, "")`, so a missing `gh` turned every AI review into a FULL
+  review against the whole tree and billed them per push with nothing failing and nothing warning.
+  Its sibling consumer, the coverage baseline, read the same way and warned-and-passed having
+  enforced no threshold at all. Fedora 44 carries `gh` in `updates` at 2.97.0-2.fc44, 39.9 MiB
+  installed, `/usr/bin` - so it is one word in the dnf list and the `cli/cli` RPM repository is not
+  needed.
+- **The two assertions worth making about it are not "is it installed".** It writes `~/.config/gh`
+  on first use, on a rootfs `bin/github-runner-smoke.sh` asserts fifteen lines later REJECTS
+  writes - which works only because `$HOME` is the lane's bind mount and `runner-init` made
+  `$HOME/.config` first, a chain of three things any of which a later change could break without
+  touching `gh`. And it resolves `GH_TOKEN` with no login and no config file, which is the whole
+  reason no credential has to reach the image. `gh --version` proves neither.
+- **THE TOOL-CACHE SEED GUARD KEYED ON EXISTENCE, WHICH IS NOT A VERSION.** `runner-init.sh` read
+  `[ ! -d "$RUNNER_TOOL_CACHE/Python" ]`, so a lane was seeded exactly once ever and no later seed
+  could reach it. The `ensurepip` work shipped in the image on 2026-08-27 and reached NEITHER
+  deployed lane. Measured the same morning: the seed held `pip pip3 python python3`, both lanes
+  held `python python3` dated the previous day - with the tool cache present, the `.complete`
+  marker in place, `setup-python` resolving 3.13 in 150ms, and every check on this host green.
+  upskald wrote the prediction down in their runbook before it happened; nothing here noticed it
+  after.
+- **The stamp is derived from the tree, not written by hand**, because a hand-bumped `ARG` is a
+  second thing to remember at the moment attention is on the first, and this seed has already
+  proved what forgetting costs. The cache is CLEARED rather than copied over: an overlay would
+  leave a previous Python minor in place and `setup-python` may resolve either, which no job log
+  makes visible.
+- **`bin/github-runner-smoke.sh` cannot grade the stale case and says so.** `runner()` builds a
+  fresh lane, a fresh lane has no stamp, no stamp is a mismatch, and a mismatch always re-seeds -
+  so it passes by construction on the one shape that broke, and did. It asserts the MECHANISM; the
+  check that can see a deployed lane is `ci.toolcache_seed`. Same division of labour as
+  `ci.runtime_dir` and the `db.sql` guard, for the same structural reason.
+- **The smoke test chowned `1000:1000` where the driver chowns `1000:0`**, under a comment claiming
+  they matched, with the failure message at the writability leg repeating the wrong one. gid is the
+  ONLY asymmetry the intermittent `docker start` 125 has ever shown - a failing layer reads
+  `merged`/`work` at the nested engine's overflowgid, a healthy one reads 0 - so for as long as
+  that line stood, no gid-based hypothesis about that failure could be tested through the smoke
+  path at all. The instrument disagreed with the thing it was pointed at.
+
+## Eighteen more reproductions that fired at nothing, and one hypothesis retired
+
+- **The instruments were live and the lanes were loaded, which is the only reason this is a result.**
+  The post-mortem's `tee` fix, the ~100 ms in-flight sampler and both gid maps deployed at 08:49 in
+  image `7d6611a71464`; both lanes were carrying the state that reproduces - lane 1 at 4,746 MB
+  across 33 jobs, lane 2 at 4,706 MB across 40, both far past the 2.4-2.7 GB band where all four
+  probe variants failed on 2026-08-25.
+- **Eighteen attempts, none fired.** Six serial inside one lane container with the image cached;
+  twelve more with a FORCED fresh pull each time and both lanes running concurrently, which is the
+  shape the failing job had. Both stores were left byte-intact - `store_jobs` and `lane_disk_mb`
+  unchanged, no breadcrumb, no leftover containers or networks.
+- **What that does NOT establish**: every one of those attempts ran inside a long-lived lane
+  container, and the real workload starts a FRESH container per job over a persistent graph root
+  whose runroot is a tmpfs that dies with the container. That difference is still unreproduced.
+- **THE 31-32 SECOND PATTERN IS THE FAILURE'S OWN DURATION, NOT A PRECURSOR**, and it is written
+  down because it looks exactly like one. Three of the four heals came 31-32s after the preceding
+  mint - 20:45:54 to 20:46:26, 20:56:54 to 20:57:26, 12:52:35 to 12:53:06 - which is mint, container
+  start, job assigned, shim exhausts its retries, job ends, container exits, driver reads the
+  breadcrumb. Successful cycles on the same evening are 32-33s apart too.
+- **The load hypothesis is contradicted by the instrument's own numbers.** At the instant of the
+  20:46 failure the post-mortem read `pressure(io) some avg10=0.00`, `pressure(mem) some
+  avg10=0.00`, `pressure(cpu) some avg10=1.63`, `memory.current` 155 MB, `oom_kill 0`, 66 pids of
+  1024 and `/var` 33% used. **The lane was idle at the moment it failed.** The correlation with a
+  busy evening is real at the scale of the afternoon and absent from the instant, and two of that
+  day's four occurrences happened with the load absent entirely.
+- **One datum that does support upskald's store-skew suspicion, weakly.** The pull immediately
+  before the failure took 2.4s; a genuine cold pull of the same image on this host, measured twelve
+  times today, takes 5.0-5.2s. GitHub strips the carriage-return progress updates, so the job log
+  cannot show whether those eleven `Copying blob` lines ended in `done` or `skipped: already
+  exists` - the timing is the only evidence either way and it is half.
+- **A DRIVER KILLED WITHOUT ITS TERM HANDLER COULD DESTROY A LIVE STORE, AND IT IS RULED OUT FOR
+  2026-08-26.** Nothing in `bin/github-runner.sh` holds a lock; the only safety is that `gc_lane`
+  runs at the top of the loop. The job runs in a SIBLING transient scope that outlives the driver,
+  `marker_read()` does not restore `job_in_flight`, and `store_jobs` persists - so a fresh driver
+  can `rm -rf` the graph root out from under a live nested engine, which is precisely the observed
+  shape. Measured from the journal: both drivers held pids 1405580 and 1405627 continuously from
+  19:20 through 20:58 across both evening failures, and the whole day carries no `Main process
+  exited`, no signal and no non-clean stop - every restart was a Stopped/Started pair through the
+  trap. The guard is one `podman ps` and closes the class regardless.
+
+## One directory for two lanes, and the half of it that must never be swept
+
+- **upskald's coverage ratchet moved off GitHub onto this disk**, so the shape of its loss changed
+  more than its location did. `scripts/check_coverage.py` returns PASS on `absent` and FAIL only on
+  `unavailable`, and a runner with no store reads `absent` - so a lost baseline is not a red gate,
+  it is a gate that silently enforces nothing on every surface at once. That is why
+  `bin/backup-server.sh` treats an empty capture of an existing store as fatal.
+- **The store is a SIBLING of `lanes/`, not a child, and that is its only real guarantee.**
+  `lane_reset` deletes `runner/_work tmp storage` out of `$LANE_ROOT`, so a store a reset could
+  reach would lose the ratchet on the first self-heal - of which there were four in one day.
+- **It is deliberately NOT under `config/`, even though that is where the backup already reaches.**
+  `docs/ci.md` states and `bin/github-runner-smoke.sh` asserts that no path under `config/` is
+  mounted into a lane; putting it there turns that into "no `config/` except this one". `state/`
+  reaches the backup by the mechanism `bin/backup-server.sh` already uses for the Prometheus
+  snapshot and the SQLite dumps - staged in by a step - which also needs no new `restic backup`
+  path and no change to `bin/verify-restore.sh`, whose assertions cover both repositories.
+- **`CI_ARTIFACT_STORE` is declared in the image's `ENV`, not passed with `-e`.** The driver passes
+  NO environment into a lane at all, and the argument for that is about the registration token; the
+  value here is a CONTAINER path and therefore a property of the image. Being always set is the
+  point rather than an oversight - a mounted-but-broken store then reads `unavailable` and turns
+  upskald's pull requests red, which is the direction they asked for.
+- **Thirty days on `runs/`, and seven would have failed in the worst possible distribution.** One
+  consumer runs when a pull request merges and reads the artifacts of that pull request's LAST CI
+  run, which may be weeks old if the branch sat - so a short retention breaks exactly the
+  slow-moving pull requests and nothing else.
+- **The sweep is a timer rather than part of `gc_lane`, because the store is shared.** Every other
+  reclaim in `bin/github-runner.sh` operates on a `$LANE_ROOT` exactly one process owns; two
+  drivers sweeping one tree have no lock between them.
+- **A backup copy taken with plain `rsync` would report success having copied nothing.** Everything
+  under the store belongs to the subuid container uid 1000 maps to, so `core` cannot traverse it -
+  the same reason the driver unshares its `du` and its `rm`, and the same failure that once read
+  1,383 MB against 2,500 MB actual.

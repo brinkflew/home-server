@@ -173,7 +173,7 @@ while restic reports the repository shrinking - a silent, billable divergence. O
 for the same reason: it makes prune fail outright. The append-only key is what closes the gap those
 would have addressed, without breaking prune.
 
-**Six things the backup does that a plain `rsync` does not**, each of which otherwise produces a
+**Seven things the backup does that a plain `rsync` does not**, each of which otherwise produces a
 backup that looks complete and is not:
 
 - **Caddy's certificates are asserted present, never assumed.** Under Docker its `/data` was
@@ -215,6 +215,23 @@ backup that looks complete and is not:
     night and reads as current. `bin/verify-restore.sh` therefore asserts only that a dump exists
     and is whole; `backup.windmill_dump_age` asserts recency, on the server, where whether the
     container is running is knowable at all.
+
+- **The CI coverage baseline is staged in, and an empty capture is fatal.** Added 2026-08-27. It is
+  a few hundred bytes at `cache/github-runner/artifacts/state/`, holding the percentage each of
+  upskald's surfaces may not regress below - the memory of a ratchet that used to live on an orphan
+  git branch on GitHub, replicated on somebody else's servers, and now lives here. **Nothing under
+  `cache/` is backed up by anything**, so without this step the move traded three copies for one.
+  It is staged rather than backed up in place for the reason the store is not under `config/` at
+  all: `docs/ci.md` asserts no `config/` path is mounted into a lane, and an exception there is
+  worth more than the convenience. **`podman unshare`, not a plain copy** - the store belongs to the
+  subuid container uid 1000 maps to, and `core` cannot traverse it, so an ordinary `rsync` succeeds
+  having read nothing.
+  - **The loss mode is why this one aborts the run.** A missing baseline does not turn upskald's
+    gate red: `scripts/check_coverage.py` reads `absent` and PASSES, with a warning, for every
+    surface at once. So the failure is a gate that silently enforces nothing, undetectable from
+    either side. That makes it the Caddy-certificate case rather than the metrics one - a silently
+    empty capture looks exactly like a working one - and a store that has never been seeded is
+    still a skip, on the `windmill-db` precedent.
 
 **THE EXCLUDE LIST DID NOT COVER THE TSDB, AND COULD NOT SAY SO.** This is the sharpest instance yet
 of a pattern this repository keeps rediscovering, and it was shipped and caught the same evening:

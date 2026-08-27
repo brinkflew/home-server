@@ -497,6 +497,118 @@ this failure has never been observed. That is the same blind spot that let the `
 with a green tick from a leg that already had the right assertion - a smoke test grades an image,
 and both of these defects live in a lane.
 
+### Eighteen more, with the instruments live and the lanes loaded
+
+Every earlier reproduction was run against a lane that had been wiped, or with instruments that
+turned out to be pointed at nothing. On 2026-08-27 both conditions were finally right at once: the
+post-mortem's `tee`, the ~100 ms sampler and both gid maps deployed at 08:49 in image
+`7d6611a71464`, and both lanes were carrying the state that reproduces - lane 1 at 4,746 MB across
+33 jobs, lane 2 at 4,706 MB across 40, well past the 2.4-2.7 GB band where all four probe variants
+failed on the 25th.
+
+**Eighteen attempts, none fired.** Six serial inside one lane container with the image already in
+the store; twelve more with a forced `docker rmi` and fresh pull before every `create`, on both
+lanes concurrently, which is the shape the failing job had. The sequence was taken from the failing
+job log rather than written fresh - the network create, the pull, `docker create` with `-p 5432:5432`
+and the four health flags, then `docker start` - because `-p` and the per-job network are among the
+things the nine synthetic reproductions left out. Both stores came through byte-intact: `store_jobs`
+and `lane_disk_mb` unchanged, no breadcrumb, no leftovers.
+
+**What is still unreproduced is the container lifecycle, not the container.** All eighteen ran
+inside a long-lived lane container. The real workload starts a FRESH one per job over a graph root
+that persists and a runroot that is a tmpfs dying with the container. Nothing here has tested that
+boundary, and it is the obvious next thing.
+
+**Three readings that look like findings and are not.** They are written down because each one cost
+time to check:
+
+- **The 31-32 second gap before three of the four heals is the failure's own duration.** 20:45:54 to
+  20:46:26, 20:56:54 to 20:57:26, 12:52:35 to 12:53:06 - which is mint, container start, job
+  assigned, shim exhausts its retries, job ends, container exits, driver reads the breadcrumb.
+  Successful cycles on the same evening sit 32-33s apart.
+- **The load was not there at the instant.** The post-mortem read `pressure(io) some avg10=0.00`,
+  `pressure(mem) some avg10=0.00`, `pressure(cpu) some avg10=1.63`, `memory.current` 155 MB,
+  `oom_kill 0`, 66 pids of 1024, `/var` 33% used. The lane was idle when it failed.
+- **A driver killed without its TERM handler is ruled out.** It would be a real mechanism - no lock
+  anywhere in `bin/github-runner.sh`, the job in a sibling scope that outlives the driver,
+  `job_in_flight` not restored by `marker_read()`, so a fresh driver could `rm -rf` the graph root
+  under a live engine. Both drivers held pids 1405580 and 1405627 continuously from 19:20 through
+  20:58, and the whole day carries no `Main process exited` and no signal. `gc_lane` now refuses
+  while a `ci-<n>-*` container is running anyway.
+
+One datum does support upskald's store-skew suspicion, weakly: the pull immediately before the
+failure took 2.4s, and a genuine cold pull of the same image on this host takes 5.0-5.2s, measured
+twelve times. GitHub strips carriage-return progress updates, so the job log cannot say whether
+those eleven `Copying blob` lines ended in `done` or `skipped: already exists`. The timing is the
+only evidence and it is half.
+
+## The shared artifact store
+
+upskald's CI hands work between jobs - end-to-end shard reports, coverage data, two small files one
+workflow writes for another - and was round-tripping about 2.5 MB per run through GitHub artifacts
+to do it. One directory, mounted into every lane at `/opt/ci-artifacts` and exported to a job as
+`$CI_ARTIFACT_STORE`, replaces that.
+
+```
+$FLEET_ROOT/artifacts/            -> /opt/ci-artifacts
+  runs/   <owner>/<repo>/<run_id>/<run_attempt>/<name>/   swept at 30 days
+  state/  <owner>/<repo>/baselines.json                   swept by nothing, backed up
+```
+
+**It is a sibling of `lanes/`, not a child, and that is the only real guarantee it has.**
+`lane_reset` deletes `runner/_work`, `tmp` and `storage` out of `$LANE_ROOT`; a store a reset could
+reach would lose the coverage ratchet on the first self-heal, of which there were four in one day.
+Nothing in `lane_reset` knows this path exists and it must stay that way.
+
+**One directory for both lanes, deliberately.** upskald's producing job and its consuming job land
+on different lanes routinely - that is the entire reason they asked for it. A per-lane store would
+not error; it would answer with somebody else's data about half the time.
+
+**Not under `config/`, even though that is where the backup already reaches.** This file states, and
+`bin/github-runner-smoke.sh` asserts, that no path under `config/` is mounted into a lane. Putting
+the store there turns that assertion into "no `config/` except this one", which is the shape every
+eroded boundary starts out as. `state/` reaches the backup instead by the mechanism
+`bin/backup-server.sh` already uses for the Prometheus snapshot and the SQLite dumps: staged into
+the backup tree by a step of its own. That needs no new `restic backup` path and no change to
+`bin/verify-restore.sh`, which asserts against both repositories.
+
+**`CI_ARTIFACT_STORE` is declared in the image's `ENV`, never passed with `-e`.** The driver passes
+no environment into a lane at all - the argument for that is at the top of `bin/github-runner.sh`
+and it is about the registration token - and this value is a CONTAINER path, a property of the
+image rather than of the host. The host half is the `-v` in the driver, and the two agree by
+reading, the same way `storage.conf`'s `runroot` and `XDG_RUNTIME_DIR` do.
+
+**Being always set is the point.** upskald's side branches three ways: unset means no store and
+their coverage gate passes; set-and-readable means a baseline and the gate enforces it;
+set-and-unreadable means `unavailable` and the gate FAILS. So a store that is mounted but broken
+turns their pull requests red rather than quietly passing every surface at once. The
+set-but-absent case cannot arise from the mount itself, because podman does not create a missing
+bind-mount source - it refuses to start the container.
+
+**Thirty days on `runs/`, and seven would have failed in the worst possible distribution.** One of
+their consumers runs when a pull request merges and reads the artifacts of that pull request's LAST
+CI run, which may be weeks old if the branch sat. A 7-day sweep would break exactly the slow-moving
+pull requests and nothing else. Sizing: about 2.5 MB per run against 153 GB free on `/var`.
+
+**The sweep is `bin/ci-artifacts-sweep.sh` on its own daily timer, not part of `gc_lane`.** Every
+other reclaim in `bin/github-runner.sh` operates on a `$LANE_ROOT` exactly one process owns; this
+tree is shared, and two drivers sweeping it on independent schedules have no lock between them. It
+sweeps at whole-run granularity, because a run's artifacts are written by several jobs at several
+times and a half-swept run reads to a consumer as "never uploaded" rather than "expired". It
+refuses a retention under seven days, refuses to operate on any path not ending in `/runs`, and
+writes its own timestamp - `ExecMainExitTimestamp` is wiped by a reboot, so "has never run" and
+"has not run since boot" read alike through it.
+
+**`state/` is why the backup treats an empty capture as fatal.** `scripts/check_coverage.py` in
+upskald returns PASS on `absent` and FAIL only on `unavailable`, and a runner with no store reads
+`absent` - so losing the baseline does not turn their gate red, it turns it into a gate that
+silently enforces nothing, on every surface at once. A stale copy is worth far more than none.
+
+**Everything under the store belongs to the subuid container uid 1000 maps to**, so `core` cannot
+traverse it and a plain `rsync` or `du` reports success having read nothing. Every path that
+touches it - the sweep, both backup scripts, `ci.artifact_store` - goes through `podman unshare`,
+which is the same lesson that once had `gc_disk` reading 1,383 MB against 2,500 MB actual.
+
 ## Containment: what it keeps, and what it gives up
 
 Read off a live phase container while a `ship` phase was running:
@@ -630,6 +742,37 @@ and the Tdarr nodes float across all twelve and will take these four whenever th
 three-shard e2e matrix. Two lanes on four shared cores will be slower in wall-clock than
 GitHub-hosted. The win is cost, control, and running the gate on the same kernel and the same
 ceilings the agent fleet already uses.
+
+### Can this host take a third lane? No, and the constraint is not disk
+
+Asked by upskald on 2026-08-27, ahead of moving four more workflows onto the lanes plus a nightly
+browser matrix of three jobs with three service containers each. The answer is worth writing down
+rather than re-deriving, because two of the three numbers people reach for first are the wrong
+ones.
+
+**Memory says no.** Three lanes at `MemoryMax=3584M` is 10,752M against the slice's 6,656M. Two
+already overcommit it by 512M, which works because both lanes peaking together is rare - three
+would need the ceiling raised on a 15.8 GB host where `app-agents.slice` already reserves 4,608M
+and the media stack holds the rest. And the lanes are not idling under their ceiling: every e2e
+shard measured pins to `MemoryHigh` **exactly**, 2,816-2,818 MB, with 2,607 MB of that `anon`. The
+768M to `MemoryMax` is the entire margin.
+
+**CPU says no independently.** `app-ci.slice` owns `4-7` and each lane takes half; there is no
+third pair inside it. Widening to `4-9` takes two cores from where Jellyfin - this host's largest
+CPU consumer - already floats, and `app-agents.slice` holds `0-3`.
+
+**Disk is not the constraint and it is the number that looks worst.** Each lane store sits around
+4.7 GB against a 20 GB budget, and `/var` has 153 GB free of 233 GB.
+
+**What upskald observed is the documented trade rather than a fault.** Jobs from runs started at
+20:35 were still queued at 21:04, and `Pre-commit Hooks` went from about two minutes hosted to
+8m27s on a lane. `4-7 is not exclusive` above says why, and the win was never wall-clock. More
+load will make queueing worse before it makes anything else worse.
+
+**If a third lane is genuinely wanted**, the two honest options are a third lane at a smaller
+per-lane ceiling, or moving the slice's cpuset - both real decisions with a cost on the media
+stack, not adjustments. `bin/github-runner.sh` refuses a third lane rather than silently sharing a
+CPU pair, which is the behaviour to change first if this is ever revisited.
 
 ## Accepted risks, recorded rather than left implicit
 
@@ -838,7 +981,13 @@ gh api /orgs/avanserv/actions/runner-groups                # group ids, for GITH
 - the seeded runner tree matching the Dockerfile's `ARG`, and the pin being upstream's latest;
 - **Python 3.13.15 in the tool cache with its `.complete` marker**, so `actions/setup-python`
   resolves 3.13 without the network and `upskald` needs no change;
-- all five lane mounts writable and **not tmpfs**, asserted by filesystem type, on xfs;
+- **`gh` present, and the two things about it that are not "is it installed"**: that it can write
+  `~/.config/gh` on a rootfs the same run asserts rejects writes, and that it resolves a credential
+  from `GH_TOKEN` with no login and no config file;
+- **the tool cache's seed stamp matching the image's**, which is the mechanism that lets a changed
+  seed reach a lane that already has one - though see below for what this leg cannot see;
+- all six lane mounts writable and **not tmpfs**, asserted by filesystem type, on xfs, including
+  the shared artifact store with `CI_ARTIFACT_STORE` naming it and both subtrees present;
 - the rootfs rejecting a write;
 - **the nested engine starting, on `overlay` and not `vfs`, and pulling an UNQUALIFIED short
   name** - which is what every `services:` block writes;
@@ -847,6 +996,15 @@ gh api /orgs/avanserv/actions/runner-groups                # group ids, for GITH
 - neither host container socket visible, `docker info` reporting the lane's own graph root, no
   `config/`, no `/mnt/media`, no `cache/conduct/`, and **no `GITHUB_RUNNER_PAT` in
   `/proc/1/environ`**.
+
+**What the smoke test structurally CANNOT prove, restated because it has now cost twice.**
+`runner()` builds a fresh lane on every invocation, so any defect that needs a lane with existing
+state is invisible to it and it passes. That is how the `db.sql` split shipped with a green tick,
+and on 2026-08-27 it is how the tool cache did: the seed guard keyed on existence, a fresh lane
+always seeds, and the leg above passed on an image whose two deployed lanes were serving an
+interpreter with no pip. The checks that can see a deployed lane are `ci.runtime_dir` and
+`ci.toolcache_seed` in `bin/verify-host.sh`, and adding a leg here instead would have been the
+wrong repair both times.
 
 **SELinux is not the obstacle it was expected to be.** The `newuidmap` refusal that sank the
 Ubuntu base was reproduced with `semodule -DB` - dontaudit off - and logged **no AVC at all**.

@@ -888,6 +888,47 @@ signal read green.
   so a self-hosted run can break the next HOSTED one. Labelling a lane `ubuntu-latest` is a trap:
   the fallback keys on whether a runner is CONNECTED, so a workflow silently alternates environments.
 
+### A thing that shipped, a thing that could not arrive, and no way to tell them apart
+- **`gh` was never in the lane image and the cost is the CONSUMER, not the package.** It fails
+  green twice: an AI review silently goes full rather than incremental because `_run` catches
+  `OSError`, and the coverage gate warned-and-passed having enforced no threshold at all. Fedora 44
+  ships it; the two assertions worth making are that it can write `~/.config/gh` on a read-only
+  rootfs and that it resolves `GH_TOKEN` with no login.
+- **The tool-cache seed guard keyed on EXISTENCE, which is not a version**, so a lane was seeded
+  once ever - and the `ensurepip` work shipped in the image and reached neither deployed lane with
+  every signal green. The stamp is derived from the tree, the cache is cleared rather than copied
+  over, and `ci.toolcache_seed` grades it because the smoke test builds a fresh lane and passes by
+  construction.
+- **The smoke test chowned `1000:1000` where the driver chowns `1000:0`** under a comment claiming
+  they matched - and gid is the only asymmetry the `docker start` 125 has ever shown, so no
+  gid-based hypothesis was testable through it.
+
+### Eighteen more reproductions that fired at nothing, and one hypothesis retired
+- Instruments live, both lanes loaded past the band that reproduces, eighteen attempts - six cached
+  and serial, twelve with a forced fresh pull on both lanes at once - and none fired. Every one ran
+  inside a LONG-LIVED lane container, which the real workload does not.
+- **The 31-32 second gap before three of the four heals is the failure's own duration**, not a
+  precursor; successful cycles that evening are 32-33s apart too.
+- **The load hypothesis is contradicted by the post-mortem's own numbers**: io and memory pressure
+  0.00, memory 155 MB, 66 pids of 1024 at the instant of failure. The lane was idle.
+- **A driver killed without its TERM handler could `rm -rf` a live store** - no lock anywhere, the
+  job in a sibling scope, `job_in_flight` not restored. **Ruled out for 2026-08-26**: both driver
+  pids held continuously across both evening failures and the day carries no non-clean exit. Guarded
+  anyway, in one `podman ps`.
+
+### One directory for two lanes, and the half of it that must never be swept
+- The coverage ratchet moved off GitHub onto this disk, and `absent` PASSES upskald's gate while
+  `unavailable` fails it - so a lost baseline enforces nothing on every surface at once, silently.
+  An empty capture of an existing store is therefore fatal to the backup run.
+- **A sibling of `lanes/`, not a child**, or `lane_reset` would take it on the first self-heal; and
+  deliberately not under `config/`, or the "no `config/` in a lane" assertion becomes "except this
+  one". `state/` is staged into the backup the way the TSDB snapshot already is.
+- **`CI_ARTIFACT_STORE` is in the image's `ENV`, never an `-e`** - the driver passes no environment
+  into a lane, and the value is a container path. Always being set is the point.
+- Thirty days on `runs/`, because a merge-time consumer reads a pull request's LAST run; a sweep on
+  its own timer, because two drivers over one shared tree have no lock; and `podman unshare` or the
+  copy reports success having copied nothing.
+
 ### A tool that assumes a distribution, and does not check before it fails
 - **`playwright install --with-deps` supports Debian and Ubuntu only and does not detect that it
   cannot work**: on Fedora it warns, uses the Ubuntu package list anyway and exits 127 on

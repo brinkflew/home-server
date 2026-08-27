@@ -1,0 +1,37 @@
+# ==============================================================================
+# Sweep the CI lanes' shared artifact store
+# ------------------------------------------------------------------------------
+# A plain user unit rather than a quadlet, for the reason every host-side job in
+# this directory is one: it touches paths in the user's own namespace through
+# `podman unshare`, which is a thing that has to run where podman runs and not
+# inside a container.
+#
+# NOT PART OF gc_lane, AND THAT IS THE DESIGN DECISION IN THIS FILE. The obvious
+# home for it is bin/github-runner.sh's cycle, where a reclaim already runs - but
+# the artifact store is shared between BOTH lanes, so putting it there would have
+# two drivers sweeping one tree on independent schedules with no lock between
+# them. Every other reclaim in that script operates on $LANE_ROOT, which exactly
+# one process owns. This one does not, so it lives on its own timer where there
+# is exactly one of it.
+#
+# Slice=app-ci.slice so it is charged where the lanes are, and Nice/weights
+# matching them so a sweep never competes with a job it is cleaning up after.
+#
+# See: bin/ci-artifacts-sweep.sh, docs/ci.md
+# ==============================================================================
+
+[Unit]
+Description=Sweep expired run artifacts from the CI lanes' shared store
+Documentation=file:/var/home-server/docs/ci.md
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/var/home-server/.env
+ExecStart=/var/home-server/bin/ci-artifacts-sweep.sh
+TimeoutStartSec=900
+Slice=app-ci.slice
+MemoryHigh=192M
+MemoryMax=256M
+Nice=10
+CPUWeight=20
+IOWeight=20

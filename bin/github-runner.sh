@@ -86,6 +86,30 @@ CACHE_ROOT="${DOCKER_VOLUME_CACHE:-/var/home-server/cache}"
 FLEET_ROOT="${GITHUB_RUNNER_ROOT:-$CACHE_ROOT/github-runner}"
 LANE_ROOT="$FLEET_ROOT/lanes/$LANE"
 NET="net-ci-$LANE"
+
+# THE SHARED ARTIFACT STORE, AND THE ONE THING ABOUT IT THAT MATTERS IS WHERE IT
+# IS NOT. It is a sibling of lanes/ and forensics/, NOT a child of $LANE_ROOT,
+# because lane_reset() below deletes `runner/_work tmp storage` out of $LANE_ROOT
+# and a store that a reset could reach would lose the coverage ratchet's memory
+# the first time a lane healed itself. Being outside is the whole guarantee;
+# nothing in lane_reset needs to know this path exists, and it must stay that
+# way.
+#
+# ONE DIRECTORY FOR BOTH LANES, DELIBERATELY. upskald's producing job and its
+# consuming job routinely land on different lanes, which is the entire reason
+# they asked for it - a per-lane store would be indistinguishable from no store
+# about half the time, and would fail by producing a stale answer rather than an
+# error.
+#
+# NOT UNDER config/, EVEN THOUGH THAT IS WHERE THE BACKUP ALREADY REACHES.
+# docs/ci.md states, and bin/github-runner-smoke.sh asserts, that no path under
+# config/ is mounted into a lane; putting the store there would turn that into
+# "no config/ except this one", which is the shape every eroded boundary starts
+# out as. The half of this tree that must be backed up - state/ - gets there by
+# the mechanism bin/backup-server.sh already uses for the Prometheus snapshot
+# and the SQLite dumps: staged into the backup tree by a step, rather than by
+# living somewhere the backup happens to walk.
+ARTIFACTS="${GITHUB_RUNNER_ARTIFACTS:-$FLEET_ROOT/artifacts}"
 MARKER="${HOME_SERVER_CI_STATE:-${HOME:-/var/home/core}/.cache/home-server/ci-state-$LANE}"
 CONDUCT_STATE="${HOME_SERVER_CONDUCT_STATE:-${HOME:-/var/home/core}/.cache/home-server/conduct-state}"
 
@@ -284,6 +308,13 @@ preflight() {
 	mkdir -p "$LANE_ROOT"/{home,toolcache,storage,runner,tmp} 2>/dev/null ||
 		die 3 "cannot create $LANE_ROOT - check it exists and is owned by core"
 
+	# THE ARTIFACT STORE'S TWO SUBTREES ARE CREATED HERE AND NEVER AGAIN, and
+	# they are created by BOTH lanes because either may be the first to start.
+	# `mkdir -p` on a directory the other lane made is a no-op, which is the
+	# only reason this is safe to run twice.
+	mkdir -p "$ARTIFACTS"/{runs,state} 2>/dev/null ||
+		die 3 "cannot create $ARTIFACTS - the shared artifact store; see docs/ci.md"
+
 	# THE OWNERSHIP IS NOT COSMETIC AND THE FAILURE NAMES NOTHING USEFUL.
 	# These directories are created by `core`, so they are container uid 0 - and
 	# the runner inside is uid 1000, deliberately, because a rootless nested
@@ -356,6 +387,30 @@ preflight() {
 		podman unshare chown -R 1000:0 "$LANE_ROOT/$d" 2>/dev/null ||
 			die 3 "cannot chown $LANE_ROOT/$d into the container's user namespace - a lane cannot write its own home without it"
 	done
+
+	# THE ARTIFACT STORE IS CHOWNED NON-RECURSIVELY, ALWAYS, AND NOT BECAUSE IT
+	# MIGHT BE BIG. Two drivers start independently over one tree, so a `-R`
+	# here would have each lane rewriting ownership across the other's live
+	# artifacts on every restart - which is the exact shape the comment above
+	# has just finished declining to exonerate for the store. Three directories
+	# is all a lane needs to be able to write; everything below them it creates
+	# itself, and inherits.
+	for d in "$ARTIFACTS" "$ARTIFACTS/runs" "$ARTIFACTS/state"; do
+		podman unshare chown 1000:0 "$d" 2>/dev/null ||
+			die 3 "cannot chown $d into the container's user namespace - the lanes cannot write the shared artifact store without it"
+	done
+
+	# AND THE STORE IS ASSERTED HERE, NOT ONLY INSIDE THE CONTAINER. The image
+	# declares CI_ARTIFACT_STORE unconditionally, so a lane that starts without
+	# this mount hands upskald a set-but-unreadable store, which their coverage
+	# gate reads as `unavailable` and fails - in their repository, on their pull
+	# requests, naming nothing on this host. runner-init.sh carries the same
+	# test and can only warn: a lane runs `--log-driver=none`, so its stderr
+	# reaches nobody. This copy is the one that appears in the journal, and it
+	# refuses.
+	if [ ! -d "$ARTIFACTS/state" ] || [ ! -d "$ARTIFACTS/runs" ]; then
+		die 3 "$ARTIFACTS is missing runs/ or state/ - a lane would start with CI_ARTIFACT_STORE set and unreadable, which fails upskald's coverage gate rather than falling back"
+	fi
 
 	# THE LANE'S NETWORK IS CREATED ONCE AND KEPT, unlike conduct's per-phase
 	# ones. There is nothing per-job about it, and agents.runner_isolation's own
@@ -640,6 +695,29 @@ lane_du_mb() {
 }
 
 gc_lane() {
+	# NOTHING ANYWHERE IN THIS FILE HOLDS A LOCK, AND THE ONLY SAFETY IS THAT
+	# THIS RUNS AT THE TOP OF THE LOOP. That is a real guarantee right up until
+	# the driver dies without reaching its TERM handler: the job runs in a
+	# SIBLING transient scope that outlives this process, marker_read() does not
+	# restore job_in_flight, and store_jobs persists - so a fresh driver can
+	# start, find a breadcrumb or a full window, and `rm -rf` the graph root out
+	# from under a nested engine that is still serving a job. `docker create`
+	# fine, `docker start` 125, crun unable to open a path podman has just
+	# reported mounting: the shape of the failure this whole file has been
+	# chasing.
+	#
+	# IT IS RULED OUT FOR 2026-08-26 AND THE GUARD IS HERE ANYWAY. Measured from
+	# the journal: both drivers held pids 1405580 and 1405627 continuously from
+	# 19:20 through 20:58, across both evening failures, and the whole day
+	# carries no `Main process exited`, no signal and no non-clean stop at all -
+	# every restart that day was a Stopped/Started pair through the trap. So
+	# this did not cause those failures. It remains a way to destroy a live
+	# store for free, and one `podman ps` closes it.
+	if podman ps --quiet --filter "name=^ci-$LANE-" 2>/dev/null | grep -q .; then
+		log "WARNING: a ci-$LANE-* container is still running, so this lane's store is in use - not collecting. If this repeats, a previous driver died without its TERM handler and left the job's scope behind."
+		return 0
+	fi
+
 	lane_disk_mb=$(lane_du_mb "$LANE_ROOT")
 	case "$lane_disk_mb" in ''|*[!0-9]*) lane_disk_mb="" ;; esac
 
@@ -1002,6 +1080,7 @@ while [ "$stopping" = 0 ]; do
 			-v "$LANE_ROOT/storage:/var/lib/nested-storage:rw" \
 			-v "$LANE_ROOT/runner:/opt/actions-runner:rw" \
 			-v "$LANE_ROOT/tmp:/scratch:rw" \
+			-v "$ARTIFACTS:/opt/ci-artifacts:rw" \
 			-w /opt/actions-runner \
 			"$IMAGE" \
 			sh -c 'exec ./run.sh --jitconfig "$(cat .jitconfig)"' &
