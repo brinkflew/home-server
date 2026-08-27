@@ -3001,3 +3001,26 @@ Added 2026-08-27, working `avanserv/upskald`'s five requests in
   under the store belongs to the subuid container uid 1000 maps to, so `core` cannot traverse it -
   the same reason the driver unshares its `du` and its `rm`, and the same failure that once read
   1,383 MB against 2,500 MB actual.
+
+- **A LIVE-BUT-UNSEEDED STORE PRODUCES A PIPELINE EXACTLY AS GREEN AS A SEEDED ONE**, so "CI is
+  green" cannot separate them and the difference surfaces only on the day a real regression lands
+  and nothing stops it. Raised by upskald on 2026-08-27, and it landed on the check rather than on
+  the store.
+- **`ci.artifact_store` graded `du -sb state/` and could not tell.** Aggregate bytes: any stray
+  file under `state/` makes the count non-zero, so a store with content and no
+  `<owner>/<repo>/baselines.json` reported `ok` while a consumer opening its own baseline got
+  nothing and PASSED on `absent`. The same shape as the three defects removed earlier that week,
+  one layer out - not a gate that cannot check, but a check grading a number nothing depends on.
+  It counts `baselines.json` files now, because that is the file a consumer opens.
+- **Proved by being made to fail before it was trusted**, the way `ci.runtime_dir` was: a store
+  holding `notes.txt` and no baseline reads `warn ... holds NO baselines.json (6 bytes of other
+  content under state/)`, and the same store with the baseline copied in reads `pass ... holds 1
+  coverage baseline(s)`. An unseeded store is a **warn**, not a note - the quietest level was wrong
+  for a condition whose whole character is that nothing else will report it.
+- **The migration was verified before anything was deleted.** The orphan `coverage-baseline`
+  branch's `baselines.json` re-fetched fresh - not the copy used to seed, which would have made the
+  comparison tautological - against the store copy: 447 bytes, sha256 `a990d541fe3d180b`, identical,
+  and the same hash read from inside BOTH lanes, which is the property a shared store exists for.
+  **No credential was passed into a lane to do it**: the store side was read with `podman unshare`
+  on the host, which is the same bytes, because `-e GH_TOKEN=...` would have built the route this
+  design refuses to have.
