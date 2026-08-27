@@ -3024,3 +3024,81 @@ Added 2026-08-27, working `avanserv/upskald`'s five requests in
   **No credential was passed into a lane to do it**: the store side was read with `podman unshare`
   on the host, which is the same bytes, because `-e GH_TOKEN=...` would have built the route this
   design refuses to have.
+
+## A fallback build makes another distribution's ABI your problem
+
+upskald's item 3 of five, 2026-08-27: the Firefox and WebKit libraries, so the nightly
+`[chromium, firefox, webkit]` matrix can leave `ubuntu-latest`. They expected Firefox to be routine
+and WebKit to be the hard one and offered to leave WebKit hosted. Both halves were right.
+
+- **Playwright serves the Ubuntu 24.04 build to every distro it does not recognise.**
+  `packages/utils/hostPlatform.ts` ends its Linux branch with an unconditional
+  `return 'ubuntu24.04-x64'`, so a Fedora lane downloads `firefox-ubuntu-24.04.zip` and
+  `webkit-ubuntu-24.04.zip` and must satisfy **Ubuntu's** sonames. chromium is exempt because
+  Playwright ships Google's distro-agnostic build for it, which is why chromium has worked here
+  from the first e2e run while the other two were unknown. The same line produces the `BEWARE: your
+  OS is not officially supported` warning already on record - which is about the dependency
+  installer, and this is the half that actually binds.
+- **Five sonames have no Fedora package at any version, and never will.** WebKit hard-links
+  `libicuuc.so.74`, `libicui18n.so.74`, `libicudata.so.74` and `libjpeg.so.8`; Fedora 44 ships ICU
+  76 and 77, and has shipped libjpeg's 6.2 ABI its whole life. Soname skew, not missing
+  functionality - so the Ubuntu libraries are vendored from pinned, sha256-checked `.deb`s.
+  **The safety argument is that the linker matches EXACTLY**: measured on the built image,
+  `libicuuc.so.77` still resolves to `/lib64` and only `.so.74` resolves into the compat directory.
+  Only the four files are copied; the icu deb also ships `libicuio`, `libicutest` and `libicutu`.
+- **`ld.so.conf.d`, not `LD_LIBRARY_PATH`.** The obvious spelling is the wrong one:
+  `LD_LIBRARY_PATH` outranks a binary's own `DT_RUNPATH` for every process in every job step, while
+  `ld.so.conf` is consulted after both and can only satisfy a lookup that was going to fail. It
+  also stays out of `/proc/1/environ` and out of what the `docker` shim hands to nested containers.
+- **The fifth, `libx264.so`, is refused for a codec the browser has not tried to use.** Nothing
+  links it - no file in the bundle has it as a `DT_NEEDED` - and with
+  `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=1` webkit 26.5 launches and renders without it. It is
+  in webkit's DLOPEN list, which is literally `['libGLESv2.so.2', 'libx264.so']`, and
+  `validateDependenciesLinux` THROWS on launch when one is absent. Fedora ships no x264 at all, ever
+  - patents, RPM Fusion only. Vendored rather than skipped, because turning the validator off also
+  stops it naming the next library that goes genuinely missing. Measured cost of absence:
+  `canPlayType` returns `""` for H.264 and `"probably"` for VP8.
+- **`ldconfig` will not invent an unversioned symlink.** Playwright dlopens `libx264.so` exactly;
+  Ubuntu ships that name only in `libx264-dev`, the runtime package having `libx264.so.164` alone.
+  ldconfig builds links from the ELF's SONAME, so the bare name is made by hand and asserted with
+  `test -e` - `ldconfig -p` does not list it and could not grade it.
+- **A package name in that table can be a HEURISTIC, not a fact.** `gstreamer1-plugin-libav` was
+  installed, ships `libgstlibav.so`, and Playwright still asked for `gstreamer1.0-libav` - because
+  the table maps the missing `libx264.so` onto that package name, with a source comment saying
+  libav's own library is not linked directly so x264 stands in for it. Chasing the package rather
+  than the soname goes in a circle.
+- **`ldd` clean is not Playwright-clean, and the gap is dlopen.** After twenty-six dnf names and the
+  compat layer, no bundle had a missing soname - and `validateDependenciesLinux` still named
+  `libgles2` and `gstreamer1.0-libav`, which nothing `DT_NEEDED`s. **It throws on LAUNCH, not only
+  on install**, so webkit does not start without them. The mirror of the same table's
+  `libavcodec60` for firefox, which has no `lib2package` entry, is a dlopen for media codecs, and is
+  deliberately NOT installed - firefox launches without it and the suite plays no video.
+- **A permanent warning is a warning nobody reads.** Even where Playwright only warns, a framed
+  "Host system is missing dependencies" box on every e2e job would hide the next library that goes
+  genuinely missing inside noise this image had chosen to keep. That, not the feature, is why the
+  three dlopen packages are installed.
+- **The bundle's own libraries read `not found` to a naive `ldd`.** `libwebkitgtk-6.0.so.4`,
+  `libwpe-1.0.so.1`, `libjavascriptcoregtk-6.0.so.1`, `libsoup-3.0.so.0` and `libjxl.so.0.8` are all
+  resolved from the bundle's RPATH at run time. Subtract what the bundle ships before believing the
+  list, or five of the eight "missing" names are phantoms.
+- **Playwright's own table is both over- and under-inclusive.** It omits `graphene` and
+  `vulkan-loader`, which webkit does need, and lists thirteen packages this base already satisfies
+  transitively. The list that shipped was resolved from `ldd` output mapped against Fedora's
+  repodata, not transcribed.
+- **There was no browser assertion in `bin/github-runner-smoke.sh` at all** until this change, while
+  the Dockerfile comment and this document both predicted, in those words, the failure it would have
+  caught. It now LAUNCHES all three and reports Playwright's message verbatim, because the missing
+  soname is the whole fix.
+
+## Running a browser as container root is a different code path, again
+
+- **The image has no `USER`**, deliberately: it starts as container root and `runner-init` re-execs
+  itself through `setpriv --reuid=1000 --regid=0`. So `runner()` in the smoke test - which goes
+  through the entrypoint - is uid 1000, and any probe passing `--entrypoint` is **root**.
+- **Chromium hung for five and a half minutes as root** and reported `Target crashed` when
+  `/dev/shm` was also left at podman's 64 MB default. Neither reading said anything about the
+  image; both were the harness. The third instance of this family, after `podman exec` without
+  `--user` answering `rootless: false` and the `/dev/shm` measurement that `--shm-size` could not
+  fix.
+- **So a browser probe must go through the entrypoint and carry the lane's `--shm-size`**, or it
+  measures a container no job will ever run in.

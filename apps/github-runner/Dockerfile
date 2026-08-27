@@ -154,10 +154,47 @@ RUN usermod -l runner -d /home/runner -m podman \
 # THE BROWSER LIBRARIES ARE NAMED RATHER THAN INSTALLED BY PLAYWRIGHT, which is
 # the one place this image cannot follow apps/conduct-runner/Dockerfile.
 # `playwright install-deps` supports Debian and Ubuntu only; on Fedora it exits
-# without installing anything. So the chromium set is spelled out. It is a
-# maintained list rather than a generated one, which is a real cost, and the
-# thing that would catch it going stale is an e2e job actually running - which
-# docs/ci.md says is the last wave and unproven until measured.
+# without installing anything. So all three engines' sets are spelled out. It is
+# a maintained list rather than a generated one, which is a real cost, and the
+# thing that would catch it going stale is an e2e job actually running - which is
+# why bin/github-runner-smoke.sh now LAUNCHES all three rather than trusting the
+# list. There was no browser assertion here at all until 2026-08-27, while this
+# comment and docs/known-state.md both predicted the failure it would have caught.
+#
+# WHY UBUNTU'S SONAMES ARE THE REQUIREMENT ON A FEDORA IMAGE, which is the part
+# that is not guessable: Playwright's packages/utils/hostPlatform.ts ends its
+# Linux branch with an unconditional `return 'ubuntu24.04-x64'` for any distro it
+# does not recognise. So a lane downloads firefox-ubuntu-24.04.zip and
+# webkit-ubuntu-24.04.zip - binaries linked against Ubuntu 24.04. That single
+# line is also what produces the "BEWARE: your OS is not officially supported"
+# warning already on record; the warning is about the dependency installer, and
+# this is the half of it that actually binds.
+#
+# EVERY NAME BELOW WAS RESOLVED FROM A SONAME THE BROWSER ACTUALLY ASKS FOR, by
+# running `ldd` over the installed bundles in a throwaway container and mapping
+# what came back `not found` against Fedora 44's repodata. NOT transcribed from
+# Playwright's own Debian list, which is both over- and under-inclusive here:
+#   - it names libavcodec60 for firefox with no lib2package entry, because that
+#     is a dlopen for media codecs rather than a DT_NEEDED. Firefox launches
+#     without it and this suite plays no video, so it is deliberately absent.
+#   - it does not name graphene or vulkan-loader, which webkit does need.
+# Sonames the bundle ships ITSELF are not dependencies - libwebkitgtk, libwpe,
+# libjavascriptcoregtk, libsoup and libjxl all read `not found` to a naive ldd
+# and are resolved from the bundle's own RPATH at run time.
+#
+# THREE OF THESE ARE HERE TO SILENCE A WARNING, WHICH IS A REAL REASON. Nothing
+# DT_NEEDEDs libglvnd-gles (webkit dlopens libGLESv2 for WebGL) or the two extra
+# gstreamer plugin sets (media decode) - `ldd` comes back clean without them, and
+# every browser launches. What does NOT come back clean is Playwright's own
+# validateDependenciesLinux, which runs on install AND on launch and prints a
+# framed "Host system is missing dependencies to run browsers" box naming
+# libgles2 and gstreamer1.0-libav. Left unfixed that box prints on every e2e job
+# for ever, and a warning that is always there is a warning nobody reads - so the
+# next library that goes genuinely missing arrives inside noise this image chose
+# to keep. Cheap, and it makes silence mean something.
+#
+# THE THREE ICU SONAMES AND libjpeg.so.8 ARE NOT IN THIS LIST BECAUSE NO FEDORA
+# PACKAGE HAS THEM - see the compat layer further down.
 RUN dnf install -y --setopt=install_weak_deps=False \
       git git-lfs gh jq make gcc pkgconf rsync zip unzip zstd xz tar gzip wget \
       openssh-clients sudo findutils procps-ng which hostname podman-docker \
@@ -166,7 +203,110 @@ RUN dnf install -y --setopt=install_weak_deps=False \
       alsa-lib atk at-spi2-atk cups-libs libdrm mesa-libgbm nspr nss pango \
       cairo libX11 libXcomposite libXdamage libXext libXfixes libXrandr \
       libxkbcommon libxshmfence liberation-sans-fonts \
+      gtk3 gdk-pixbuf2 cairo-gobject libX11-xcb libXcursor \
+      gtk4 graphene vulkan-loader libepoxy libwayland-client libwayland-egl \
+      libwayland-server gstreamer1 gstreamer1-plugins-base \
+      gstreamer1-plugins-bad-free-libs gstreamer1-plugins-good \
+      gstreamer1-plugin-libav libglvnd-gles enchant2 hyphen flite libmanette \
+      libsecret libavif libwebp lcms2 opus harfbuzz-icu libxslt \
  && dnf clean all
+
+# WEBKIT'S FIVE SONAMES THAT NO FEDORA PACKAGE HAS, AT ANY VERSION. Playwright's
+# webkit is built on Ubuntu 24.04 and hard-links that release's ICU and libjpeg:
+#
+#   libicuuc.so.74  libicui18n.so.74  libicudata.so.74   Fedora 44 ships 76 and 77
+#   libjpeg.so.8                                         Fedora ships the 6.2 ABI,
+#                                                        libjpeg.so.62, and always has
+#   libx264.so                                           Fedora ships NO x264 at all
+#
+# This is soname skew, not missing functionality, and no amount of dnf closes it -
+# so the Ubuntu libraries are vendored. chromium and firefox need none of this;
+# it is webkit alone, because webkit is the only engine that links ICU directly.
+#
+# x264 IS THE ODD ONE OF THE THREE AND IS WORTH ITS OWN PARAGRAPH. It is not a
+# DT_NEEDED at all - measured, nothing in the webkit bundle links it, and with
+# `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=1` webkit 26.5 launches and renders
+# perfectly without it. It is in webkit's DLOPEN list, which is exactly
+# `['libGLESv2.so.2', 'libx264.so']` in Playwright's registry, and
+# validateDependenciesLinux THROWS on launch when a dlopen library is absent. So
+# the browser is refused for a codec it has not tried to use yet. Fedora excludes
+# x264 deliberately - it is patent-encumbered and lives only in RPM Fusion - so
+# there is no dnf name for this one and there will not be. Vendored rather than
+# skipped, because turning the validator off would also stop it naming the next
+# library that goes genuinely missing. The measured cost of NOT having it is one
+# line: canPlayType returns "" for H.264 and "probably" for VP8.
+#
+# THE UNVERSIONED SYMLINK IS NOT OPTIONAL. Playwright dlopens `libx264.so`
+# exactly, and Ubuntu ships that name only in libx264-dev; the runtime package has
+# `libx264.so.164` alone. ldconfig builds soname links from the ELF and will NOT
+# invent the bare one, so it is created by hand and asserted by `test -e` rather
+# than by `ldconfig -p`, which does not list it.
+#
+# WHY THAT IS SAFE RATHER THAN RECKLESS, and this is the whole basis of the
+# approach: the dynamic linker matches by EXACT soname. Nothing on Fedora 44 asks
+# for `.so.74` or `libjpeg.so.8` - its own consumers ask for `.so.76`, `.so.77`
+# and `.so.62` - so no Fedora binary can resolve into this directory by accident.
+# Only the four sonames are copied, deliberately: the icu deb also ships libicuio,
+# libicutest and libicutu, and leaving them out is what keeps that guarantee
+# narrow enough to state.
+#
+# ld.so.conf.d RATHER THAN LD_LIBRARY_PATH, which is the more obvious spelling and
+# the wrong one. LD_LIBRARY_PATH outranks a binary's own DT_RUNPATH for every
+# process in every job step; ld.so.conf is consulted after both, so it can only
+# ever satisfy a lookup that was going to fail. It also stays out of the
+# environment - which the smoke test asserts over /proc/1/environ, and which the
+# docker shim passes into nested containers. The read-only rootfs is not an
+# obstacle: ld.so.cache is built here, at build time.
+#
+# EXTRACTION ADDS NO PACKAGE. `ar` comes from binutils, which gcc already
+# requires; zstd and tar are in the list above. Ubuntu noble debs carry
+# data.tar.zst, which is why zstd is the decompressor and not gzip.
+#
+# PINNED TO snapshot.ubuntu.com, NOT archive.ubuntu.com, because the archive pool
+# drops a version as soon as it is superseded and this build would then fail on a
+# 404 having changed nothing. The sha256 is what makes either source safe; the
+# snapshot host is what makes the URL survive. Both were downloaded and the
+# extraction exercised end to end before this landed.
+#
+# THE FOUR ldconfig ASSERTIONS AT THE END ARE THE POINT, not decoration. A copy
+# that matched nothing, or a soname link ldconfig declined to make, leaves a
+# directory that looks right and satisfies nothing - and the symptom would be
+# webkit failing to launch on a lane weeks later, naming the .so and not this
+# file. Same reasoning as the non-empty assertion on the backup capture.
+ARG UBUNTU_SNAPSHOT=20260801T000000Z
+ARG UBUNTU_ICU_DEB=libicu74_74.2-1ubuntu3.1_amd64.deb
+ARG UBUNTU_ICU_SHA256=c9a70989678660eed9a1e904c74fa043da8bec8e2036856fc16e31ced79b04f8
+ARG UBUNTU_JPEG_DEB=libjpeg-turbo8_2.1.5-4ubuntu4_amd64.deb
+ARG UBUNTU_JPEG_SHA256=07672ce1f4d187e005ea0cc35d03e515ba056f3d3e7a9a25d3ef386e184da8c5
+ARG UBUNTU_X264_DEB=libx264-164_0.164.3108+git31e19f9-2build2_amd64.deb
+ARG UBUNTU_X264_SHA256=0a829886cbe29a733fd37cec0cddd75726195166b3122d5f9a00a8f5504026a6
+RUN set -eu \
+ && snap="https://snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT}/pool" \
+ && mkdir -p /tmp/deb /opt/pw-webkit-compat/lib \
+ && cd /tmp/deb \
+ && curl -fsSL -o icu.deb "${snap}/main/i/icu/${UBUNTU_ICU_DEB}" \
+ && echo "${UBUNTU_ICU_SHA256}  icu.deb" | sha256sum -c - \
+ && curl -fsSL -o jpeg.deb "${snap}/main/libj/libjpeg-turbo/${UBUNTU_JPEG_DEB}" \
+ && echo "${UBUNTU_JPEG_SHA256}  jpeg.deb" | sha256sum -c - \
+ && curl -fsSL -o x264.deb "${snap}/universe/x/x264/${UBUNTU_X264_DEB}" \
+ && echo "${UBUNTU_X264_SHA256}  x264.deb" | sha256sum -c - \
+ && for d in icu.deb jpeg.deb x264.deb; do ar p "$d" data.tar.zst | zstd -dc | tar -x; done \
+ && cp usr/lib/x86_64-linux-gnu/libicudata.so.74.* \
+       usr/lib/x86_64-linux-gnu/libicui18n.so.74.* \
+       usr/lib/x86_64-linux-gnu/libicuuc.so.74.* \
+       usr/lib/x86_64-linux-gnu/libjpeg.so.8.* \
+       usr/lib/x86_64-linux-gnu/libx264.so.164 \
+       /opt/pw-webkit-compat/lib/ \
+ && ln -sf libx264.so.164 /opt/pw-webkit-compat/lib/libx264.so \
+ && cd / && rm -rf /tmp/deb \
+ && echo /opt/pw-webkit-compat/lib > /etc/ld.so.conf.d/pw-webkit-compat.conf \
+ && ldconfig \
+ && ldconfig -p | grep -q 'libicuuc\.so\.74 ' \
+ && ldconfig -p | grep -q 'libicui18n\.so\.74 ' \
+ && ldconfig -p | grep -q 'libicudata\.so\.74 ' \
+ && ldconfig -p | grep -q 'libjpeg\.so\.8 ' \
+ && ldconfig -p | grep -q 'libx264\.so\.164 ' \
+ && test -e /opt/pw-webkit-compat/lib/libx264.so
 
 # THE TOOL CACHE, WHICH IS WHAT LETS THE BASE CHANGE WITHOUT TOUCHING upskald.
 # actions/setup-python checks RUNNER_TOOL_CACHE first and only downloads when it

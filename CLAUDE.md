@@ -942,6 +942,30 @@ signal read green.
   The next missing library surfaces as Chromium failing to launch, naming neither the step nor
   Playwright.
 
+### A fallback build makes another distribution's ABI your problem
+- Playwright's `hostPlatform.ts` returns `ubuntu24.04-x64` for every distro it does not recognise,
+  so a Fedora lane must satisfy **Ubuntu's** sonames. chromium is exempt - Google's build is
+  distro-agnostic - which is why it worked here from the first run and the other two did not.
+- **Five sonames have no Fedora package at any version**: WebKit hard-links ICU 74 and
+  `libjpeg.so.8` against Fedora's 76/77 and `.so.62`, and dlopens `libx264.so`, which Fedora
+  excludes entirely for patents. Vendored from pinned `.deb`s, and safe only because the linker
+  matches EXACTLY - measured, `.so.77` still resolves to `/lib64`. `ld.so.conf.d`, never
+  `LD_LIBRARY_PATH`, which outranks a binary's own `DT_RUNPATH`. `ldconfig` will not invent the
+  unversioned `libx264.so`, and a package name in Playwright's table can be a heuristic for a
+  soname rather than a fact about the package.
+- **`ldd` clean is not Playwright-clean**: `validateDependenciesLinux` names dlopen dependencies no
+  `ldd` can see, and **throws on launch**, not only on install. The mirror is firefox's
+  `libavcodec60`, which is a dlopen and deliberately absent. A permanent warning box would hide the
+  next real one, which is why the three dlopen packages are installed anyway.
+- The bundle's OWN libraries read `not found` to a naive `ldd`; Playwright's table omits `graphene`
+  and `vulkan-loader` and lists thirteen this base already had. The smoke test had **no browser
+  assertion at all** until 2026-08-27, while two documents predicted the failure it would catch.
+
+### Running a browser as container root is a different code path, again
+- The image has no `USER` - `runner-init` re-execs through `setpriv`, so a probe passing
+  `--entrypoint` is root and measures a container no job runs in. Chromium hung five minutes as
+  root, and reported `Target crashed` at podman's default 64 MB `/dev/shm`. Third of the family.
+
 ### The lane healed itself, because the remedy had been a person
 - **`api-checks` has passed since both lanes were emptied BY HAND**, which repaired nothing. A
   one-minute reproduction eliminated `ports:`, the runner's container-init path and the inherited
