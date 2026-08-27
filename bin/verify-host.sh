@@ -3079,6 +3079,114 @@ if [ -z "$GREENBOOT" ]; then
 	fi
 
 	# --------------------------------------------------------------------------
+	# The tool-cache seed, which the smoke test structurally cannot grade.
+	# --------------------------------------------------------------------------
+	# THIS EXISTS BECAUSE THE SMOKE TEST PASSED ON THE ONE SHAPE THAT BROKE, and
+	# that is the same division of labour ci.runtime_dir has with the db.sql
+	# guard rather than a second opinion about the same thing.
+	# bin/github-runner-smoke.sh builds a FRESH lane on every run; a fresh lane
+	# has no tool cache, so it is always seeded, so the seed is always current in
+	# what the smoke test can see. The failure is entirely about a lane that
+	# already has one.
+	#
+	# WHAT IT COST: the `ensurepip` work went into the image on 2026-08-27 and
+	# reached NEITHER deployed lane. runner-init's guard read
+	# `[ ! -d "$RUNNER_TOOL_CACHE/Python" ]`, so a lane was seeded exactly once
+	# ever. Measured that morning - the image seed held `pip pip3 python python3`,
+	# both lanes held `python python3` from the day before - with the tool cache
+	# present, the .complete marker in place, setup-python resolving 3.13 in
+	# 150ms, and every check on this host green. The guard now compares a stamp;
+	# this is what says whether it is working on the lanes that exist.
+	#
+	# A MISMATCH IS A NOTE, NOT A WARNING, AND ONLY BECOMES ONE WITH AGE. The
+	# repair is automatic and happens at the next container start, so a lane that
+	# is merely between jobs is momentarily behind by design. What is worth
+	# reporting is a lane that has taken jobs since the image changed and is
+	# still behind, which means the stamp mechanism itself is not working.
+	ci_seed_want=""
+	ci_seed_want=$(podman run --rm --label io.home-server.ephemeral \
+		--entrypoint /bin/sh localhost/home-server/github-runner:latest \
+		-c 'cat /opt/hostedtoolcache-seed/.seed-version 2>/dev/null' 2>/dev/null | tr -d '\r\n')
+	ci_seed_stale=""
+	ci_seed_checked=0
+	for l in 1 2; do
+		ci_lane_tc="$ci_root/lanes/$l/toolcache/.seed-version"
+		podman unshare test -d "$ci_root/lanes/$l/toolcache" 2>/dev/null || continue
+		ci_seed_checked=$((ci_seed_checked + 1))
+		ci_seed_have=$(podman unshare cat "$ci_lane_tc" 2>/dev/null | tr -d '\r\n')
+		[ "$ci_seed_have" = "$ci_seed_want" ] || ci_seed_stale="$ci_seed_stale $l"
+	done
+	fact github_runner_toolcache_stale "$(printf '%s' "$ci_seed_stale" | wc -w)" num
+	if [ -z "$ci_seed_want" ]; then
+		note ci.toolcache_seed "the image declares no tool-cache seed stamp - either it predates the stamp or the Dockerfile's find|sha256sum produced nothing, in which case runner-init re-copies the seed on every container start rather than never"
+	elif [ "$ci_seed_checked" -eq 0 ]; then
+		note ci.toolcache_seed "no lane has a tool cache yet - this is not a pass"
+	elif [ -z "$ci_seed_stale" ]; then
+		ok ci.toolcache_seed "every lane's tool cache carries the image's seed stamp ($ci_seed_want)"
+	else
+		warn ci.toolcache_seed "lane(s)${ci_seed_stale} carry a tool cache from a different image seed than localhost/home-server/github-runner:latest. runner-init re-copies on the next container start, so this clears itself; if it does not, the stamp comparison in apps/github-runner/scripts/runner-init.sh is not firing and the lane is serving whatever interpreter it was first given"
+	fi
+
+	# --------------------------------------------------------------------------
+	# The shared artifact store, and the half of it that must never be swept.
+	# --------------------------------------------------------------------------
+	# ONE DIRECTORY MOUNTED INTO BOTH LANES, exported to a job as
+	# CI_ARTIFACT_STORE. upskald's producing job and its consuming job land on
+	# different lanes routinely, so "shared" is the requirement rather than an
+	# optimisation - and a per-lane store would not fail, it would answer with
+	# somebody else's data.
+	#
+	# state/ IS GRADED HARDER THAN runs/ AND THAT IS THE WHOLE CHECK. runs/ is
+	# per-run scratch; losing it costs a re-run. state/baselines.json is the
+	# coverage ratchet's memory, and losing it does not turn upskald's gate red -
+	# scripts/check_coverage.py reads "absent" and PASSES, with a warning, for
+	# every surface at once. So the failure is a gate that silently enforces
+	# nothing, from a file this host is now the only copy of apart from the
+	# backup.
+	ci_store="${GITHUB_RUNNER_ARTIFACTS:-$ci_root/artifacts}"
+	if [ ! -d "$ci_store" ]; then
+		fact github_runner_artifact_state_bytes ""
+		fact github_runner_artifact_runs_mb ""
+		if [ -z "$ci_lanes_enabled" ]; then
+			note ci.artifact_store "no shared artifact store and no lane enabled"
+		else
+			warn ci.artifact_store "a CI lane is enabled and $ci_store does not exist - bin/github-runner.sh creates it in preflight and refuses to start a lane without it, so a lane is either not running or running against an image that does not know about the store"
+		fi
+	else
+		ci_state_bytes=$(podman unshare du -sb "$ci_store/state" 2>/dev/null | cut -f1)
+		ci_runs_mb=$(podman unshare du -sm "$ci_store/runs" 2>/dev/null | cut -f1)
+		case "$ci_state_bytes" in ''|*[!0-9]*) ci_state_bytes="" ;; esac
+		case "$ci_runs_mb" in ''|*[!0-9]*) ci_runs_mb="" ;; esac
+		fact github_runner_artifact_state_bytes "${ci_state_bytes:-}" num
+		fact github_runner_artifact_runs_mb "${ci_runs_mb:-}" num
+
+		# THE SWEEP'S OWN RECORD, not ExecMainExitTimestamp - which a reboot
+		# wipes, so "has never run" and "has not run since boot" read alike.
+		ci_swept_at=$(sed -n 's/^swept_at=//p' \
+			"${HOME_SERVER_CI_ARTIFACT_STATE:-$HOME/.cache/home-server/ci-artifacts-state}" 2>/dev/null | tail -1)
+		ci_swept_age=""
+		if [ -n "$ci_swept_at" ]; then
+			ci_swept_e=$(date -d "$ci_swept_at" +%s 2>/dev/null)
+			case "$ci_swept_e" in
+				''|*[!0-9]*) ;;
+				*) ci_swept_age=$(( ( $(date +%s) - ci_swept_e ) / 86400 )) ;;
+			esac
+		fi
+
+		if ! podman unshare test -d "$ci_store/state" 2>/dev/null; then
+			warn ci.artifact_store "$ci_store has no state/ subtree - upskald's coverage baseline lives there, and a lane reading a store without it treats the baseline as absent, which PASSES their gate on every surface"
+		elif [ "${ci_state_bytes:-0}" -eq 0 ]; then
+			note ci.artifact_store "the artifact store's state/ is empty - the coverage baseline has not been seeded yet. Until it is, upskald's gate reads 'absent' and passes; see docs/ci.md for the one-time seed from the coverage-baseline branch"
+		elif [ -n "$ci_swept_age" ] && [ "$ci_swept_age" -gt 3 ]; then
+			warn ci.artifact_store "the artifact store holds ${ci_state_bytes} bytes of baseline and ${ci_runs_mb:-?}MB of run scratch, but the sweep last ran ${ci_swept_age} days ago against a daily timer - check home-server-ci-artifacts-sweep.timer"
+		elif [ -z "$ci_swept_at" ]; then
+			note ci.artifact_store "the artifact store holds ${ci_state_bytes} bytes of baseline and ${ci_runs_mb:-?}MB of run scratch; the sweep has never recorded a run, which on a fresh install means the one-time start in host/systemd/README.md was skipped"
+		else
+			ok ci.artifact_store "the shared artifact store holds ${ci_state_bytes} bytes of coverage baseline and ${ci_runs_mb:-?}MB of run scratch, swept ${ci_swept_age} day(s) ago"
+		fi
+	fi
+
+	# --------------------------------------------------------------------------
 	# Seeding policy. Whether the 72h floor is actually being enforced.
 	# --------------------------------------------------------------------------
 	# WARN OR PASS, NEVER FAIL, for the reason the Logs and Metrics sections

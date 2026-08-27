@@ -101,6 +101,29 @@ RUN usermod -l runner -d /home/runner -m podman \
 #                it is absent, so every restore is slower and nothing says why
 #   file-libs    api/pyproject.toml depends on python-magic, and pytest imports
 #                the app
+#   gh           THE PACKAGE NAME IS THE OBVIOUS PART; THE CONSUMER IS NOT.
+#                Nothing in a workflow declares gh either - hosted runners ship
+#                it, so a `gh api` call is written as though it were `cat`. What
+#                makes its absence expensive here is that it FAILS GREEN:
+#                upskald's scripts/ai_review_state.py resolves the incremental
+#                review's baseline through `gh run download`, and its `_run`
+#                helper catches OSError and returns (False, ""), so a missing gh
+#                turns every AI review into a FULL review against the whole
+#                tree rather than a diff against the last green one. Nothing
+#                fails, nothing warns, and it bills them in model tokens on
+#                every push. Its sibling consumer, the coverage baseline, read
+#                the same way until 2026-08-27 and warned-and-passed having
+#                enforced no threshold at all; that one has since moved off gh
+#                onto CI_ARTIFACT_STORE, which is why the artifact store below
+#                and this package landed in the same change.
+#                Fedora 44 carries it in `updates` (2.97.0-2.fc44, 39.9 MiB
+#                installed, measured), so the cli/cli RPM repository is not
+#                needed. It goes to /usr/bin, so no PATH work. It authenticates
+#                from GH_TOKEN in the job's environment and needs no
+#                `gh auth login` - but it DOES write ~/.config/gh on first use,
+#                which is a question worth asking of a --read-only rootfs and
+#                is why bin/github-runner-smoke.sh asserts the write rather
+#                than assuming $HOME being a bind mount settles it.
 #   python3.13   see the tool cache below - Fedora 44's default python3 is
 #                3.14.7 and upskald asks for 3.13. pip for it is NOT a package
 #                and is not in this list: Fedora ships `python3-pip` for 3.14
@@ -136,7 +159,7 @@ RUN usermod -l runner -d /home/runner -m podman \
 # thing that would catch it going stale is an e2e job actually running - which
 # docs/ci.md says is the last wave and unproven until measured.
 RUN dnf install -y --setopt=install_weak_deps=False \
-      git git-lfs jq make gcc pkgconf rsync zip unzip zstd xz tar gzip wget \
+      git git-lfs gh jq make gcc pkgconf rsync zip unzip zstd xz tar gzip wget \
       openssh-clients sudo findutils procps-ng which hostname podman-docker \
       python3.13 python3-devel nodejs24 nodejs24-npm nodejs24-full-i18n \
       libicu lttng-ust krb5-libs openssl-libs file-libs \
@@ -202,6 +225,24 @@ RUN dnf install -y --setopt=install_weak_deps=False \
 # `pip install six` then `import six` both succeed, with no warning and no
 # --user on the command line. A workflow copied from a hosted runner needs no
 # change.
+#
+# AND A STAMP, BECAUSE THE COPY-IN GUARD USED TO KEY ON EXISTENCE AND THAT IS
+# NOT A VERSION. runner-init copied the seed only when the lane had no `Python`
+# directory at all, so the moment one lane had ANY Python the seed could never
+# change again. That is not hypothetical: everything above this line - the whole
+# ensurepip argument - shipped in the image on 2026-08-27 and reached neither
+# deployed lane. Measured the same morning: the seed held `pip pip3 python
+# python3` while both lanes held `python python3` alone, dated the previous day,
+# with every check green and setup-python resolving 3.13 in 150ms exactly as
+# designed. upskald predicted this in their runbook before it happened.
+#
+# THE STAMP IS DERIVED FROM THE TREE, NOT WRITTEN BY HAND, and that is the whole
+# point of it. A hand-bumped ARG is a second thing to remember at exactly the
+# moment attention is on the first, and this seed has already proved what
+# forgetting costs. `%P %y %s %l` covers a renamed file, a changed size, a
+# regular file becoming a symlink and a symlink retargeted - which is the entire
+# vocabulary this tree is built from, since its content is symlinks and one
+# marker. It excludes itself, or it could never match what it describes.
 RUN PYV=$(python3.13 -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])') \
  && D="/opt/hostedtoolcache-seed/Python/${PYV}/x64" \
  && mkdir -p "$D/bin" \
@@ -215,6 +256,10 @@ RUN PYV=$(python3.13 -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])') 
  && "$D/bin/python3" -V \
  && "$D/bin/python3" -m pip -V \
  && "$D/bin/pip" -V \
+ && find /opt/hostedtoolcache-seed -mindepth 1 ! -name .seed-version \
+      -printf '%P %y %s %l\n' | LC_ALL=C sort | sha256sum | cut -c1-16 \
+      > /opt/hostedtoolcache-seed/.seed-version \
+ && test -s /opt/hostedtoolcache-seed/.seed-version \
  && chown -R runner:runner /opt/hostedtoolcache-seed
 
 # THE NESTED ENGINE'S CONFIGURATION. Deliberately only two files: this image's
@@ -315,20 +360,46 @@ RUN chmod 0755 /usr/local/bin/runner-init /usr/local/bin/podman-healthcheck-loop
 # `create` and `start` - all four started postgres cleanly. This is defensible on
 # its own merits and it did not explain that failure. See scripts/docker-shim.sh
 # for what actually unblocks it, and docs/ci.md for the honest ledger.
+#
+# CI_ARTIFACT_STORE IS DECLARED HERE RATHER THAN PASSED IN, AND THAT IS A
+# BOUNDARY DECISION RATHER THAN A STYLISTIC ONE. bin/github-runner.sh passes NO
+# environment into a lane at all - not one `-e` - and the argument for that at
+# the top of that file is about the registration token: the thing that mints a
+# credential runs where the socket is, and the container is handed a single-use
+# configuration and nothing else. Adding the first `-e` would open a route this
+# design deliberately does not have, for a value that is a CONTAINER path and
+# therefore a property of the image, not of the host. The host half of the pair
+# is the `-v` in bin/github-runner.sh, and the two have to agree by reading, the
+# same way storage.conf's runroot and XDG_RUNTIME_DIR above do.
+#
+# BEING ALWAYS SET IS THE POINT, NOT AN OVERSIGHT. upskald's side reads this
+# variable and distinguishes three answers: unset means no store, and their
+# coverage gate passes; set-and-readable means a baseline, and the gate
+# enforces it; set-and-unreadable means `unavailable`, and the gate FAILS. So a
+# store that is mounted but broken turns their pull requests red rather than
+# quietly passing every surface at once, which is the direction they asked for
+# and the failure mode this whole change exists to remove. The set-but-absent
+# case cannot arise from the mount itself: podman does not create a missing
+# bind-mount source, it refuses to start the container.
 ENV HOME=/home/runner \
     XDG_RUNTIME_DIR=/run/podman-run \
     DOCKER_HOST=unix:///run/podman/podman.sock \
     RUNNER_TOOL_CACHE=/opt/hostedtoolcache \
     AGENT_TOOLSDIRECTORY=/opt/hostedtoolcache \
+    CI_ARTIFACT_STORE=/opt/ci-artifacts \
     TMPDIR=/scratch \
     LANG=C.UTF-8 \
     NPM_CONFIG_UPDATE_NOTIFIER=false \
     NPM_CONFIG_FUND=false \
     PIP_DISABLE_PIP_VERSION_CHECK=1
+# EVERY BIND-MOUNT TARGET HAS TO EXIST IN THE IMAGE, because a lane runs
+# `--read-only` and a mount point cannot be created at run time. Adding a `-v`
+# to bin/github-runner.sh without adding its directory here fails the container
+# start, not the mount. /opt/ci-artifacts is the sixth and the only shared one.
 RUN mkdir -p /home/runner /opt/hostedtoolcache /opt/actions-runner \
-             /var/lib/nested-storage /scratch \
+             /var/lib/nested-storage /scratch /opt/ci-artifacts \
  && chown runner:runner /home/runner /opt/hostedtoolcache /opt/actions-runner \
-                        /var/lib/nested-storage /scratch
+                        /var/lib/nested-storage /scratch /opt/ci-artifacts
 
 # NO `USER runner`, AND THE ENTRYPOINT IS WHY - it starts as container root for
 # exactly two operations and then drops with `setpriv`, for good, before the

@@ -57,6 +57,13 @@ FLEET_ROOT="${GITHUB_RUNNER_ROOT:-/var/home-server/cache/github-runner}"
 NET="net-ci-smoke"
 LANE="$FLEET_ROOT/lanes/.smoke"
 
+# A THROWAWAY ARTIFACT STORE, NOT THE REAL ONE, AND THIS IS THE ONE MOUNT WHERE
+# THAT DISTINCTION MATTERS. The other five are per-lane and `.smoke` is already
+# a lane of its own; this one is SHARED between the real lanes by design, so
+# pointing the smoke run at $FLEET_ROOT/artifacts would let a build gate write
+# into - and cleanup() below delete - the live coverage ratchet's memory.
+ARTIFACTS="$FLEET_ROOT/artifacts.smoke"
+
 # Defined BEFORE cleanup() rather than beside runner(), because the EXIT trap can
 # fire on the image-exists check above it and `set -u` would then abort inside
 # the trap - which is how a cleanup stops cleaning up.
@@ -83,20 +90,38 @@ cleanup() {
 	# outside the namespace - measured, as a wall of `rm: cannot remove ...:
 	# Permission denied` at the end of an otherwise clean run, which leaves the
 	# next run's lane half-populated by a previous image.
-	podman unshare rm -rf "$LANE" >/dev/null 2>&1 || true
+	podman unshare rm -rf "$LANE" "$ARTIFACTS" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
 
 podman image exists "$IMAGE" || { echo "no such image: $IMAGE" >&2; exit 1; }
 
 mkdir -p "$LANE"/{home,toolcache,storage,runner,tmp}
+mkdir -p "$ARTIFACTS"/{runs,state}
 
 # THE SAME chown bin/github-runner.sh DOES, and for the same reason - see its
 # preflight. Without it the nested engine cannot write $HOME and dies with a
 # permission error naming a path nobody chose. It is here rather than assumed
 # because a smoke test that prepares its lane differently from the driver proves
 # the image under conditions that never occur.
-podman unshare chown -R 1000:1000 "$LANE"
+#
+# `1000:0`, AND IT SAID `1000:1000` UNTIL 2026-08-27 UNDER THE COMMENT ABOVE
+# CLAIMING IT MATCHED. It did not match: the driver writes gid 0, because the
+# runner's PRIMARY gid is 0 (`usermod -g 0` in the Dockerfile, for /dev/net/tun),
+# and its own comment records that 1000:1000 "does not restore a state the
+# container produces; it invents one".
+#
+# WHAT THAT COST IS SPECIFIC AND IS THE REASON THIS IS A FIX RATHER THAN A
+# TIDY-UP. gid is the ONLY asymmetry the intermittent `docker start` 125 has ever
+# shown - a failing layer reads merged/work at the nested engine's overflowgid,
+# a healthy one reads 0 on all twelve - so for as long as this line wrote a gid
+# the driver deliberately stopped writing, no gid-based hypothesis about that
+# failure could be tested through the smoke path at all. The instrument disagreed
+# with the thing it was pointed at.
+podman unshare chown -R 1000:0 "$LANE"
+for d in "$ARTIFACTS" "$ARTIFACTS/runs" "$ARTIFACTS/state"; do
+	podman unshare chown 1000:0 "$d"
+done
 
 podman network exists "$NET" >/dev/null 2>&1 ||
 	podman network create --opt isolate=true "$NET" >/dev/null
@@ -136,6 +161,7 @@ RUNNER_ARGS=(
 	-v "$LANE/storage:/var/lib/nested-storage:rw"
 	-v "$LANE/runner:/opt/actions-runner:rw"
 	-v "$LANE/tmp:/scratch:rw"
+	-v "$ARTIFACTS:/opt/ci-artifacts:rw"
 )
 
 runner() {
@@ -161,7 +187,7 @@ missing=""
 # Hosted ubuntu-latest carries node at /usr/local/bin/node, so no workflow
 # installs it and no workflow declares it - the dependency is invisible until it
 # is absent, and then the error names the HOOK rather than the interpreter.
-for b in bash sh git git-lfs curl wget tar unzip zip zstd xz jq make gcc \
+for b in bash sh git git-lfs gh curl wget tar unzip zip zstd xz jq make gcc \
          pkgconf python3 node npm npx sudo docker podman crun fuse-overlayfs \
          newuidmap newgidmap pasta ssh rsync; do
 	runner sh -c "command -v $b >/dev/null 2>&1" || missing="$missing $b"
@@ -309,6 +335,63 @@ if [ -n "$pyv" ]; then
 	esac
 fi
 
+# gh, AND THE TWO THINGS ABOUT IT THAT ARE NOT "IS IT INSTALLED". The binary
+# list above already answers that. These answer the two questions upskald raised
+# and explicitly could not check from outside the host.
+#
+# FIRST, IT WRITES ~/.config/gh ON FIRST USE, ON A ROOTFS THAT IS READ-ONLY.
+# Fifteen lines below, this same script asserts that a write to the rootfs is
+# REFUSED - so "gh needs to create a config directory" and "this image rejects
+# writes" are both true at once, and which one wins depends entirely on $HOME
+# being the lane's bind mount and runner-init having made $HOME/.config first.
+# That is a chain of three things, every one of which is true today and any one
+# of which a later change could break without touching gh. `gh --version` proves
+# none of it. `gh config set` is the cheapest call that actually writes.
+#
+# SECOND, IT AUTHENTICATES FROM GH_TOKEN WITH NO CONFIG AND NO LOGIN. That is
+# the whole reason no credential has to reach this image: the token arrives in
+# the job's environment from GitHub. `gh auth token` resolves it and prints it
+# without a network call, so this asserts the mechanism offline - and with a
+# value that is not a credential.
+# shellcheck disable=SC2016  # $HOME must be the CONTAINER's, not this shell's -
+# the whole question is whether gh can write under the lane's own bind mount.
+if runner sh -c 'gh config set -h github.com git_protocol https 2>/dev/null && test -s "$HOME/.config/gh/hosts.yml"'; then
+	ok "gh writes its config under \$HOME, so a --read-only rootfs does not stop it"
+else
+	bad "gh could not write \$HOME/.config/gh/hosts.yml - the rootfs is read-only and \$HOME is meant to be the lane's writable bind mount, so either the mount is missing or runner-init did not create \$HOME/.config"
+fi
+
+if [ "$(runner sh -c 'GH_TOKEN=smoke-not-a-token gh auth token 2>/dev/null' | tr -d '\r\n')" = smoke-not-a-token ]; then
+	ok "gh resolves its credential from GH_TOKEN alone, so no login and no config file are needed"
+else
+	bad "gh did not return GH_TOKEN from 'gh auth token' - upskald's scripts/ai_review_state.py authenticates that way and nothing else supplies a credential to a lane"
+fi
+
+# THE SEED STAMP, WHICH IS WHAT MAKES EVERY ASSERTION ABOVE REACH A DEPLOYED
+# LANE RATHER THAN ONLY THIS FRESH ONE. runner-init copied the seed in only when
+# the lane had no `Python` directory at all, so the first lane to have any Python
+# froze its tool cache for ever - and the whole `ensurepip` argument shipped in
+# the image on 2026-08-27 and reached neither deployed lane, with this section
+# passing on every build, because the copy it inspects is made against an EMPTY
+# lane every time.
+#
+# THIS LEG STILL CANNOT SEE THE STALE CASE, AND SAYING SO IS THE POINT. runner()
+# builds a fresh lane, a fresh lane has no stamp, no stamp is a mismatch, and a
+# mismatch always re-seeds - so this passes by construction on the one shape that
+# broke. It asserts the MECHANISM: that a stamp exists on both sides and that
+# they agree after a copy. The check that can see a deployed lane's stale cache
+# is ci.toolcache_seed in bin/verify-host.sh, which is the same division of
+# labour ci.runtime_dir has with the db.sql guard, and for the same reason.
+seed_stamp=$(runner sh -c 'cat /opt/hostedtoolcache-seed/.seed-version 2>/dev/null' | tr -d '\r\n')
+lane_stamp=$(runner sh -c 'cat /opt/hostedtoolcache/.seed-version 2>/dev/null' | tr -d '\r\n')
+if [ -z "$seed_stamp" ]; then
+	bad "/opt/hostedtoolcache-seed/.seed-version is absent or empty - the Dockerfile's find|sha256sum produced nothing, and runner-init would then re-copy the seed on every single container start"
+elif [ "$seed_stamp" = "$lane_stamp" ]; then
+	ok "the tool cache carries the seed's stamp ($seed_stamp), so a changed seed reaches a lane that already has one"
+else
+	bad "the seed stamps '$seed_stamp' and the lane's tool cache reads '${lane_stamp:-nothing}' after seeding - runner-init copied the tree without its stamp, so the next image's seed would be skipped for ever"
+fi
+
 # THE VERSION AGAINST UPSTREAM, WRITTEN DOWN RATHER THAN ACTED ON. GitHub
 # enforces a minimum runner version and a runner too far below it stops being
 # given jobs - a job that queues for ever while the runner shows online and idle.
@@ -344,7 +427,8 @@ say "Mounts"
 # would not notice.
 for pair in "/home/runner:HOME" "/opt/hostedtoolcache:RUNNER_TOOL_CACHE" \
             "/scratch:TMPDIR" "/opt/actions-runner:the runner tree" \
-            "/var/lib/nested-storage:the nested graph root"; do
+            "/var/lib/nested-storage:the nested graph root" \
+            "/opt/ci-artifacts:the shared artifact store"; do
 	path=${pair%%:*}
 	what=${pair#*:}
 	fstype=$(runner stat -f -c %T "$path" 2>/dev/null | tr -d '\r\n')
@@ -353,7 +437,7 @@ for pair in "/home/runner:HOME" "/opt/hostedtoolcache:RUNNER_TOOL_CACHE" \
 	elif [ "$fstype" = tmpfs ]; then
 		bad "$what ($path) is tmpfs - a tmpfs inside a container is charged to its MEMORY budget and is unreclaimable; see docs/known-state.md"
 	elif ! runner sh -c "touch $path/.smoke-write && rm -f $path/.smoke-write"; then
-		bad "$what ($path) is not writable by the runner user - the lane directories need 'podman unshare chown -R 1000:1000'"
+		bad "$what ($path) is not writable by the runner user - the lane directories need 'podman unshare chown -R 1000:0'"
 	else
 		ok "$what is $fstype and writable"
 	fi
@@ -366,6 +450,41 @@ if runner sh -c 'printf "#!/bin/sh\necho x\n" > /tmp/x && chmod +x /tmp/x && /tm
 	ok "/tmp is writable and executable"
 else
 	bad "/tmp rejected an exec - uv's managed interpreters and node's temporary binaries both break, and neither error says so"
+fi
+
+# THE ARTIFACT STORE IS THE ONE MOUNT WHOSE ENVIRONMENT VARIABLE IS PART OF THE
+# CONTRACT, so the variable is asserted against the mount rather than either
+# alone. upskald's side branches three ways on it - unset means no store and
+# their coverage gate passes, set-and-readable means a baseline and the gate
+# enforces it, set-and-unreadable means `unavailable` and the gate FAILS - so an
+# image that declares the variable without the mount turns their pull requests
+# red for a reason named nowhere on this host.
+# shellcheck disable=SC2016  # deliberately unexpanded here: the value being
+# read is the one the IMAGE declares, which is the entire assertion.
+store=$(runner sh -c 'printf "%s" "${CI_ARTIFACT_STORE:-}"' 2>/dev/null | tr -d '\r\n')
+if [ "$store" = /opt/ci-artifacts ]; then
+	ok "CI_ARTIFACT_STORE is $store, matching the mount"
+elif [ -z "$store" ]; then
+	bad "CI_ARTIFACT_STORE is unset in the image - upskald's actions fall back to GitHub artifacts and the coverage ratchet reads 'absent' and passes on every surface"
+else
+	bad "CI_ARTIFACT_STORE is '$store' but the mount is /opt/ci-artifacts - the image's ENV and bin/github-runner.sh's -v disagree"
+fi
+
+# BOTH SUBTREES, because they are the halves that get opposite treatment and a
+# lane that has one and not the other fails in only one direction. runs/ is
+# per-run scratch that bin/ci-artifacts-sweep.sh removes after 30 days; state/
+# holds the coverage ratchet's memory and is swept by nothing and backed up by
+# bin/backup-server.sh.
+if runner sh -c 'test -d /opt/ci-artifacts/runs && test -d /opt/ci-artifacts/state'; then
+	ok "the store has both runs/ and state/"
+else
+	bad "the store is missing runs/ or state/ - bin/github-runner.sh's preflight creates both and refuses without them"
+fi
+
+if runner sh -c 'touch /opt/ci-artifacts/state/.smoke-write && rm -f /opt/ci-artifacts/state/.smoke-write'; then
+	ok "the runner user can write state/, so a promotion can rewrite the baseline"
+else
+	bad "state/ is not writable by the runner user - the coverage baseline can be read but never promoted"
 fi
 
 if runner sh -c 'touch /usr/local/bin/smoke 2>/dev/null && exit 1; exit 0'; then

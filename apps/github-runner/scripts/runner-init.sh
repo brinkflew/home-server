@@ -92,7 +92,48 @@ fi
 # `container_file_t:s0:c676,c800` on the copy against `container_file_t:s0` on
 # the mount around it. Without --preserve=context the copy inherits the parent
 # directory's label, which is what every other file in the lane already has.
-if [ -d /opt/hostedtoolcache-seed ] && [ ! -d "$RUNNER_TOOL_CACHE/Python" ]; then
+#
+# THE GUARD COMPARES A STAMP, NOT AN EXISTENCE, AND THE OLD ONE COST A WHOLE
+# SHIPPED CHANGE. It read `[ ! -d "$RUNNER_TOOL_CACHE/Python" ]` - so the seed
+# was copied exactly once per lane, ever, and after that no change to it could
+# reach a deployed lane no matter how many times the image was rebuilt. The
+# ensurepip work went in on 2026-08-27 and neither lane saw it: measured the
+# same morning, the image seed held `pip pip3 python python3` and both lanes
+# held `python python3` from the day before, with the tool cache present, the
+# `.complete` marker in place, setup-python resolving 3.13 in 150ms, and every
+# check on this host green. upskald wrote the prediction down before it
+# happened; nothing here noticed it after.
+#
+# THE CACHE IS CLEARED RATHER THAN COPIED OVER when the stamp differs. An
+# overlay leaves the previous tree in place, so a Python minor bump would put
+# two versions in the cache and setup-python may resolve either - and which one
+# it picks is not a thing a job log makes visible. Everything in this directory
+# is re-downloadable by definition, which is the whole reason it is a cache, so
+# clearing it costs one slower job and buys a cache that says what it is.
+#
+# A MISSING STAMP ON THE LANE SIDE MEANS "SEEDED BEFORE STAMPS EXISTED" and
+# re-copies, which is exactly what every deployed lane needs on the first start
+# after this ships. A missing stamp on the SEED side means the Dockerfile's
+# `find` produced nothing, which would silently disable this guard for ever - so
+# that case re-copies too rather than skipping.
+# Written as two `if` blocks rather than `[ -r x ] && v=$(cat x)`: this script
+# runs under `set -eu`, where the AND-OR form's exemption from errexit is a rule
+# about the LAST command in the list, and relying on reading it correctly is not
+# worth the two lines it saves.
+seed_stamp=''
+lane_stamp=''
+if [ -r /opt/hostedtoolcache-seed/.seed-version ]; then
+	seed_stamp=$(cat /opt/hostedtoolcache-seed/.seed-version 2>/dev/null || true)
+fi
+if [ -r "$RUNNER_TOOL_CACHE/.seed-version" ]; then
+	lane_stamp=$(cat "$RUNNER_TOOL_CACHE/.seed-version" 2>/dev/null || true)
+fi
+
+if [ -d /opt/hostedtoolcache-seed ] && [ "$seed_stamp" != "$lane_stamp" ]; then
+	# `find -delete` rather than `rm -rf "$RUNNER_TOOL_CACHE"`: the directory
+	# itself is the bind-mount point and cannot be removed and recreated from
+	# in here. -mindepth 1 keeps the mount and empties it.
+	find "$RUNNER_TOOL_CACHE" -mindepth 1 -delete 2>/dev/null || true
 	cp -rp /opt/hostedtoolcache-seed/. "$RUNNER_TOOL_CACHE/" 2>/dev/null || true
 fi
 
@@ -122,6 +163,29 @@ fi
 # The engine's actual configuration lives in /etc, which nothing can mask; this
 # is only the directory it expects to find.
 mkdir -p "$HOME/.config" "$HOME/.local/share"
+
+# THE SHARED ARTIFACT STORE, ASSERTED FOR THE SAME REASON THE RUNTIME DIRECTORY
+# ABOVE IS. CI_ARTIFACT_STORE is declared in the image, so it is set whether or
+# not bin/github-runner.sh actually mounted anything there - and upskald's side
+# reads a set-but-unreadable store as `unavailable`, which fails their coverage
+# gate on every surface. That is the right direction for a broken store and the
+# wrong one for a lane this host shipped without a mount, so the lane says so
+# here instead of letting it surface as a red pull request in another repository.
+#
+# A WARNING RATHER THAN AN EXIT, which is the opposite of the runtime directory
+# and is deliberate. Without XDG_RUNTIME_DIR the engine cannot run at all and
+# every job on the lane is lost; without the artifact store the lane is perfectly
+# capable of running every job that does not use one. The host-side copy of this
+# test in bin/github-runner.sh is the one that refuses, before the container
+# starts - which is also the only one anybody can read, because a lane runs
+# `--log-driver=none` and everything printed here goes nowhere.
+if [ -n "${CI_ARTIFACT_STORE:-}" ] && [ ! -w "${CI_ARTIFACT_STORE:-/nonexistent}" ]; then
+	echo "runner-init: CI_ARTIFACT_STORE is $CI_ARTIFACT_STORE and is not writable" >&2
+	echo "  by uid $(id -u). It is meant to be a bind mount from the host, shared" >&2
+	echo "  between every lane; see bin/github-runner.sh and docs/ci.md. A job" >&2
+	echo "  that reads it will treat this as a broken store rather than an" >&2
+	echo "  absent one, which is a failure rather than a fallback." >&2
+fi
 
 # THE STORE REMEMBERS WHERE THE ENGINE'S RUNTIME STATE USED TO LIVE, AND IT WINS.
 # libpod keeps its state in `db.sql` at the root of the graph root, and that

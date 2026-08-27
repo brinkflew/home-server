@@ -1,0 +1,36 @@
+# ==============================================================================
+# Sweep the CI lanes' shared artifact store, daily
+# ------------------------------------------------------------------------------
+# 04:00, which is after home-server-backup.timer at 03:00 and before
+# home-server-search.timer at 04:30. The ordering against the backup is the one
+# that matters and it is deliberate: the backup stages state/ every night, and a
+# sweep that ran first would have nothing to do with state/ anyway - but running
+# after it means the night's copy is taken from a store nothing has just been
+# deleting from, which makes a torn read impossible rather than unlikely.
+#
+# DAILY RATHER THAN WEEKLY, even though the retention is thirty days. A daily
+# sweep removes roughly a day's worth each time; a weekly one removes seven days'
+# worth in a single pass, which is the same bytes in a burst against the disk the
+# lanes are working from. There is nothing to gain by batching it.
+#
+# Persistent=true so a machine that was off overnight sweeps when it comes back.
+#
+# IT DOES NOT COVER THE FIRST INSTALL, which is the trap this directory has now
+# hit three times: `systemctl --user enable --now` writes the stamp file
+# immediately, so there is no missed elapse and the unit does NOT fire. Here the
+# consequence is mild - the store simply grows for a day - but the one-time
+# `systemctl --user start` is in host/systemd/README.md with its siblings so the
+# pattern stays uniform.
+# ==============================================================================
+
+[Unit]
+Description=Daily sweep of expired CI run artifacts
+
+[Timer]
+OnCalendar=*-*-* 04:00
+Persistent=true
+RandomizedDelaySec=10min
+AccuracySec=5min
+
+[Install]
+WantedBy=timers.target

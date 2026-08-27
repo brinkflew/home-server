@@ -157,6 +157,63 @@ else
 fi
 
 # ------------------------------------------------------------------------------
+# 3c. The CI coverage baseline
+# ------------------------------------------------------------------------------
+# The twin of step 3c in bin/backup-server.sh, driven over ssh. Both
+# repositories have to agree about what a good snapshot contains, for the reason
+# stated one step up: bin/verify-restore.sh asserts against both.
+#
+# WHAT IT IS: a few hundred bytes under cache/github-runner/artifacts/state/,
+# holding the percentage each of upskald's surfaces may not regress below. It
+# moved off an orphan git branch on GitHub onto this disk on 2026-08-27, and
+# nothing under cache/ is backed up by anything else.
+#
+# FATAL HERE, UNLIKE THE METRICS STORE ABOVE, and the asymmetry is the point.
+# Losing metrics history costs history. Losing this costs a gate: upskald's
+# scripts/check_coverage.py reads a missing baseline as "absent" and PASSES with
+# a warning, on every surface at once - so the loss is invisible from both sides
+# and the thing it was protecting is gone until somebody notices a coverage
+# number that only ever goes down.
+#
+# `podman unshare` on the REMOTE side, because the store belongs to the subuid
+# container uid 1000 maps to and `core` cannot traverse it - so a plain rsync of
+# that path succeeds having copied nothing. tar over the pipe rather than rsync
+# for the same reason: rsync would need the unshare on both ends of a protocol
+# that has only one.
+#
+# THE PATH IS RESOLVED ON THE REMOTE AND SENT BACK, rather than assembled here
+# with escaped ${...} that survives one round of expansion. The defaults belong
+# to the server's environment - GITHUB_RUNNER_ARTIFACTS and DOCKER_VOLUME_CACHE
+# are read from its .env by bin/github-runner.sh - and a literal built locally
+# to be expanded remotely is a thing that has to be re-read every time anybody
+# touches the quoting.
+echo "==> staging the CI coverage baseline"
+ci_state=$(ssh "$REMOTE" 'set -a; . /var/home-server/.env 2>/dev/null; set +a
+	printf "%s" "${GITHUB_RUNNER_ARTIFACTS:-${DOCKER_VOLUME_CACHE:-/var/home-server/cache}/github-runner/artifacts}/state"' || true)
+if [ -z "$ci_state" ]; then
+	echo "could not resolve the CI artifact store path on $REMOTE" >&2
+	exit 1
+fi
+mkdir -p "$STAGING/config/ci-artifact-state"
+# shellcheck disable=SC2029  # $ci_state is expanded locally on purpose: it came
+# back from the remote in the call above and names a path on that same host.
+if ! ssh "$REMOTE" "podman unshare test -d '$ci_state'" 2>/dev/null; then
+	echo "    no CI artifact store on $REMOTE yet - the lanes have not created one"
+	rmdir "$STAGING/config/ci-artifact-state" 2>/dev/null || true
+else
+	# shellcheck disable=SC2029
+	ssh "$REMOTE" "podman unshare tar -C '$ci_state' -cf - ." |
+		tar -C "$STAGING/config/ci-artifact-state" -xf - ||
+		{ echo "could not stage the CI coverage baseline from $REMOTE - a lost baseline makes upskald's gate PASS rather than fail" >&2; exit 1; }
+	ci_files=$(find "$STAGING/config/ci-artifact-state" -type f 2>/dev/null | wc -l)
+	if [ "$ci_files" -eq 0 ]; then
+		echo "the CI artifact store exists on $REMOTE but staged 0 files - a silently empty capture looks exactly like a working one" >&2
+		exit 1
+	fi
+	echo "    $ci_files file(s) staged"
+fi
+
+# ------------------------------------------------------------------------------
 # 4. Into restic
 # ------------------------------------------------------------------------------
 restic snapshots >/dev/null 2>&1 || { echo "==> initialising repository at $REPO"; restic init; }

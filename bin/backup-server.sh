@@ -205,6 +205,55 @@ else
 fi
 
 # ------------------------------------------------------------------------------
+# 3c. The CI coverage baseline
+# ------------------------------------------------------------------------------
+# STAGED IN RATHER THAN LIVED IN, which is the same shape as the two steps above
+# and is here for the same reason: this is something outside config/ that must be
+# in the backup. It is a few hundred bytes under
+# cache/github-runner/artifacts/state/ - upskald's coverage ratchet, recording
+# the percentage each surface may not regress below.
+#
+# IT USED TO BE A FILE ON AN ORPHAN GIT BRANCH ON GITHUB, replicated on somebody
+# else's servers, and it moved onto this disk on 2026-08-27. Nothing under
+# cache/ is backed up by anything - grep for it - so without this step the move
+# traded three copies for one.
+#
+# THE LOSS MODE IS THE REASON THIS IS A HARD FAILURE RATHER THAN A NOTE.
+# upskald's gate does not go red when the baseline is missing: scripts/
+# check_coverage.py reads "absent" and PASSES, with a warning, for every surface
+# at once. So a lost baseline is a coverage gate that silently enforces nothing -
+# which is the exact failure mode they spent a week removing from three other
+# places, and it would be undetectable from either side. A stale copy is worth
+# far more than none.
+#
+# A STORE THAT HAS NEVER BEEN SEEDED IS A SKIP, NOT A FAILURE - the windmill-db
+# precedent. An EMPTY capture of a store that DOES exist is a failure, which is
+# the Caddy-certificate precedent: a silently empty capture looks exactly like a
+# working one, and that is the whole reason that assertion exists.
+say "staging the CI coverage baseline"
+ci_state="${GITHUB_RUNNER_ARTIFACTS:-${DOCKER_VOLUME_CACHE:-/var/home-server/cache}/github-runner/artifacts}/state"
+if ! podman unshare test -d "$ci_state" 2>/dev/null; then
+	echo "    no CI artifact store at $ci_state - the lanes have not created one yet"
+else
+	# `podman unshare`, because the store belongs to the subuid container uid
+	# 1000 maps to and `core` cannot traverse it - the same reason
+	# bin/github-runner.sh unshares its du and its rm. A plain rsync would
+	# report success having copied nothing it could not read.
+	mkdir -p "$STAGING/config/ci-artifact-state"
+	if ! podman unshare cp -r "$ci_state/." "$STAGING/config/ci-artifact-state/" 2>/dev/null; then
+		die "could not stage $ci_state - the coverage baseline would be absent from this backup, and a lost baseline makes upskald's gate pass rather than fail"
+	fi
+	# The copy lands owned by the namespace's ids; restic records ownership and
+	# `core` has to be able to read it back to make the snapshot at all.
+	podman unshare chown -R 0:0 "$STAGING/config/ci-artifact-state" 2>/dev/null || true
+	ci_files=$(find "$STAGING/config/ci-artifact-state" -type f 2>/dev/null | wc -l)
+	if [ "$ci_files" -eq 0 ]; then
+		die "$ci_state exists but staged 0 files - a coverage baseline that is silently absent reads as 'no baseline recorded' and passes every surface"
+	fi
+	echo "    $ci_files file(s) staged"
+fi
+
+# ------------------------------------------------------------------------------
 # 4. Local repository
 # ------------------------------------------------------------------------------
 # Passwords go into files in a private directory rather than onto a command
