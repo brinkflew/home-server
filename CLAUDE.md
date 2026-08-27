@@ -936,6 +936,27 @@ signal read green.
   mounts 2, merged 18 - as do all eleven other layers. **Not the overflow gid**, which is 65534
   here; 65535 is inside the engine's mapped range and something chose it.
 
+### Four heals in a day, and three instruments that were pointed at nothing
+- **The post-mortem was reaching NOBODY**: `tee FILE 2>/dev/null >&2` applies left to right, so
+  tee's stdout went to the /dev/null fd 2 had just been pointed at. Three groups in the forensic
+  capture, ZERO in the job logs. The smoke test asserted the file and only the file.
+- **`mountpoints.json` was never absent, it was the wrong path** - it lives in the RUNROOT, and the
+  comment explaining the absence away made a bug look like a finding.
+- **65535 was read against the LANE's gid map, not the nested engine's.** Off the pause process the
+  nested map is `0 0 1`/`1 1 999`/`1000 1001 64535`, so lane 65535 is its CEILING and is what the
+  nested overflowgid maps onto. Not "a gid something chose".
+- **Three of the five rows compared a post-cleanup failure against a RUNNING control**, so they
+  could only ever differ. The shim now SAMPLES the start; setup before the fork, and the subshell
+  must clear the EXIT trap that deletes the samples.
+- **The load it was blamed on was absent for two of the four**, `store_jobs` was 4/12/18 against a
+  50-job window, and a mid-job reset is ruled out by the journal.
+- **`chown 1000:1000` wrote a gid nothing else writes** (the runner's primary gid is 0), and
+  preflight's `-R` ran over a populated store on every driver start. **Not ruled out for the
+  evening pair**: both drivers restarted at 13:43:43, so it ran over both stores hours before they
+  failed. The first version of that line said the opposite, off a window that started at 20:34.
+- **Fedora ships no pip for a parallel `python3.13`** - no such package at all; `ensurepip
+  --altinstall`, and `--altinstall` is what stops 3.14's `pip3` becoming 3.13's.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

@@ -2817,3 +2817,68 @@ the breadcrumb; the driver read it 21 seconds later, captured the store and rese
 - **Two lanes is not a sample.** Lane 2's store had not been reset and lane 1's had, and lane 1
   worked through the same run. That is consistent with the accumulated-state correlation and is not
   evidence for it.
+
+## Four heals in a day, and three instruments that were pointed at nothing
+
+**2026-08-26 produced four occurrences of the `docker start` failure**, not the one on record:
+lane 1 at 12:39, lane 2 at 12:53, lane 2 at 20:46, lane 1 at 20:57. Every one retried,
+post-mortemed, breadcrumbed, captured, healed and passed its next job with nobody involved, which
+settles "that the bound holds". Investigating them settled nothing about the cause and found three
+readings that could never have said anything.
+
+- **THE POST-MORTEM WAS REACHING NOBODY, and had not been since the tee was added.** It goes to a
+  file under `$HOME` *and* to stderr, written `tee FILE 2>/dev/null >&2` - and redirections apply
+  **left to right**, so tee's stdout was pointed at the `/dev/null` fd 2 had just been pointed at.
+  Measured: the two evening failures carry **three post-mortem groups each in their forensic
+  capture and ZERO in the job logs GitHub kept.** Nothing failed, nothing was empty, and the
+  `--log-level=debug` block - echoed directly rather than tee'd - was there both times, which is
+  exactly why nobody noticed the other one was gone. Third defect in that one line. The smoke test
+  asserted the FILE and only the file; it now counts what lands on stderr.
+- **`mountpoints.json` WAS NEVER ABSENT, IT WAS THE WRONG PATH**, and the comment explaining its
+  absence as "not an error - it is written when something is mounted" made a bug look like a
+  finding. `containers/storage` keeps it in the **RUNROOT**,
+  `$XDG_RUNTIME_DIR/containers/overlay-layers/mountpoints.json`, never in the graph root the
+  capture copies from - the runroot holds its `mountpoints.lock` and the graph root holds neither
+  file. So four captures recorded a meaningful-looking absence of the one file that would show an
+  orphaned mount refcount. **It cannot be fixed by pointing at the runroot either**: that tmpfs
+  dies with the lane and the capture is taken from the host a cycle later.
+- **THE 65535 GID WAS READ AGAINST THE WRONG NAMESPACE'S MAP.** The record said the nested engine's
+  gid map is `0 1000 1` / `1 100000 65536`, so 65535 "is inside the mapped range and a real gid
+  that something chose". Those two lines are the **LANE's own** map. The nested engine runs as
+  `runner`, uid 1000 with primary gid 0, `/etc/subgid` gives it `runner:1:999` and
+  `runner:1001:64535`, so its map - off the pause process, which holds that namespace - is
+  `0 0 1` / `1 1 999` / `1000 1001 64535`. **Lane gid 65535 is the CEILING of that map and is what
+  nested gid 65534, the nested overflowgid, maps onto.** Printing the lane's overflowgid (65534)
+  and ruling overflow out on that basis is one namespace too high. The question is not what chose
+  65535; it is which chown targeted a gid the nested map does not contain.
+- **Three of the five rows in the failing-vs-healthy table cannot discriminate at all**, because
+  the failing side is post-cleanup and the healthy control was read from a RUNNING container.
+  `mounts 1 vs 2`, `merged 0 vs 18` and `mountpoints.json 2 vs 198 bytes` are three spellings of
+  "one of these has been torn down". Only the two gid rows survive an unmount. **So the shim now
+  SAMPLES the start** - one line per ~100ms while `podman start` runs, printed only on failure -
+  and the setup must happen BEFORE the fork or a start that fails in 230ms kills the sampler
+  before it writes a line, and the backgrounded subshell must clear the EXIT trap or it deletes
+  the samples on its way out.
+- **The load it was blamed on was absent for two of the four.** The evening pair ran against two
+  saturated lanes; the midday pair did not. `store_jobs` at the three clean failures was 4, 12 and
+  18 - the 50-job window has never fired ahead of a heal. The 12:39 row is not a data point: its
+  driver had restarted one second earlier, so `store_jobs=0` is a counter reset. And a mid-job
+  `lane_reset` is ruled out rather than assumed - the journal shows the heal two seconds AFTER
+  "job finished" in both evening cases.
+- **`chown 1000:1000` writes a gid nothing else in the lane writes.** The runner's primary gid is
+  0, so every file it creates is gid 0; measured, `$LANE_ROOT/storage` was `100999:100999` on top
+  of a tree of `100999:core`. Now `1000:0`. And preflight's `-R` form ran over a POPULATED store on
+  every driver start - the only code here that rewrites gids inside a live nested store.
+- **AND THAT CHOWN IS NOT RULED OUT, WHICH WAS FIRST WRITTEN THE OTHER WAY.** "Both drivers held
+  their pids across the window" is true of 20:34-21:10 and was read off that window alone. **Both
+  drivers restarted at 13:43:43** - after the midday resets, about seven hours before the evening
+  failures - so the recursive chown ran over both populated stores and both of those stores later
+  failed. Not evidence of cause: dozens of jobs passed on them in between, and the midday pair
+  failed BEFORE the restart. It is enough that the dismissal had not been measured, on the one
+  asymmetry this bug has ever shown, which is an ownership one.
+- **Fedora ships NO pip for a parallel-installed `python3.13`.** `setup-python` resolves 3.13 out
+  of the seeded tool cache in ~150ms and hands back an interpreter with no pip, so `python3 -m pip`
+  fails on the line after "Successfully set up CPython". There is no `python3.13-pip` package -
+  `repoquery --whatprovides "python3.13dist(pip)"` is empty - and `python3-pip` targets Fedora 44's
+  default 3.14. `ensurepip --altinstall` is the route, and `--altinstall` is load-bearing: without
+  it, 3.14's `pip3` becomes 3.13's.

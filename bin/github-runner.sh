@@ -312,8 +312,48 @@ preflight() {
 	# lane root has to stay ours. Measured on the first live lane: every mint
 	# failed with "no response", because `jq > $LANE_ROOT/.mint.json` had been
 	# refused and curl was posting a file that did not exist.
+	# 1000:0 AND NOT 1000:1000, BECAUSE 0 IS WHAT THE CONTAINER ACTUALLY WRITES.
+	# The runner's primary gid is 0 - `usermod -g 0` in the Dockerfile, so that
+	# nested pasta can open a group-0 /dev/net/tun - so every file the lane
+	# creates lands gid 0. Chowning to 1000 therefore does not restore a state
+	# the container produces; it invents one. Measured on the host 2026-08-27:
+	# `$LANE_ROOT/storage` was 100999:100999 while EVERY child of it was
+	# 100999:core, which is lane-side `runner:runner` sitting on top of a tree of
+	# `runner:root`. Harmless in itself - the runner owns them by uid - and
+	# corrected here because the one asymmetry this failure has ever shown is an
+	# ownership one, and a chown that writes a gid nothing else writes is not
+	# something to leave in the frame while that is being investigated.
+	#
+	# AND `-R` ONLY ON A TREE THAT IS NOT ALREADY A STORE. This loop runs on
+	# every driver start, and on `storage` that is a full recursive rewrite of
+	# ownership across twenty-odd overlay layers whose files belong to a
+	# NESTED namespace's ids - the only code in this repository that rewrites
+	# gids inside a live nested store.
+	#
+	# AND IT IS NOT RULED OUT FOR 2026-08-26, WHICH THIS COMMENT FIRST CLAIMED.
+	# Both drivers held their pids across the 20:34-21:10 window, which is what
+	# that claim was read off - but they had BOTH RESTARTED AT 13:43:43, after
+	# the midday resets and roughly seven hours before the evening failures. So
+	# this ran recursively over both populated stores, and both of those stores
+	# later failed. That is not evidence of cause: dozens of jobs passed on those
+	# same stores in between, and the midday pair failed BEFORE the restart. It
+	# is enough that "it did not cause these failures" was not a thing anyone had
+	# measured. The non-recursive form still repairs the case the loop exists
+	# for, which is a bind-mount source `mkdir`ed by `core`.
+	#
+	# THE DISCRIMINATOR IS `overlay/`, NOT `db.sql`. The guard sixty lines below
+	# DELETES db.sql when it records a stale runroot, and the overlay tree
+	# survives that - so keying on db.sql would put a repaired lane through the
+	# full recursive rewrite on its very next start, which is the one case this
+	# is trying to avoid. `overlay/` exists exactly when containers/storage has
+	# initialised the store.
 	for d in home toolcache storage runner tmp; do
-		podman unshare chown -R 1000:1000 "$LANE_ROOT/$d" 2>/dev/null ||
+		if [ "$d" = storage ] && [ -d "$LANE_ROOT/storage/overlay" ]; then
+			podman unshare chown 1000:0 "$LANE_ROOT/$d" 2>/dev/null ||
+				die 3 "cannot chown $LANE_ROOT/$d into the container's user namespace - a lane cannot write its own store without it"
+			continue
+		fi
+		podman unshare chown -R 1000:0 "$LANE_ROOT/$d" 2>/dev/null ||
 			die 3 "cannot chown $LANE_ROOT/$d into the container's user namespace - a lane cannot write its own home without it"
 	done
 
@@ -473,10 +513,23 @@ lane_forensics() {
 	# records under "podman unshare writes as container root, and 0600 then locks
 	# out the runner", and a forensic capture nobody can open is not a capture.
 	#
-	# mountpoints.json IS ABSENT ON AN IDLE LANE and that is not an error - it is
-	# written when something is mounted. Its absence in a capture is itself a
-	# reading, which is why every copy is `|| true` and none of them is asserted.
-	for n in db.sql overlay-layers/layers.json overlay-layers/mountpoints.json \
+	# mountpoints.json IS NOT IN THIS LIST, AND THE REASON IT USED TO BE WAS
+	# WRONG. The comment here said it was "absent on an idle lane", and that its
+	# absence was itself a reading. It is absent because containers/storage does
+	# not keep it in the graph root at all: it lives in the RUNROOT, at
+	# $XDG_RUNTIME_DIR/containers/overlay-layers/mountpoints.json, which is the
+	# lane's own 128 MB tmpfs. Verified on a live lane 2026-08-27 - the runroot
+	# holds its `mountpoints.lock`, the graph root holds neither file - so this
+	# copy could never have succeeded on any lane in any state, and four captures
+	# recorded a meaningful-looking absence that was a wrong path.
+	#
+	# IT CANNOT BE FIXED BY POINTING AT THE RUNROOT EITHER. That filesystem dies
+	# with the lane container, and this capture is taken from the host at the top
+	# of the next cycle. The replacement is the docker shim's sampler, which
+	# reads the same file from INSIDE the lane while `docker start` is running -
+	# see apps/github-runner/scripts/docker-shim.sh - and arrives here inside
+	# postmortem.log.
+	for n in db.sql overlay-layers/layers.json \
 	         overlay-containers/containers.json overlay-images/images.json; do
 		podman unshare cp "$LANE_ROOT/storage/$n" \
 			"$dest/$(printf '%s' "$n" | tr / -)" 2>/dev/null || true
@@ -550,8 +603,11 @@ lane_reset() {
 	# permission denied" on the first live lane. It was never noticed because
 	# that reclaim had never once fired: the budget gating it was being read by a
 	# du that reported half the truth. Two defects, and the second hid the first.
+	# 1000:0, matching preflight and matching what the container writes: the
+	# runner's primary gid is 0. This tree was just recreated empty, so `-R` here
+	# is two directories and not a live store.
 	for d in tmp storage; do
-		podman unshare chown -R 1000:1000 "$LANE_ROOT/$d" 2>/dev/null ||
+		podman unshare chown -R 1000:0 "$LANE_ROOT/$d" 2>/dev/null ||
 			log "WARNING: could not chown $LANE_ROOT/$d back into the container's namespace - the next lane will not be able to write its own store"
 	done
 	# BOTH, and the log with the flag rather than kept: it is appended to, so

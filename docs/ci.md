@@ -258,6 +258,40 @@ recognised.
 
 The honest position is that **nobody has yet established whether the mount happens.**
 
+**So the shim now samples the start instead of only autopsying it.** Every `docker start` forks a
+sampler that writes one line every ~100 ms for as long as podman runs, and the post-mortem prints
+it - transitions only, with the identical runs counted rather than dropped - when and only when the
+start failed. Three numbers, none of which needs an engine: overlay mounts in the pause namespace,
+the byte size of `containers/storage`'s `mountpoints.json` in the runroot, and the entry count of
+the container's own `merged/`. The layer is resolved out of `overlay-containers/containers.json` by
+text scan, so a green job pays four forks and prints nothing.
+
+That is the reading the table below cannot give. If `mounts` reaches 2 and `mp` grows before crun
+fails, **the mount was real and something tore it down**; if neither ever moves, **containers/storage
+returned a mountpoint it never made**. Those are different bugs and every instrument here so far has
+been standing on the wrong side of libpod's cleanup to see which.
+
+Two things about it that were learned by getting them wrong first:
+
+- **The setup has to happen before the fork.** Resolving the pause pid and the layer is four forks;
+  a failing `docker start` returns in about 230 ms and the stub used to test this returns in five,
+  so a sampler that resolves its own paths *after* being backgrounded is killed before it writes a
+  line. Doing it in the foreground also makes `t=0` a reading taken **before** podman was invoked,
+  which is the baseline every later sample is read against.
+- **The backgrounded subshell must clear the EXIT trap**, which deletes the sample file. Inheriting
+  it would delete the samples the instant the sampler is killed - the one file the whole change
+  exists to produce.
+
+**And the post-mortem was reaching nobody.** It is `tee`d to a file under `$HOME` *and* to stderr,
+which is where a job log reads it - except that the two redirections were written
+`2>/dev/null >&2`, and redirections apply **left to right**, so tee's stdout was pointed at the
+`/dev/null` fd 2 had just been pointed at. Measured 2026-08-27 against the two lane failures of
+2026-08-26: **three post-mortem groups each in the forensic capture, zero in the job logs GitHub
+kept.** Nothing failed, nothing was empty, and the `--log-level=debug` block - echoed directly, not
+tee'd - was there both times, which is exactly why it went unnoticed. Third defect in that one line.
+`bin/github-runner-smoke.sh` now counts post-mortem groups and sample blocks **on stderr**, because
+the leg that already existed asserted only the file.
+
 Chasing that turned up a defect that was making every diagnosis unreadable. **libpod records its
 runroot and tmpdir in `db.sql` at the root of the graph root**, and the graph root is a lane bind
 mount that outlives every image upgrade. Change `XDG_RUNTIME_DIR` and podman does not complain -
@@ -373,6 +407,17 @@ already gives for the shim's own block: libpod unmounts on a failed start and th
 `docker rm --force`s the container, so a capture 21 seconds later is post-cleanup by construction.
 It preserves `db.sql` and `layers.json`, which survive cleanup, and those turned out to say nothing.
 
+**"`mountpoints.json` absent from both" was not a reading, it was a wrong path**, and the sentence
+that explained it away - "absent on an idle lane, and its absence is itself a reading" - made it
+look like one. `containers/storage` does not keep that file in the graph root at all: it lives in
+the **runroot**, at `$XDG_RUNTIME_DIR/containers/overlay-layers/mountpoints.json`. Verified on a
+live lane 2026-08-27 - the runroot holds its `mountpoints.lock`, the graph root holds neither file -
+so the copy could never have succeeded on any lane in any state, and four captures recorded a
+meaningful-looking absence of the one file that would have shown an orphaned mount refcount.
+**Nor can it be fixed by pointing at the runroot**: that filesystem is the lane's own tmpfs and dies
+with the container, while the capture is taken from the host at the top of the next cycle. It is out
+of the capture list, and the shim's sampler reads it from inside the lane instead.
+
 **What did say something is the shim's block, printed inside the lane at the instant of failure -
 and, for the first time, a control beside it.** A postgres started by hand on a healthy lane
 thirty seconds later, through the same nested engine:
@@ -385,16 +430,66 @@ healthy start    0            0          2                           18         
 
 Every one of the other eleven layers in that healthy store also reads gid 0.
 
-**It is not the kernel's overflow gid, which was the first guess and is wrong.** This host reports
-`overflowgid` **65534**, and the nested engine's gid map is `0 1000 1` / `1 100000 65536` - so
-65535 is inside the mapped range and is a real gid that something deliberately chose. What chooses
-it is not known. It is the first asymmetry anyone has measured between a failing start and a
-working one, it came with its control, and the post-mortem now prints both numbers with the
-baseline beside them so the next occurrence needs no re-derivation.
+**Only the two gid rows are a fair comparison, and the other three cannot discriminate at all.**
+The failing reading is post-cleanup and the healthy control was taken from a **running** container,
+so `mounts 1 vs 2`, `merged 0 vs 18` and `mountpoints.json 2 vs 198 bytes` are three different
+spellings of "one of these has been torn down". A gid survives an unmount; a mount count does not.
+That is what the sampler in the section above exists to replace.
+
+**The gid reading was right and the interpretation under it was wrong, because it quoted the wrong
+namespace's map.** It said the nested engine's gid map is `0 1000 1` / `1 100000 65536`, so 65535
+"is inside the mapped range and is a real gid that something deliberately chose". Those two lines
+are the **lane's own** map - `/proc/self/gid_map` inside a lane reads exactly that, measured
+2026-08-27. The nested engine runs as `runner`, uid 1000 with **primary gid 0**, and `/etc/subgid`
+gives it `runner:1:999` and `runner:1001:64535`, so its map - read off the pause process, which is
+what holds that namespace - is:
+
+```
+0     0     1
+1     1     999
+1000  1001  64535        nested 1000..65534 -> lane 1001..65535
+```
+
+**So lane gid 65535 is the ceiling of that map, and it is what nested gid 65534 maps onto - which is
+the nested namespace's own overflowgid.** The post-mortem printed the *lane's* overflowgid, 65534,
+and ruling overflow out on that basis is one namespace too high. The question is not what chose
+65535; it is **which chown targeted a gid the nested map does not contain**. Both maps are now
+printed, labelled, for the same reason the two mount-namespace numbers are.
+
+It remains the first asymmetry anyone has measured between a failing start and a working one, and
+it came with its control.
 
 **It also refutes nothing about accumulated state and confirms nothing either.** Lane 2's store had
 not been reset; lane 1's had, and lane 1 kept working through the same run. That is consistent with
 the correlation and is not evidence for it - two lanes is not a sample.
+
+### Four in one day, and the load it was blamed on was not there for two of them
+
+**2026-08-26 produced four occurrences, not one**: lane 1 at 12:39, lane 2 at 12:53, lane 2 at
+20:46, lane 1 at 20:57. Every one of them retried, post-mortemed, breadcrumbed, captured, healed,
+and passed its next job with nobody involved. The machinery works. It still does not say why.
+
+**The obvious reading was load, and the data does not support it.** The evening pair happened with
+four runs in flight against two saturated lanes and jobs still queued eighteen minutes later; the
+midday pair happened hours earlier, in the ordinary run of things. What all four share is a store
+with history, which is the correlation already on record - and it is still not a threshold:
+
+| | lane | `store_jobs` | `lane_disk_mb` |
+|---|---|---|---|
+| 12:39 | 1 | 0 | 3,295 |
+| 12:53 | 2 | 4 | 4,474 |
+| 20:46 | 2 | 12 | 4,461 |
+| 20:57 | 1 | 18 | 3,728 |
+
+**The 12:39 row is not a data point.** Its driver had restarted one second earlier, so the
+breadcrumb it healed on was written before the restart and its `store_jobs=0` is a counter reset,
+not a store that had served nothing. The three clean readings are 4, 12 and 18 - all far under the
+50-job window, which has therefore never fired ahead of a heal and would not have prevented any of
+these.
+
+**A `lane_reset` mid-job was ruled out rather than assumed.** `gc_lane` is called from one place, at
+the top of the cycle, after the job's `podman run` has been waited on and its registration deleted;
+the journal shows the heal two seconds *after* "job finished" in both evening cases.
 
 **`bin/github-runner-smoke.sh` cannot see any of this**, and both affected legs now say so.
 `runner()` builds a fresh lane every run, and a fresh store is the single condition under which
@@ -809,11 +904,17 @@ together or neither does.
 **Not yet proved, and none of it can be settled from a workstation:**
 
 - **The cause of the `api-checks` failure.** It stopped on a manual wipe and the state that was
-  wiped is gone; the retry is a treatment and the reset is a bound. The two sections above say so
-  rather than implying otherwise.
-- **That the bound holds.** `gc_lane`'s 50-job window and the shim's self-heal have not yet been
-  exercised by a real recurrence - only by a hand-planted breadcrumb. What would prove them is
-  `ci.lane_store` firing on its own, which is a thing to hope does not happen.
+  wiped is gone; the retry is a treatment and the reset is a bound. The sections above say so
+  rather than implying otherwise. **What is now instrumented for it** is the one question none of
+  the existing readings can answer - whether the mount happens at all - and the answer arrives on
+  the next occurrence rather than needing a reproduction.
+- **That the bound holds.** ~~Not yet exercised by a real recurrence.~~ **Proved 2026-08-26**: four
+  occurrences, four heals, four next-jobs green, no human. The window itself is still unproved and
+  is now known to be the wrong size to matter - it fires at 50 jobs and the three clean failures
+  came at 4, 12 and 18.
+- **That the sampler measures anything.** It has been tested against a stub that fails a `docker
+  start` in five milliseconds, which proves it writes its baseline and survives the race; it has
+  never run against the real failure, because the real failure cannot be summoned.
 - **Whether `/run` at 128m is enough for a job that does something unusual with it.** It is two
   orders of magnitude above the engine's own runtime state, and the smoke test grades the ceiling
   rather than the usage, so an overrun would surface as a job failure and not as a warning.
