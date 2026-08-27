@@ -928,6 +928,12 @@ signal read green.
 - Thirty days on `runs/`, because a merge-time consumer reads a pull request's LAST run; a sweep on
   its own timer, because two drivers over one shared tree have no lock; and `podman unshare` or the
   copy reports success having copied nothing.
+- **A live-but-unseeded store gives a pipeline exactly as green as a seeded one**, so `ci.artifact_store`
+  grading `du -sb state/` could not tell: any stray file made the bytes non-zero while a consumer
+  opening its own `baselines.json` got `absent` and PASSED. It counts baselines now, an unseeded
+  store is a **warn** rather than a note, and it was made to fail before it was trusted.
+- The migration was verified by re-fetching the source fresh - not the copy used to seed - and
+  matching sha256 from inside both lanes, with no credential passed into a lane to do it.
 
 ### A tool that assumes a distribution, and does not check before it fails
 - **`playwright install --with-deps` supports Debian and Ubuntu only and does not detect that it

@@ -3153,6 +3153,23 @@ if [ -z "$GREENBOOT" ]; then
 			warn ci.artifact_store "a CI lane is enabled and $ci_store does not exist - bin/github-runner.sh creates it in preflight and refuses to start a lane without it, so a lane is either not running or running against an image that does not know about the store"
 		fi
 	else
+		# COUNTED, NOT MEASURED IN BYTES, AND THAT DISTINCTION IS THE CHECK.
+		# The first version of this graded on `du -sb state/`, which cannot tell
+		# a seeded store from a store with something else in it: any stray file
+		# makes the byte count non-zero and this reports `ok` while a consumer
+		# reading its own `<owner>/<repo>/baselines.json` gets nothing and
+		# PASSES on `absent`. That is the same shape as the defect this store
+		# was built to remove, one layer out - not a gate that cannot check, but
+		# a check that grades a number nothing depends on.
+		#
+		# A LIVE-BUT-UNSEEDED STORE PRODUCES A PIPELINE EXACTLY AS GREEN AS A
+		# SEEDED ONE, so "CI is green" cannot separate them and the difference
+		# surfaces on the day a real regression lands and nothing stops it.
+		# `baselines.json` is what a consumer opens, so it is what gets counted.
+		ci_baselines=$(podman unshare find "$ci_store/state" -mindepth 3 -maxdepth 3 \
+			-name baselines.json -type f 2>/dev/null | grep -c . || true)
+		case "$ci_baselines" in ''|*[!0-9]*) ci_baselines=0 ;; esac
+		fact github_runner_artifact_baselines "$ci_baselines" num
 		ci_state_bytes=$(podman unshare du -sb "$ci_store/state" 2>/dev/null | cut -f1)
 		ci_runs_mb=$(podman unshare du -sm "$ci_store/runs" 2>/dev/null | cut -f1)
 		case "$ci_state_bytes" in ''|*[!0-9]*) ci_state_bytes="" ;; esac
@@ -3175,14 +3192,14 @@ if [ -z "$GREENBOOT" ]; then
 
 		if ! podman unshare test -d "$ci_store/state" 2>/dev/null; then
 			warn ci.artifact_store "$ci_store has no state/ subtree - upskald's coverage baseline lives there, and a lane reading a store without it treats the baseline as absent, which PASSES their gate on every surface"
-		elif [ "${ci_state_bytes:-0}" -eq 0 ]; then
-			note ci.artifact_store "the artifact store's state/ is empty - the coverage baseline has not been seeded yet. Until it is, upskald's gate reads 'absent' and passes; see docs/ci.md for the one-time seed from the coverage-baseline branch"
+		elif [ "$ci_baselines" -eq 0 ]; then
+			warn ci.artifact_store "the artifact store exists and holds NO baselines.json (${ci_state_bytes:-0} bytes of other content under state/) - so any coverage gate reading it gets 'absent' and PASSES, on every surface at once, and a green pipeline says nothing about whether a regression would have been caught. Seed it; see docs/ci.md"
 		elif [ -n "$ci_swept_age" ] && [ "$ci_swept_age" -gt 3 ]; then
 			warn ci.artifact_store "the artifact store holds ${ci_state_bytes} bytes of baseline and ${ci_runs_mb:-?}MB of run scratch, but the sweep last ran ${ci_swept_age} days ago against a daily timer - check home-server-ci-artifacts-sweep.timer"
 		elif [ -z "$ci_swept_at" ]; then
 			note ci.artifact_store "the artifact store holds ${ci_state_bytes} bytes of baseline and ${ci_runs_mb:-?}MB of run scratch; the sweep has never recorded a run, which on a fresh install means the one-time start in host/systemd/README.md was skipped"
 		else
-			ok ci.artifact_store "the shared artifact store holds ${ci_state_bytes} bytes of coverage baseline and ${ci_runs_mb:-?}MB of run scratch, swept ${ci_swept_age} day(s) ago"
+			ok ci.artifact_store "the shared artifact store holds $ci_baselines coverage baseline(s) (${ci_state_bytes} bytes) and ${ci_runs_mb:-?}MB of run scratch, swept ${ci_swept_age} day(s) ago"
 		fi
 	fi
 
