@@ -1528,10 +1528,16 @@ CI_SLICE = os.path.join(CGROUP, "app-ci.slice")
 # `lane` IS A LEGITIMATE LABEL AND THE FORBIDDEN FAMILY IS WHY THAT NEEDS SAYING.
 # The banned dimensions are worktree path, branch, pull-request number, job id and
 # session id - values that never repeat, in a store that keeps 400 days. This one
-# is a closed set of two, fixed by host/systemd/app-ci.slice's cpuset arithmetic,
-# and a third lane is refused by bin/github-runner.sh rather than silently
-# minting a third series.
-CI_LANES = (1, 2)
+# is a closed set, fixed by host/systemd/app-ci.slice's cpuset arithmetic - six
+# cores, one pair per lane - and a lane beyond it is refused by
+# bin/github-runner.sh rather than silently minting a further series.
+#
+# IT WENT FROM TWO TO THREE ON 2026-08-27 AND THAT IS THE POINT OF WRITING IT
+# DOWN: the set is closed, not fixed, and widening it is an edit here as well as
+# in the slice. A lane whose marker exists and is not in this tuple produces no
+# series at all, which is the Windmill-worker shape - nothing failed, nothing
+# unhealthy, and work simply unobserved.
+CI_LANES = (1, 2, 3)
 
 
 def _ci_marker(lane):
@@ -1604,7 +1610,7 @@ def source_ci(m):
     if present:
         for metric, filename, help_text in (
                 ("memory_bytes", "memory.current",
-                 "memory.current for both CI lanes and their driver, summed by "
+                 "memory.current for every CI lane and its driver, summed by "
                  "the kernel."),
                 ("memory_peak_bytes", "memory.peak",
                  "High-water mark since the slice was created. This is the "

@@ -2597,7 +2597,7 @@ if [ -z "$GREENBOOT" ]; then
 	ci_lanes_enabled=""
 	ci_lanes_failed=""
 	ci_lanes_active=0
-	for l in 1 2; do
+	for l in 1 2 3; do
 		u="home-server-github-runner@$l.service"
 		[ "$(systemctl --user is-enabled "$u" 2>/dev/null)" = enabled ] || continue
 		ci_lanes_enabled="$ci_lanes_enabled $l"
@@ -2645,7 +2645,7 @@ if [ -z "$GREENBOOT" ]; then
 	ci_reset_at=""
 	ci_reset_reason=""
 	ci_store_jobs=""
-	for l in 1 2; do
+	for l in 1 2 3; do
 		m="${HOME:-/var/home/core}/.cache/home-server/ci-state-$l"
 		[ -f "$m" ] || continue
 		ci_markers=$((ci_markers + 1))
@@ -2786,9 +2786,9 @@ if [ -z "$GREENBOOT" ]; then
 
 	# The ceilings, read back from what jobs actually used.
 	# --------------------------------------------------------------------------
-	# host/systemd/app-ci.slice SIZES TWO LANES ON A 15.8 GB HOST FROM NUMBERS IT
-	# CALLS STARTING POINTS, and names its own failure mode as silence. The
-	# driver keeps memory.peak and pids.peak off each transient scope - the only
+	# host/systemd/app-ci.slice SIZES THREE LANES ON A 15.8 GB HOST, and names its
+	# own failure mode as silence. The driver keeps memory.peak and pids.peak off
+	# each transient scope - the only
 	# window there is, since --collect removes the scope the moment the container
 	# exits - so this grades the ceilings against the load rather than against
 	# the file that declares them.
@@ -2806,7 +2806,7 @@ if [ -z "$GREENBOOT" ]; then
 	elif [ -z "$ci_mem_peak" ]; then
 		note ci.lane_headroom "no CI lane has run, so nothing has been measured against the ceilings"
 	elif [ "$ci_oom" -gt 0 ]; then
-		bad ci.lane_headroom "the kernel has killed $ci_oom process(es) in a CI lane for breaching MemoryMax - a job died for a reason its own log will not explain. Raise MemoryMax on the scope in bin/github-runner.sh AND MemoryHigh/MemoryMax on host/systemd/app-ci.slice together: two lanes at the scope ceiling already exceed the slice, so raising one alone moves which limit binds without adding headroom."
+		bad ci.lane_headroom "the kernel has killed $ci_oom process(es) in a CI lane for breaching MemoryMax - a job died for a reason its own log will not explain. Raise MemoryMax on the scope in bin/github-runner.sh AND MemoryHigh/MemoryMax on host/systemd/app-ci.slice together: three lanes at the scope ceiling already exceed the slice by 768M, so raising one alone moves which limit binds without adding headroom."
 	elif [ "$ci_mem_max_ev" -gt 0 ]; then
 		warn ci.lane_headroom "a CI lane has hit MemoryMax $ci_mem_max_ev time(s) - allocation was refused at the hard ceiling rather than throttled at MemoryHigh, which is the reading that justifies raising it. Lane $ci_mem_lane peaked at ${ci_mem_peak}MB of ${ci_mem_ceiling}MB; read 'anon' against 'inactive_file' in the scope's memory.stat before changing a number."
 	elif [ -n "$ci_pids_peak" ] && [ "$ci_pids_peak" -gt "$(( ci_pids_ceiling * 8 / 10 ))" ]; then
@@ -3109,7 +3109,7 @@ if [ -z "$GREENBOOT" ]; then
 		-c 'cat /opt/hostedtoolcache-seed/.seed-version 2>/dev/null' 2>/dev/null | tr -d '\r\n')
 	ci_seed_stale=""
 	ci_seed_checked=0
-	for l in 1 2; do
+	for l in 1 2 3; do
 		ci_lane_tc="$ci_root/lanes/$l/toolcache/.seed-version"
 		podman unshare test -d "$ci_root/lanes/$l/toolcache" 2>/dev/null || continue
 		ci_seed_checked=$((ci_seed_checked + 1))

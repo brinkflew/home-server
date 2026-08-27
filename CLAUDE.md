@@ -53,7 +53,7 @@ are load-bearing and several were paid for in outages.
 | `docs/dashboard.md` | the Vue application, its five sources, and what it may and may not assert |
 | `docs/repo-conventions.md` | `config/` vs `apps/`, how a file reaches a container, ASCII, `bin/lint-repo.sh` |
 | `docs/agents.md` | the three tiers, the marker contract, the phase invocation, and what must never travel to ntfy |
-| `docs/ci.md` | the two CI lanes, the nested container engine, the credential that never enters a container, and what a lane may reach |
+| `docs/ci.md` | the three CI lanes, the nested container engine, the credential that never enters a container, and what a lane may reach |
 | `docs/known-state.md` | the seventy-four conclusions from auditing the running host |
 
 **What stays here is what has to be known BEFORE touching anything**: what this is, how a change
@@ -916,7 +916,7 @@ signal read green.
   pids held continuously across both evening failures and the day carries no non-clean exit. Guarded
   anyway, in one `podman ps`.
 
-### One directory for two lanes, and the half of it that must never be swept
+### One directory for every lane, and the half of it that must never be swept
 - The coverage ratchet moved off GitHub onto this disk, and `absent` PASSES upskald's gate while
   `unavailable` fails it - so a lost baseline enforces nothing on every surface at once, silently.
   An empty capture of an existing store is therefore fatal to the backup run.
@@ -1027,6 +1027,23 @@ signal read green.
   failed. The first version of that line said the opposite, off a window that started at 20:34.
 - **Fedora ships no pip for a parallel `python3.13`** - no such package at all; `ensurepip
   --altinstall`, and `--altinstall` is what stops 3.14's `pip3` becoming 3.13's.
+
+### A lane at 45% of its cores was not waiting on the network
+- 45% mean, 71% p90, 76% max across a lane's two pinned cores with 0.8% iowait reads as "give it
+  more cores", and does not mean that. **Both long jobs on upskald's critical path are
+  single-threaded** - `pytest` with no `-n`, Playwright at `workers: 1` under CI - so no cpuset
+  can shorten either. `app-ci.slice` widened `4-7` -> `4-9` for a third LANE, never wider lanes.
+- Lifetime `nr_throttled` is 4 and lifetime memory PSI is 60s, so neither `CPUWeight` nor the
+  ceilings were ever the constraint. And a cpuset is **not exclusive**, which is what `docs/ci.md`
+  forgot one section after saying it: widening shares 8-9 rather than taking them from Jellyfin.
+
+### Uploading from this host costs 20-40x what downloading does
+- **`j178/prek-action@v2` caches on your behalf**, outside the `runner.environment` guard upskald
+  put on its own cache step: 50 MB up at 0.4-0.5 MB/s, 1m53 per run, over a `~/.cache/prek` the
+  lane already keeps. The same cache downloads at 5-19 MB/s. The tell is a `Post <step>` in minutes.
+- **Queueing was never where the time went** - 171 seconds across eleven jobs against 29m24s of
+  wall clock, 67% of which is test execution. The third lane is for e2e shard WIDTH, not a queue.
+
 
 ## Target architecture
 

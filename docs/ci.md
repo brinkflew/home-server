@@ -8,9 +8,9 @@ Added 2026-08-24.
 
 ## What this is
 
-Two **lanes**. Each is a `systemd --user` process that mints a single-use GitHub Actions runner
+Three **lanes**. Each is a `systemd --user` process that mints a single-use GitHub Actions runner
 identity, starts one container, lets that container run exactly one job, tears the registration
-down, and does it again. The lanes are `home-server-github-runner@1.service` and `@2`; the driver
+down, and does it again. The lanes are `home-server-github-runner@1.service` through `@3`; the driver
 is `bin/github-runner.sh`; the image is built here from `apps/github-runner/Dockerfile`.
 
 ```
@@ -127,7 +127,7 @@ twenty-five of them. There is no systemd session inside a container, so `podman 
 **That is a six-hour hang, not a cosmetic defect.** GitHub's runner waits on exactly that field
 before it will run a job's steps, in a loop with **no retry cap**, and `avanserv/upskald` sets
 `timeout-minutes:` on none of its jobs - so the default 360 minutes applies. One pull request
-would hold both lanes for the afternoon while every signal on this host read green: the container
+would hold every lane for the afternoon while every signal on this host read green: the container
 running, the service serving, no unit failed, nothing unhealthy.
 
 `apps/github-runner/scripts/podman-healthcheck-loop.sh` is what closes it - `podman healthcheck run` per
@@ -560,9 +560,10 @@ $FLEET_ROOT/artifacts/            -> /opt/ci-artifacts
 reach would lose the coverage ratchet on the first self-heal, of which there were four in one day.
 Nothing in `lane_reset` knows this path exists and it must stay that way.
 
-**One directory for both lanes, deliberately.** upskald's producing job and its consuming job land
+**One directory for every lane, deliberately.** upskald's producing job and its consuming job land
 on different lanes routinely - that is the entire reason they asked for it. A per-lane store would
-not error; it would answer with somebody else's data about half the time.
+not error; it would answer with somebody else's data most of the time, and a third lane made that
+worse rather than better: the chance a producer and its consumer share one is a third, not a half.
 
 **Not under `config/`, even though that is where the backup already reaches.** This file states, and
 `bin/github-runner-smoke.sh` asserts, that no path under `config/` is mounted into a lane. Putting
@@ -717,62 +718,89 @@ house style, and `app-agents.slice` says why: twenty-four quadlets declare 34.5 
 
 | Level | MemoryHigh | MemoryMax | CPUs |
 |---|---|---|---|
-| lane scope | 2816M | 3584M | `4-5` / `6-7` |
-| `app-ci.slice` | 5632M | 6656M | `4-7` |
+| lane scope | 2816M | 3584M | `4-5` / `6-7` / `8-9` |
+| `app-ci.slice` | 8448M | 9984M | `4-9` |
 
-The per-lane limits **bind before the slice does** - two lanes at 3,584M is 7,168M against the
-slice's 6,656M - so the slice squeezes them rather than the kernel picking a victim by badness
-across the whole subtree.
+The per-lane limits **bind before the slice does** - three lanes at 3,584M is 10,752M against the
+slice's 9,984M - so the slice squeezes them rather than the kernel picking a victim by badness
+across the whole subtree. The shortfall is 256M per lane, the same rate it was at two lanes
+(7,168M against 6,656M).
 
-**The cpuset is per lane and not only per slice.** `AllowedCPUs=4-7` on the slice alone would give
-*both* lanes `nproc=4` and put eight workers on four cores - the defect `app-agents.slice`
+**The cpuset is per lane and not only per slice.** `AllowedCPUs=4-9` on the slice alone would give
+*all three* lanes `nproc=6` and put eighteen workers on six cores - the defect `app-agents.slice`
 measured at 5x (340-364s with one spurious failure at `nproc=12`, against 69-71s green at
-`nproc=4`), at half the magnitude. Verified that a scope property works at all, which is a
-different question from a slice property:
+`nproc=4`). Verified that a scope property works at all, which is a different question from a
+slice property:
 
 ```
 systemd-run --user --scope -p AllowedCPUs=4-5 --quiet -- nproc   ->  2
 ```
 
-**Stated honestly: 4-7 is not exclusive.** No other unit here pins a cpuset, so ffmpeg, Jellyfin
-and the Tdarr nodes float across all twelve and will take these four whenever they are free.
+**Stated honestly: 4-9 is not exclusive.** No other unit here pins a cpuset, so ffmpeg, Jellyfin
+and the Tdarr nodes float across all twelve and will take these six whenever they are free.
 `nproc=2` is the truth about the quota, not a promise about the hardware.
 
 **And honestly about speed**: `upskald` fans out to about eight parallel jobs, including a
-three-shard e2e matrix. Two lanes on four shared cores will be slower in wall-clock than
+three-shard e2e matrix. Three lanes on six shared cores will still be slower in wall-clock than
 GitHub-hosted. The win is cost, control, and running the gate on the same kernel and the same
 ceilings the agent fleet already uses.
 
-### Can this host take a third lane? No, and the constraint is not disk
+### The third lane, and which of the three refusals actually held
 
-Asked by upskald on 2026-08-27, ahead of moving four more workflows onto the lanes plus a nightly
-browser matrix of three jobs with three service containers each. The answer is worth writing down
-rather than re-deriving, because two of the three numbers people reach for first are the wrong
-ones.
+**This section said no on 2026-08-27 and the lane was added the same day.** It is rewritten rather
+than deleted because the interesting part is which of its arguments survived: one was right and is
+now the reason there is no fourth lane, one was wrong about how a cpuset works, and one was never
+the constraint. Its own closing paragraph named *"moving the slice's cpuset"* as one of two honest
+options, and that is the option that was taken.
 
-**Memory says no.** Three lanes at `MemoryMax=3584M` is 10,752M against the slice's 6,656M. Two
-already overcommit it by 512M, which works because both lanes peaking together is rare - three
-would need the ceiling raised on a 15.8 GB host where `app-agents.slice` already reserves 4,608M
-and the media stack holds the rest. And the lanes are not idling under their ceiling: every e2e
-shard measured pins to `MemoryHigh` **exactly**, 2,816-2,818 MB, with 2,607 MB of that `anon`. The
-768M to `MemoryMax` is the entire margin.
+**Memory was right, and it is now what refuses a fourth.** The original argument - three lanes at
+`MemoryMax=3584M` is 10,752M against a slice ceiling of 6,656M - was an argument about *ceilings*,
+and ceilings are what moved: `app-ci.slice` went to 8,448M/9,984M, preserving the rule that the
+slice's `MemoryHigh` is the sum of the lanes' and its `MemoryMax` sits below theirs. What made that
+safe rather than reckless is measured rather than argued. Over the 24 hours before the change:
 
-**CPU says no independently.** `app-ci.slice` owns `4-7` and each lane takes half; there is no
-third pair inside it. Widening to `4-9` takes two cores from where Jellyfin - this host's largest
-CPU consumer - already floats, and `app-agents.slice` holds `0-3`.
+| Measurement | Value |
+|---|---|
+| `node_memory_MemAvailable_bytes` median | **10,358 MB** |
+| the same, minimum | **5,639 MB** - and the minimum occurs *while both lanes are busy* |
+| `home_server_ci_lane_memory_max_events_total` | **0** on both lanes, lifetime |
+| `home_server_ci_lane_oom_kills_total` | **0** on both lanes, lifetime |
+| `app-ci.slice` `memory.pressure some total` | **60s**, lifetime |
 
-**Disk is not the constraint and it is the number that looks worst.** Each lane store sits around
-4.7 GB against a 20 GB budget, and `/var` has 153 GB free of 233 GB.
+So the third lane's 2,816M comes out of roughly that 5,639 MB, leaving ~2.8 GB plus 4 GB of zram.
+Nothing has ever been *refused* an allocation here, which is the reading that justifies a ceiling -
+the peak is not, and `app-agents.slice` records that same reading being misread once already. A
+fourth lane is 11,264M of `MemoryHigh` against that measurement, and `bin/github-runner.sh` refuses
+it by name.
 
-**What upskald observed is the documented trade rather than a fault.** Jobs from runs started at
-20:35 were still queued at 21:04, and `Pre-commit Hooks` went from about two minutes hosted to
-8m27s on a lane. `4-7 is not exclusive` above says why, and the win was never wall-clock. More
-load will make queueing worse before it makes anything else worse.
+**CPU was wrong, and the error is worth keeping.** It said *"widening to `4-9` takes two cores from
+where Jellyfin - this host's largest CPU consumer - already floats"*. **A cpuset is not exclusive**,
+which this file says two paragraphs above about `4-7` and then forgot one section later: widening
+does not take 8-9 from anything, it shares them, and everything unpinned keeps all twelve. Measured
+over the same 24 hours, cores 8-11 ran **7-10% busy** and every core on the host 6-16%.
 
-**If a third lane is genuinely wanted**, the two honest options are a third lane at a smaller
-per-lane ceiling, or moving the slice's cpuset - both real decisions with a cost on the media
-stack, not adjustments. `bin/github-runner.sh` refuses a third lane rather than silently sharing a
-CPU pair, which is the behaviour to change first if this is ever revisited.
+**Disk was never the constraint** and remains the number that looks worst: each lane store sits
+around 4.7 GB against a 20 GB budget, and `/var` has 153 GB free of 233 GB.
+
+**What the lane buys is width, not speed, and that was measured too.** The obvious reading of a
+lane at 45% mean CPU across its two cores is "it is waiting on the network", and the obvious
+remedy is a wider cpuset. Both are wrong here. `make coverage-api` runs `pytest` with no `-n`, and
+`e2e/playwright.config.ts` is `workers: 1` under CI - so **the two longest jobs on upskald's
+critical path are single-threaded**, and one busy worker beside three service containers is exactly
+the 1.0-1.4 cores observed. No cpuset can shorten them. A third *shard* can, and a third shard is
+what needed a third lane: upskald cut its e2e matrix from three to two hours earlier with the
+comment *"TWO BECAUSE THERE ARE TWO LANES"*.
+
+**What upskald observed remains the documented trade rather than a fault.** Jobs from runs started
+at 20:35 were still queued at 21:04, and `Pre-commit Hooks` went from about two minutes hosted to
+8m27s on a lane. `4-9 is not exclusive` above says why. Note that queueing was never the large
+number: measured across a full eleven-job run on 2026-08-27, the *total* wait for a lane was 171
+seconds against 29m24s of wall clock.
+
+**If a fourth lane is ever wanted**, the two honest options are the ones this section named for the
+third: a smaller per-lane ceiling, or moving the slice's cpuset again - and this time the cpuset
+would have to come out of `app-agents.slice`'s `0-3`, which changes a phase's `nproc` from 4 to 3
+against a measurement `host/systemd/app-agents.slice` records. Neither is an adjustment.
 
 ## Accepted risks, recorded rather than left implicit
 
@@ -1061,16 +1089,25 @@ comment and `docs/known-state.md` both predicted, in those words, the failure it
 
 ### What the nightly costs this host
 
-`e2e-full.yml` is three jobs, `fail-fast: false`, each with Postgres, Redis and Mailpit. Against two
-lanes that means **two run and one queues**, so the nightly takes roughly twice a shard's wall
-clock - about 12 minutes on the measured 6 - rather than running in parallel. That is fine for a
-nightly and it does not change the answer above: this host still cannot take a third lane.
+**It does not cost this host anything today, and that correction matters more than the sums
+below.** `e2e-full.yml` is pinned to `runs-on: ubuntu-latest` on both jobs and is the one workflow
+that deliberately does *not* read `vars.CI_RUNNER` - its own comment says the condition around
+`--with-deps` is there "so that pointing this matrix at the self-hosted lane later is a one-line
+`runs-on:` change". Everything in this section is therefore what it *would* cost, and the browser
+work in `apps/github-runner/Dockerfile` is what makes that one line possible rather than what makes
+it true.
 
-**Its cron collides with the backup.** `e2e-full.yml` is `0 3 * * *` and `home-server-backup` runs
-at 03:00 UTC, so the schedule puts the two heaviest things on this host in the same slot - two lanes
-at `MemoryHigh` is 5,632M, which is `app-ci.slice`'s `MemoryHigh` to the megabyte, while restic
-walks the config tree. Nothing here needs changing and nothing is broken; the fix is one line of
-cron on their side, and 02:00 is empty.
+**When it does move, it is the worst memory case this host is sized against.** Three jobs,
+`fail-fast: false`, each with Postgres, Redis and Mailpit - so with a third lane they no longer
+queue, they run *at once*. That is 8,448M of `MemoryHigh`, which is `app-ci.slice`'s `MemoryHigh`
+to the megabyte, with three browsers in it. The two-lane arrangement this section used to describe
+(two run, one queues, roughly twice a shard's wall clock) was gentler on memory precisely because
+it was serialised.
+
+**And its cron collides with the backup.** `e2e-full.yml` is `0 3 * * *` and `home-server-backup`
+runs at 03:00 UTC, so moving the matrix onto the lanes without moving the cron would put the two
+heaviest things on this host in the same slot, while restic walks the config tree. The fix is one
+line of cron on their side, and 02:00 is empty.
 
 **The browser downloads land in `home/.cache/ms-playwright`**, which a heal or a window reset keeps
 and a **budget** reclaim takes - the same rule as the bun and uv caches, for the same reason. Three
@@ -1082,6 +1119,7 @@ engines is about 390 MB per lane, against a 20 GB budget where `home/` already m
 systemctl --user status home-server-github-runner@1        # a lane
 journalctl --user -u home-server-github-runner@1 -f
 cat ~/.cache/home-server/ci-state-1                        # what it thinks it is doing
+grep -H . ~/.cache/home-server/ci-state-[123]              # all three at once
 systemctl --user list-units --type=scope | grep ci-lane    # a job in flight
 
 systemctl --user start home-server-github-runner-build.service   # build, smoke, promote
@@ -1179,8 +1217,8 @@ between `MemoryHigh` and `MemoryMax` is the whole of the headroom - against `app
 1,042M for a workload with no browser and no service containers. A heavier suite is what crosses
 it, and it arrives as an `oom_kill` rather than as a slow job.
 
-**And raising the scope alone would move the throttle rather than add headroom**: two lanes at
-`MemoryHigh` sum to 5,632M, which is the slice's `MemoryHigh` to the megabyte. The pair moves
+**And raising the scope alone would move the throttle rather than add headroom**: the lanes at
+`MemoryHigh` sum to 8,448M, which is the slice's `MemoryHigh` to the megabyte. The pair moves
 together or neither does.
 
 **Not yet proved, and none of it can be settled from a workstation:**

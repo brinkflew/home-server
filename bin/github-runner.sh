@@ -60,19 +60,28 @@ die() { log "$2"; exit "$1"; }
 # ------------------------------------------------------------------------------
 LANE="${1:-}"
 case "$LANE" in
-	1|2) ;;
+	1|2|3) ;;
 	'') die 2 "no lane number given - this unit is a template, start it as home-server-github-runner@1.service" ;;
-	*)  die 2 "lane '$LANE' is not 1 or 2. host/systemd/app-ci.slice owns CPUs 4-7 and each lane takes half of them, so a third lane would have no cores of its own and would silently share another lane's pair - which is the nproc defect that slice's comment exists to prevent." ;;
+	*)  die 2 "lane '$LANE' is not 1, 2 or 3. host/systemd/app-ci.slice owns CPUs 4-9 and each lane takes a pair of them, so a fourth lane would have no cores of its own and would silently share another lane's pair - which is the nproc defect that slice's comment exists to prevent. It is refused on memory before it is refused on cores: four lanes at MemoryHigh is 11,264M, and the measured MemAvailable minimum on this host is 5,639 MB." ;;
 esac
 
-# HALF THE SLICE'S CPUSET, PER LANE, AND THIS IS NOT A TUNING KNOB.
+# ONE PAIR OF THE SLICE'S CPUSET, PER LANE, AND THIS IS NOT A TUNING KNOB.
 # app-agents.slice records the measurement: a container is not CPU-namespaced, so
 # `nproc` reads the host's 12 whatever the quota delivers, and vitest, esbuild,
 # tsc and any `make -j$(nproc)` size their worker pools from it. Same suite, five
 # runs: 340-364s with one SPURIOUS FAILURE at nproc=12, against 69-71s and green
-# at nproc=4. Setting only the slice's 4-7 would give BOTH lanes nproc=4 and put
-# eight workers on four cores - the same defect at half the magnitude. Pinned
-# here, a job sees 2, which is what it will actually get.
+# at nproc=4. Setting only the slice's 4-9 would give ALL THREE lanes nproc=6 and
+# put eighteen workers on six cores - the same defect. Pinned here, a job sees 2,
+# which is what it will actually get.
+#
+# THE FORMULA ALREADY HELD FOR A THIRD LANE, which is why adding one on
+# 2026-08-27 did not touch this line: it yields 8-9 for lane 3, and only
+# app-ci.slice's own AllowedCPUs had to widen from 4-7 to 4-9 to hand it over.
+# The lanes were deliberately NOT widened at the same time. upskald's two long
+# jobs are single-threaded - `pytest` with no `-n`, Playwright at `workers: 1`
+# under CI - so a third core per lane could not have touched either, and the
+# measurement agrees: while a job ran, its two cores were 45% busy on average,
+# 71% at p90 and 76% at the worst two-minute window, with 0.8% iowait.
 #
 # VERIFIED ON THIS HOST rather than assumed, because a scope property is a
 # different question from a slice property:
@@ -95,11 +104,12 @@ NET="net-ci-$LANE"
 # nothing in lane_reset needs to know this path exists, and it must stay that
 # way.
 #
-# ONE DIRECTORY FOR BOTH LANES, DELIBERATELY. upskald's producing job and its
+# ONE DIRECTORY FOR EVERY LANE, DELIBERATELY. upskald's producing job and its
 # consuming job routinely land on different lanes, which is the entire reason
 # they asked for it - a per-lane store would be indistinguishable from no store
-# about half the time, and would fail by producing a stale answer rather than an
-# error.
+# most of the time, and would fail by producing a stale answer rather than an
+# error. That got worse rather than better when a third lane was added: the
+# chance of a producer and its consumer sharing one is a third, not a half.
 #
 # NOT UNDER config/, EVEN THOUGH THAT IS WHERE THE BACKUP ALREADY REACHES.
 # docs/ci.md states, and bin/github-runner-smoke.sh asserts, that no path under
@@ -309,9 +319,9 @@ preflight() {
 		die 3 "cannot create $LANE_ROOT - check it exists and is owned by core"
 
 	# THE ARTIFACT STORE'S TWO SUBTREES ARE CREATED HERE AND NEVER AGAIN, and
-	# they are created by BOTH lanes because either may be the first to start.
-	# `mkdir -p` on a directory the other lane made is a no-op, which is the
-	# only reason this is safe to run twice.
+	# they are created by EVERY lane because any of them may be the first to
+	# start. `mkdir -p` on a directory another lane made is a no-op, which is the
+	# only reason this is safe to run once per lane.
 	mkdir -p "$ARTIFACTS"/{runs,state} 2>/dev/null ||
 		die 3 "cannot create $ARTIFACTS - the shared artifact store; see docs/ci.md"
 
@@ -484,16 +494,21 @@ preflight() {
 }
 
 # ------------------------------------------------------------------------------
-# Holding the second lane while the agent fleet is working
+# Holding every lane above the first while the agent fleet is working
 # ------------------------------------------------------------------------------
 # BUSY ONLY WHEN THE MARKER SAYS BUSY *AND* ITS HEARTBEAT IS FRESH. conduct
 # killed mid-phase leaves phase_in_flight=1 behind for ever, and a stale flag
 # that holds a lane indefinitely is a lane that silently stops taking work - the
 # same reasoning, and the same 600-second window, bin/reboot-when-staged.sh uses.
 #
-# LANE 1 IS NEVER HELD. The point is to stop two CI lanes and a phase peaking
-# together on a 15.8 GB host, not to stop CI. At a measured 6.9% phase duty cycle
-# this costs almost nothing and CI never drops to zero.
+# LANE 1 IS NEVER HELD, AND EVERY LANE ABOVE IT IS. The point is to stop the
+# whole CI fleet and a phase peaking together on a 15.8 GB host, not to stop CI.
+# At a measured 6.9% phase duty cycle this costs almost nothing and CI never
+# drops to zero. The predicate is a comparison against 1 rather than a list, so
+# a third lane joined the held set on 2026-08-27 without an edit - which is the
+# behaviour that was wanted, and is stated here because silence is not consent:
+# holding two of three during a phase is a deliberate widening of what this
+# yields, not an oversight in what it names.
 phase_in_flight() {
 	[ "$LANE" = 1 ] && return 1
 
@@ -760,8 +775,8 @@ gc_lane() {
 # rather than left implied: this is a floor on the true peak, and it is the
 # floor host/systemd/app-ci.slice asked for.
 #
-# WHY IT IS HERE AT ALL. That file sizes two lanes against a 15.8 GB host from
-# numbers it calls starting points, and names its own failure mode as silence: a
+# WHY IT IS HERE AT ALL. That file sizes three lanes against a 15.8 GB host, and
+# names its own failure mode as silence: a
 # `Slice=` pointing at nothing still starts every member, healthy and fully
 # observed and contained by nothing. Peaks in the marker are what turn the next
 # sizing argument into a measurement.

@@ -4,7 +4,7 @@
 # Second slice on this host, and it exists for the reason app-agents.slice states
 # first: per-unit limits are not a mechanism for a fleet whose unit count is a
 # variable. A lane is a `podman run --rm` under a transient scope, and a lane
-# peaks exactly when the other one starts. So the ceiling goes one level up and
+# peaks exactly when the next one starts. So the ceiling goes one level up and
 # the kernel enforces the sum.
 #
 # THE `app-` PREFIX IS LOAD-BEARING, not decoration. systemd derives the
@@ -15,7 +15,7 @@
 #
 # SIZED AGAINST THE MEASUREMENT, NOT AGAINST THE OTHER SLICE'S CEILING. That
 # distinction is the whole of why two slices fit on a 15.8 GB host at all, and it
-# was nearly got wrong: 4,608M of agents plus 6,656M of CI reads as 11.2 GB of
+# was nearly got wrong: 4,608M of agents plus 9,984M of CI reads as 14.2 GB of
 # reservation against a worst-observed MemAvailable of 9,715 MB, which looks
 # impossible. It is not, because 4,608M is a ceiling almost never approached.
 # Read out of this host's own 30-day store on 2026-08-24:
@@ -34,15 +34,20 @@
 # app-agents.slice says why: twenty-four quadlets declare 34.5 GiB against 15.5
 # GiB of RAM and it works, because the peaks do not coincide.
 #
-# WHAT MAKES THAT SAFE RATHER THAN LUCKY is that bin/github-runner.sh holds the
-# SECOND lane while a conduct phase is in flight, reading the same marker and the
-# same heartbeat freshness rule bin/reboot-when-staged.sh uses. At 6.9% that
-# costs almost nothing, and CI never drops to zero lanes.
+# WHAT MAKES THAT SAFE RATHER THAN LUCKY is that bin/github-runner.sh holds every
+# lane ABOVE THE FIRST while a conduct phase is in flight, reading the same marker
+# and the same heartbeat freshness rule bin/reboot-when-staged.sh uses. At 6.9%
+# that costs almost nothing, and CI never drops to zero lanes. That predicate is
+# `[ "$LANE" = 1 ] && return 1`, so it widened to a third lane by saying nothing.
 #
-# THE PER-LANE LIMITS BIND BEFORE THIS DOES, deliberately: two lanes at their
-# scope MemoryMax of 3,584M is 7,168M against the 6,656M below, so the slice
+# THE PER-LANE LIMITS BIND BEFORE THIS DOES, deliberately: three lanes at their
+# scope MemoryMax of 3,584M is 10,752M against the 9,984M below, so the slice
 # squeezes them rather than the kernel choosing a victim by badness across the
-# whole subtree. That is the sizing docs/agents.md insists on.
+# whole subtree. That is the sizing docs/agents.md insists on. The shortfall is
+# 256M per lane, which is what it was at two lanes (7,168M against 6,656M) - the
+# rate held rather than the total, so the squeeze did not soften as lanes were
+# added. Not to be confused with the 768M between a SCOPE's own MemoryHigh and
+# MemoryMax further down; that one is per lane and unchanged.
 #
 # MEASURED ON 2026-08-26, WHICH IS WHAT THIS PARAGRAPH USED TO ASK FOR. It said
 # every number here was a starting point and named the measurement that would
@@ -54,8 +59,8 @@
 #   scope memory.stat anon 2,607 MB worst
 #   scope memory.events    high climbing to 2,197; max 0; oom_kill 0
 #   scope pids.peak        316 of 1,024
-#   slice memory.peak      5,634 MB of 5,632M MemoryHigh
-#   slice pids.peak        623 of 2,048
+#   slice memory.peak      5,634 MB of 5,632M MemoryHigh   <- two-lane ceilings
+#   slice pids.peak        623 of 2,048                    <- two-lane ceilings
 #   memory.pressure some   avg10 0.00-4.11%
 #   shard wall clock       6m against the job's own timeout-minutes: 25
 #
@@ -73,10 +78,31 @@
 # service containers. This held across three shards; a heavier suite is what
 # would cross it, and that arrives as an oom_kill rather than as a slow job.
 #
-# RAISING THE SCOPE ALONE WOULD MOVE THE THROTTLE, NOT ADD HEADROOM. Two lanes
-# at MemoryHigh sum to 5,632M, which is this slice's MemoryHigh to the megabyte,
-# so the slice pins at the same moment the lanes do. The pair moves together or
-# neither does.
+# RAISING THE SCOPE ALONE WOULD MOVE THE THROTTLE, NOT ADD HEADROOM. The lanes'
+# MemoryHigh sums to this slice's MemoryHigh to the megabyte - 3 x 2,816M is
+# 8,448M - so the slice pins at the same moment the lanes do. The two move
+# together or neither does, and that is the rule the third lane was sized by
+# rather than an arithmetic coincidence of the two-lane era.
+#
+# A THIRD LANE, 2026-08-27, AND THE ONE NUMBER THAT DECIDED IT WAS NOT CPU.
+# `docs/ci.md` said no to a third lane on 2026-08-27 and gave three arguments;
+# memory is the one that held, which is why this ceiling moved rather than
+# stayed. What it bought is WIDTH, not speed: upskald's two long jobs are
+# single-threaded - `pytest` with no `-n`, Playwright at `workers: 1` under CI -
+# so no cpuset could touch them, and a third e2e shard could. Measured on this
+# host over 24h before the change:
+#
+#   node_memory_MemAvailable_bytes  median 10,358 MB
+#                                   min     5,639 MB  <- both lanes busy
+#   home_server_ci_lane_memory_max_events_total    0 on both lanes, lifetime
+#   home_server_ci_lane_oom_kills_total            0 on both lanes, lifetime
+#   app-ci.slice memory.pressure some total       60s, lifetime
+#
+# So the third lane's 2,816M comes out of roughly that 5,639 MB, leaving ~2.8 GB
+# plus 4 GB of zram. Nothing has ever been REFUSED an allocation here - which is
+# the reading that justifies a ceiling, not the peak - and `ci.lane_headroom` in
+# bin/verify-host.sh is what grades it from now on. A FOURTH lane is refused by
+# bin/github-runner.sh, and this is the number it is refused on.
 #
 # ITS FAILURE IS NO LONGER SILENCE. bin/github-runner.sh keeps memory.peak and
 # pids.peak off each transient scope in the lane's marker - the scope is
@@ -98,8 +124,8 @@
 # ==============================================================================
 
 [Slice]
-MemoryHigh=5632M
-MemoryMax=6656M
+MemoryHigh=8448M
+MemoryMax=9984M
 
 # BELOW app-agents.slice's 30 ON PURPOSE. Under contention the agent fleet is
 # gating a change somebody is waiting on with a merge blocked behind it; CI is
@@ -107,7 +133,7 @@ MemoryMax=6656M
 # able to starve the media stack, which has no weight set at all and therefore
 # sits at the default 100.
 CPUWeight=20
-CPUQuota=400%
+CPUQuota=600%
 
 # THE OTHER HALF OF THAT QUOTA, and app-agents.slice paid for this lesson at 5x.
 #
@@ -120,18 +146,29 @@ CPUQuota=400%
 # against 69-71s and green at nproc=4.
 #
 # THIS VALUE ALONE IS STILL NOT ENOUGH HERE, and that is the difference from the
-# other slice. app-agents runs one phase at a time; this runs two lanes. Both
-# would read nproc=4 from this cpuset and between them start 8 workers on 4
-# cores - the same defect at half the magnitude. So bin/github-runner.sh pins
-# each lane scope to HALF of this, 4-5 and 6-7, and a job sees nproc=2, which is
-# what it will actually get.
+# other slice. app-agents runs one phase at a time; this runs three lanes. All
+# three would read nproc=6 from this cpuset and between them start 18 workers on
+# 6 cores - the same defect the paragraph above measures at 5x. So
+# bin/github-runner.sh pins each lane scope to a PAIR out of this, 4-5, 6-7 and
+# 8-9, and a job sees nproc=2, which is what it will actually get.
 #
-# STATED HONESTLY: 4-7 IS NOT EXCLUSIVE. No other unit on this host pins a
+# THE PAIR IS THE UNIT, AND THAT IS WHY A THIRD LANE COST ONE CHARACTER HERE.
+# `LANE_CPUS` in bin/github-runner.sh is `4 + (LANE-1)*2` to `5 + (LANE-1)*2`,
+# which already yielded 8-9 for lane 3; only the range this slice hands it had to
+# widen. The lanes were NOT given more cores each while that was open, and the
+# reason is a measurement rather than caution: upskald's two long jobs are
+# single-threaded (`pytest` with no `-n`, Playwright at `workers: 1` under CI),
+# so a wider pair could not have touched either. Measured while a job ran, its
+# two cores were 45% busy on average and 76% at the worst two-minute window.
+#
+# STATED HONESTLY: 4-9 IS NOT EXCLUSIVE. No other unit on this host pins a
 # cpuset, so ffmpeg, Jellyfin and the Tdarr nodes float across all twelve and
-# will take these four whenever they are free. nproc=2 is therefore the truth
+# will take these six whenever they are free. nproc=2 is therefore the truth
 # about the quota and not a promise about the hardware - the mirror image of the
-# sentence this comment opens with.
-AllowedCPUs=4-7
+# sentence this comment opens with. The converse is what docs/ci.md got wrong
+# when it argued against widening: this does not TAKE 8-9 from anything, it
+# shares them, and over the 24h before the change cores 8-11 measured 7-10% busy.
+AllowedCPUs=4-9
 
 IOWeight=20
 
@@ -139,14 +176,16 @@ IOWeight=20
 # from a phase: the nested podman, a conmon per service container, three
 # datastores, two Vite servers, a uvicorn under coverage and a browser all count
 # here. app-agents.slice measured a pids.peak of 325 for a full gate with no
-# browsers and no service containers, so 2,048 across two lanes was a guess in
-# the generous direction.
+# browsers and no service containers, so 1,024 per lane was a guess in the
+# generous direction.
 #
 # THE GUESS WAS RIGHT, AND IT IS NOW A MEASUREMENT. An e2e shard - the heaviest
 # shape there is, with all of the above running at once - peaked at 316 of the
 # scope's own TasksMax of 1,024, and two of them together took this slice to 623
-# of 2,048. Both sit near 31%, which is generous rather than wasteful: the
-# symptom when this binds is `fork: Resource temporarily unavailable` raised by
-# something unrelated, naming neither the slice nor the limit, so the cost of
-# being wrong in the tight direction is a job failure nobody can attribute.
-TasksMax=2048
+# of the 2,048 it then had. Both sit near 31%, which is generous rather than
+# wasteful: the symptom when this binds is `fork: Resource temporarily
+# unavailable` raised by something unrelated, naming neither the slice nor the
+# limit, so the cost of being wrong in the tight direction is a job failure
+# nobody can attribute. 3,072 keeps the per-lane rate the measurement was taken
+# at rather than stretching one total across a third lane.
+TasksMax=3072

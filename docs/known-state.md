@@ -2969,7 +2969,7 @@ Added 2026-08-27, working `avanserv/upskald`'s five requests in
   exited`, no signal and no non-clean stop - every restart was a Stopped/Started pair through the
   trap. The guard is one `podman ps` and closes the class regardless.
 
-## One directory for two lanes, and the half of it that must never be swept
+## One directory for every lane, and the half of it that must never be swept
 
 - **upskald's coverage ratchet moved off GitHub onto this disk**, so the shape of its loss changed
   more than its location did. `scripts/check_coverage.py` returns PASS on `absent` and FAIL only on
@@ -3102,3 +3102,36 @@ and WebKit to be the hard one and offered to leave WebKit hosted. Both halves we
   fix.
 - **So a browser probe must go through the entrypoint and carry the lane's `--shm-size`**, or it
   measures a container no job will ever run in.
+
+## A lane at 45% of its cores was not waiting on the network
+
+- **The obvious reading of a lane's idle half was wrong, and the remedy that follows from it would
+  have bought nothing.** Measured while a job ran, a lane's two pinned cores were **45% busy on
+  average, 71% at p90, 76% at the worst two-minute window**, with 0.8% iowait - which reads as "it
+  is blocked on I/O or the network, so give it more cores".
+- **It is neither. Both long jobs on upskald's critical path are single-threaded.** `make
+  coverage-api` runs `pytest` with no `-n` and no xdist dependency, and `e2e/playwright.config.ts`
+  is `workers: 1` under CI. One busy worker beside three service containers is exactly 1.0-1.4
+  cores. A wider cpuset cannot shorten either, and `app-ci.slice` was widened from `4-7` to `4-9`
+  for a third LANE rather than for wider lanes on 2026-08-27.
+- **The cheap confirmations were already on the host and pointed the same way**: lifetime
+  `nr_throttled` on the slice is **4**, so `CPUWeight=20` and `nice -n 10` have never bitten, and
+  lifetime memory PSI is **60s**, so the lanes pinning at `MemoryHigh` is reclaim rather than
+  pressure. Nothing about the ceilings was the constraint.
+- **`docs/ci.md` argued against widening the cpuset because it would "take two cores from where
+  Jellyfin floats". A cpuset is not exclusive** - the same file says so two paragraphs earlier
+  about `4-7` - so widening shares 8-9 rather than taking them, and everything unpinned keeps all
+  twelve. Cores 8-11 measured 7-10% busy over the same 24 hours.
+
+## Uploading from this host costs 20-40x what downloading does
+
+- **`j178/prek-action@v2` runs an `actions/cache` of its own**, which upskald's guard on its own
+  cache step (`runner.environment == 'github-hosted'`) does not cover. Measured in `Post Run
+  pre-commit`: **50 MB up at 0.4-0.5 MB/s, 1m53**, over a `~/.cache/prek` the lane already keeps.
+  The same cache DOWNLOADS at 5-19 MB/s on a hit.
+- **So the rule is asymmetric and worth stating once**: anything a lane sends to GitHub is
+  expensive and anything it fetches is not. A guard on a cache step says nothing about an action
+  that caches on your behalf, and the tell is a `Post <step>` that takes minutes.
+- **Queueing was never where the time went.** Across a full eleven-job run on 2026-08-27 the total
+  wait for a lane was **171 seconds** against 29m24s of wall clock; 1,637 of 2,438 step-seconds
+  were test execution. A third lane is worth having for e2e SHARD width, not to clear a queue.
