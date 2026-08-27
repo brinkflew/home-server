@@ -1022,6 +1022,104 @@ else
 fi
 
 # ------------------------------------------------------------------------------
+say "The browsers, launched rather than listed"
+say "  (installing chromium, firefox and webkit - this takes about two minutes)"
+# ------------------------------------------------------------------------------
+# THERE WAS NO BROWSER ASSERTION IN THIS FILE AT ALL UNTIL 2026-08-27, while the
+# Dockerfile comment and docs/known-state.md both predicted, in those words, the
+# failure it would have caught: "the symptom is Chromium failing to launch on a
+# missing .so several steps later, naming the library and not the Dockerfile".
+# The library list is hand-maintained because `playwright install-deps` supports
+# Debian and Ubuntu only, so nothing re-derives it and nothing noticed it was
+# unguarded. Adding firefox and webkit tripled the surface, which is what finally
+# made the gap worth the two minutes.
+#
+# A LAUNCH RATHER THAN `ldconfig -p`, and that is the same argument the node ICU
+# leg makes further up: the binary answering is not the binary working. Playwright
+# runs its own validateDependenciesLinux on launch and names every missing soname,
+# so a launch tests the list AND reports what is wrong with it. An ldconfig grep
+# would only ever confirm the names somebody already thought to grep for.
+#
+# ALL THREE ENGINES, BECAUSE THEY FAIL DIFFERENTLY. chromium is a distro-agnostic
+# Google build; firefox and webkit are Playwright's own, built on Ubuntu 24.04 and
+# served to this Fedora image because hostPlatform.ts falls back to ubuntu24.04-x64
+# for any distro it does not recognise. webkit is the only one that links ICU
+# directly, and so the only one the vendored compat layer exists for.
+#
+# `npx`, NOT `bun`. This image has node, npm and npx; bun arrives from the tool
+# cache at job time and is not something this leg should depend on.
+browsers=$(runner bash -s <<'IN' 2>&1 | grep -E '^(LAUNCH|RENDER|INSTALL)' || true
+export HOME=/home/runner
+mkdir -p /scratch/pw && cd /scratch/pw
+npm init -y >/dev/null 2>&1
+npm i playwright@1 >/dev/null 2>&1 || { echo "INSTALL-FAIL npm could not fetch playwright"; exit 0; }
+npx playwright install chromium firefox webkit >/scratch/pw/install.log 2>&1 \
+	|| echo "INSTALL-WARN $(tail -1 /scratch/pw/install.log)"
+node -e '
+const pw = require("playwright");
+(async () => {
+  for (const name of ["chromium", "firefox", "webkit"]) {
+    try {
+      const b = await pw[name].launch();
+      const p = await b.newPage();
+      await p.setContent("<h1>runner-ok</h1>");
+      const t = await p.$eval("h1", e => e.textContent);
+      const v = b.version();
+      await b.close();
+      console.log((t === "runner-ok" ? "LAUNCH-OK " : "RENDER-BAD ") + name + " " + v);
+    } catch (e) {
+      console.log("LAUNCH-FAIL " + name + ": " + String(e.message).split("\n").slice(0, 6).join(" | "));
+    }
+  }
+})();
+'
+IN
+)
+for engine in chromium firefox webkit; do
+	line=$(printf '%s\n' "$browsers" | grep -E "^LAUNCH-OK $engine " || true)
+	if [ -n "$line" ]; then
+		ok "${line#LAUNCH-OK } launched headless and rendered a page"
+	else
+		# THE FAILING LINE IS REPORTED VERBATIM because Playwright names the
+		# missing soname in it, and that name is the whole fix - one word in the
+		# Dockerfile's dnf list, or one more file in the compat layer.
+		why=$(printf '%s\n' "$browsers" | grep -E "^(LAUNCH-FAIL $engine|RENDER-BAD $engine|INSTALL-)" | head -1)
+		bad "$engine did not launch - ${why:-it produced no result at all}"
+	fi
+done
+
+# THE COMPAT LAYER, ASSERTED SEPARATELY FROM THE BROWSER THAT NEEDS IT. If webkit
+# fails above, this says whether the cause is the vendored libraries or something
+# else entirely - and it is the only leg that can tell those apart. Fedora's own
+# ICU must still answer for its own soname: the whole safety argument for keeping
+# Ubuntu libraries in this image is that the linker matches EXACTLY, so a Fedora
+# binary can never resolve into that directory.
+compat=$(runner sh -c "ldconfig -p | grep -E 'libicuuc\.so\.(74|7[67]) |libjpeg\.so\.(8|62) '" 2>/dev/null)
+case "$compat" in
+	*"/opt/pw-webkit-compat/lib/libicuuc.so.74"*)
+		if printf '%s' "$compat" | grep -q '/lib64/libicuuc\.so\.7[67]'; then
+			ok "the vendored ICU 74 answers from /opt/pw-webkit-compat and Fedora's own ICU still answers for its own soname"
+		else
+			bad "the vendored ICU 74 is present but Fedora's own libicuuc is NOT - the compat directory is shadowing the system one, which it must never do"
+		fi ;;
+	*)
+		bad "libicuuc.so.74 does not resolve to /opt/pw-webkit-compat/lib - webkit hard-links Ubuntu 24.04's ICU and no Fedora package provides that soname, so it cannot start. Check the compat RUN in the Dockerfile" ;;
+esac
+
+# THE UNVERSIONED x264 SYMLINK, WHICH IS THE ONE `ldconfig -p` CANNOT GRADE.
+# ldconfig builds its links from the ELF's SONAME, so it makes libx264.so.164 and
+# never the bare name - and the bare name is exactly what Playwright dlopens.
+# Ubuntu ships it only in libx264-dev, so the Dockerfile creates it by hand, and a
+# hand-made symlink is precisely the kind of thing a refactor drops silently. Its
+# absence does not break the library: it makes validateDependenciesLinux THROW, so
+# webkit refuses to launch over a codec no test has asked for.
+if runner sh -c 'test -e /opt/pw-webkit-compat/lib/libx264.so'; then
+	ok "the unversioned libx264.so symlink exists, so webkit's dlopen check passes"
+else
+	bad "/opt/pw-webkit-compat/lib/libx264.so is missing - ldconfig makes libx264.so.164 and never the bare name, and Playwright dlopens the bare name, so webkit throws on launch. Fedora ships no x264 at any version; the symlink is created by hand in the Dockerfile"
+fi
+
+# ------------------------------------------------------------------------------
 say "Result"
 # ------------------------------------------------------------------------------
 if [ "$fails" -eq 0 ]; then

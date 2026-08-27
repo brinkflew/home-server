@@ -952,6 +952,130 @@ so revoking it is a two-repository operation. And the lane's egress is not filte
 compromised action reaches the internet - which was true of `bun install` before it and is why the
 network is isolated from every stack segment rather than from the WAN.
 
+## The nightly browser matrix, and the two libraries that are not Fedora's
+
+Asked for by upskald on 2026-08-27 as item 3 of five: the Firefox and WebKit system libraries, so
+that `e2e-full.yml`'s `[chromium, firefox, webkit]` matrix can leave `ubuntu-latest`. They expected
+Firefox to be routine and WebKit to be the hard one, and offered to leave WebKit hosted if it could
+not be made to launch. Both halves of that guess were right; WebKit was made to launch anyway.
+
+**Nothing in their workflow has to change except `runs-on:`.** `e2e-full.yml` already carries
+`bunx playwright install ${{ runner.environment == 'github-hosted' && '--with-deps' || '' }} ${{ matrix.browser }}`,
+written that way when the `--with-deps` trap was closed for `ci.yml` so that pointing the nightly at
+a lane would not rediscover it. It did not.
+
+### Why a Fedora image has to satisfy Ubuntu's sonames
+
+**Playwright serves the Ubuntu 24.04 build to every distro it does not recognise.**
+`packages/utils/hostPlatform.ts` ends its Linux branch with an unconditional
+`return 'ubuntu24.04-x64'`. So a lane downloads `firefox-ubuntu-24.04.zip` and
+`webkit-ubuntu-24.04.zip` - binaries linked against Ubuntu 24.04 - and prints
+`BEWARE: your OS is not officially supported by Playwright; downloading fallback build for
+ubuntu24.04-x64` while doing it. chromium is unaffected because Playwright ships Google's own
+distro-agnostic build for it, which is the entire reason chromium has worked here since the first
+e2e run and the other two were an open question.
+
+That single line is the load-bearing fact, and it generalises past Playwright: **a tool that "falls
+back" to another distribution's build is a tool that has made that distribution's ABI your
+problem.**
+
+### Firefox was routine. WebKit needed two libraries Fedora does not have
+
+Every soname in Playwright's `nativeDeps.ts` table was resolved against Fedora 44's own repodata,
+and then checked the only way that settles it - `ldd` over the installed bundles in a throwaway
+container, with the bundle's own libraries subtracted:
+
+| | result |
+|---|---|
+| chromium | already satisfied |
+| firefox | five packages - `gtk3 gdk-pixbuf2 cairo-gobject libX11-xcb libXcursor` - and it launches |
+| webkit | twenty-one more, plus **five sonames no Fedora package provides at any version** |
+
+Four of them are `libicuuc.so.74`, `libicui18n.so.74`, `libicudata.so.74` and `libjpeg.so.8`.
+Fedora 44 ships ICU 76 and 77, and has shipped libjpeg's 6.2 ABI (`libjpeg.so.62`) for its entire
+history. This is **soname skew, not missing functionality** - there is no package to install and
+there never will be - so the Ubuntu libraries are vendored into `/opt/pw-webkit-compat/lib` from
+pinned, sha256-checked `.deb`s and registered through `/etc/ld.so.conf.d/`.
+
+**The fifth is `libx264.so`, and it is a different problem wearing the same coat.** Nothing links
+it: measured, no file in the webkit bundle has it as a `DT_NEEDED`, and with
+`PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=1` webkit 26.5 launches and renders without it. It is in
+webkit's **dlopen** list - literally `['libGLESv2.so.2', 'libx264.so']` in Playwright's registry -
+and `validateDependenciesLinux` throws on launch when a dlopen library is absent, so the browser is
+refused for a codec it has not tried to use. Fedora excludes x264 deliberately, being
+patent-encumbered, and it lives only in RPM Fusion; there is no dnf name for this one and there will
+not be. It is vendored rather than skipped because turning the validator off would also stop it
+naming the next library that goes genuinely missing. The measured cost of not having it is one line:
+`canPlayType` returns `""` for H.264 and `"probably"` for VP8.
+
+**Its unversioned symlink is not optional.** Playwright dlopens `libx264.so` exactly, and Ubuntu
+ships that name only in `libx264-dev` - the runtime package has `libx264.so.164` alone. `ldconfig`
+builds soname links from the ELF and will not invent the bare one, so it is made by hand and
+asserted with `test -e` rather than `ldconfig -p`, which does not list it.
+
+**Why that is safe rather than reckless, and it is one sentence: the dynamic linker matches by
+exact soname.** Nothing on Fedora asks for `.so.74` or `libjpeg.so.8`; its own consumers ask for
+`.so.76`, `.so.77` and `.so.62`. Measured rather than asserted - on the built image
+`libicuuc.so.77` still resolves to `/lib64` and only `libicuuc.so.74` resolves into the compat
+directory. Only those four files are copied; the ICU deb also ships `libicuio`, `libicutest` and
+`libicutu`, and leaving them out is what keeps the guarantee narrow enough to state.
+
+**`ld.so.conf.d` rather than `LD_LIBRARY_PATH`**, which is the more obvious spelling and the wrong
+one: `LD_LIBRARY_PATH` outranks a binary's own `DT_RUNPATH` for every process in every job step,
+while `ld.so.conf` is consulted after both and can only ever satisfy a lookup that was going to
+fail. It also stays out of the environment, which the smoke test asserts over `/proc/1/environ` and
+which the `docker` shim passes into nested containers.
+
+### `ldd` clean is not Playwright-clean, and the difference is worth three packages
+
+After the twenty-six dnf names and the compat layer, `ldd` reports **no missing soname in any of
+the three bundles**. Playwright's own `validateDependenciesLinux` still refused, naming `libgles2`
+and `gstreamer1.0-libav` - both **dlopen** dependencies, which no `ldd` can see: WebGL, and media
+decode. The same category as the `libavcodec60` that Playwright lists for Firefox with no
+`lib2package` entry, which is deliberately *not* installed because Firefox launches without it and
+this suite plays no video.
+
+`libglvnd-gles`, `gstreamer1-plugins-good` and `gstreamer1-plugin-libav` are installed anyway, and
+the reason is not the feature. (`gstreamer1-plugin-libav` is installed and ships `libgstlibav.so`,
+and Playwright still asked for `gstreamer1.0-libav` - because that name is a **heuristic**: its
+table maps the missing `libx264.so` onto it, with a source comment explaining that libav's own
+library is not linked directly so x264 is used as a proxy for it. Chasing the package name rather
+than the soname would have gone in a circle.) **Playwright's validator throws on launch, not just on install**, so
+leaving them out means webkit does not start at all - and even where it merely warns, a framed
+"Host system is missing dependencies" box on every e2e job for ever is a warning nobody reads, so
+the next library that goes genuinely missing would arrive inside noise this image had chosen to
+keep.
+
+### The maintenance surface, stated because it is real
+
+The library list is hand-maintained - `playwright install-deps` supports Debian and Ubuntu only -
+and nothing on a lane re-derives it. A Playwright bump that moves WebKit's ICU forward fails as
+**"WebKit will not launch"**, naming the `.so` and not this file. Two things reduce that to a
+one-line fix: `bin/github-runner-smoke.sh` now **launches all three engines** and reports
+Playwright's own message verbatim, so the missing soname is in the build log rather than in an e2e
+job three days later; and the compat layer ends in four `ldconfig -p` assertions, so a copy that
+matched nothing fails the build instead of shipping.
+
+There was no browser assertion in that smoke test at all until this change, while the Dockerfile
+comment and `docs/known-state.md` both predicted, in those words, the failure it would have caught.
+
+### What the nightly costs this host
+
+`e2e-full.yml` is three jobs, `fail-fast: false`, each with Postgres, Redis and Mailpit. Against two
+lanes that means **two run and one queues**, so the nightly takes roughly twice a shard's wall
+clock - about 12 minutes on the measured 6 - rather than running in parallel. That is fine for a
+nightly and it does not change the answer above: this host still cannot take a third lane.
+
+**Its cron collides with the backup.** `e2e-full.yml` is `0 3 * * *` and `home-server-backup` runs
+at 03:00 UTC, so the schedule puts the two heaviest things on this host in the same slot - two lanes
+at `MemoryHigh` is 5,632M, which is `app-ci.slice`'s `MemoryHigh` to the megabyte, while restic
+walks the config tree. Nothing here needs changing and nothing is broken; the fix is one line of
+cron on their side, and 02:00 is empty.
+
+**The browser downloads land in `home/.cache/ms-playwright`**, which a heal or a window reset keeps
+and a **budget** reclaim takes - the same rule as the bun and uv caches, for the same reason. Three
+engines is about 390 MB per lane, against a 20 GB budget where `home/` already measured 1,789 MB.
+
 ## Commands
 
 ```bash
