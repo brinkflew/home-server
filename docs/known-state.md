@@ -2868,9 +2868,14 @@ readings that could never have said anything.
 - **`chown 1000:1000` writes a gid nothing else in the lane writes.** The runner's primary gid is
   0, so every file it creates is gid 0; measured, `$LANE_ROOT/storage` was `100999:100999` on top
   of a tree of `100999:core`. Now `1000:0`. And preflight's `-R` form ran over a POPULATED store on
-  every driver start - the only code here that rewrites gids inside a live nested store. It did not
-  cause these failures (both drivers held their pids across the window); it is out of the frame
-  because the one asymmetry this bug has ever shown is an ownership one.
+  every driver start - the only code here that rewrites gids inside a live nested store.
+- **AND THAT CHOWN IS NOT RULED OUT, WHICH WAS FIRST WRITTEN THE OTHER WAY.** "Both drivers held
+  their pids across the window" is true of 20:34-21:10 and was read off that window alone. **Both
+  drivers restarted at 13:43:43** - after the midday resets, about seven hours before the evening
+  failures - so the recursive chown ran over both populated stores and both of those stores later
+  failed. Not evidence of cause: dozens of jobs passed on them in between, and the midday pair
+  failed BEFORE the restart. It is enough that the dismissal had not been measured, on the one
+  asymmetry this bug has ever shown, which is an ownership one.
 - **Fedora ships NO pip for a parallel-installed `python3.13`.** `setup-python` resolves 3.13 out
   of the seeded tool cache in ~150ms and hands back an interpreter with no pip, so `python3 -m pip`
   fails on the line after "Successfully set up CPython". There is no `python3.13-pip` package -

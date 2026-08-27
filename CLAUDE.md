@@ -951,7 +951,9 @@ signal read green.
 - **The load it was blamed on was absent for two of the four**, `store_jobs` was 4/12/18 against a
   50-job window, and a mid-job reset is ruled out by the journal.
 - **`chown 1000:1000` wrote a gid nothing else writes** (the runner's primary gid is 0), and
-  preflight's `-R` ran over a populated store on every driver start.
+  preflight's `-R` ran over a populated store on every driver start. **Not ruled out for the
+  evening pair**: both drivers restarted at 13:43:43, so it ran over both stores hours before they
+  failed. The first version of that line said the opposite, off a window that started at 20:34.
 - **Fedora ships no pip for a parallel `python3.13`** - no such package at all; `ensurepip
   --altinstall`, and `--altinstall` is what stops 3.14's `pip3` becoming 3.13's.
 

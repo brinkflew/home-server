@@ -328,11 +328,18 @@ preflight() {
 	# every driver start, and on `storage` that is a full recursive rewrite of
 	# ownership across twenty-odd overlay layers whose files belong to a
 	# NESTED namespace's ids - the only code in this repository that rewrites
-	# gids inside a live nested store. It did not cause the failures of
-	# 2026-08-26 (both lane drivers held their pids across the whole window), so
-	# this is a hazard being removed rather than a fix. The non-recursive form
-	# still repairs the case the loop exists for, which is a bind-mount source
-	# `mkdir`ed by `core`.
+	# gids inside a live nested store.
+	#
+	# AND IT IS NOT RULED OUT FOR 2026-08-26, WHICH THIS COMMENT FIRST CLAIMED.
+	# Both drivers held their pids across the 20:34-21:10 window, which is what
+	# that claim was read off - but they had BOTH RESTARTED AT 13:43:43, after
+	# the midday resets and roughly seven hours before the evening failures. So
+	# this ran recursively over both populated stores, and both of those stores
+	# later failed. That is not evidence of cause: dozens of jobs passed on those
+	# same stores in between, and the midday pair failed BEFORE the restart. It
+	# is enough that "it did not cause these failures" was not a thing anyone had
+	# measured. The non-recursive form still repairs the case the loop exists
+	# for, which is a bind-mount source `mkdir`ed by `core`.
 	#
 	# THE DISCRIMINATOR IS `overlay/`, NOT `db.sql`. The guard sixty lines below
 	# DELETES db.sql when it records a stale runroot, and the overlay tree
