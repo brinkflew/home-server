@@ -102,7 +102,9 @@ RUN usermod -l runner -d /home/runner -m podman \
 #   file-libs    api/pyproject.toml depends on python-magic, and pytest imports
 #                the app
 #   python3.13   see the tool cache below - Fedora 44's default python3 is
-#                3.14.7 and upskald asks for 3.13
+#                3.14.7 and upskald asks for 3.13. pip for it is NOT a package
+#                and is not in this list: Fedora ships `python3-pip` for 3.14
+#                only, so 3.13's comes from `ensurepip` in the tool-cache layer
 #   nodejs24     `node` ON PATH, WHICH HOSTED RUNNERS HAVE AND THIS DID NOT.
 #                ubuntu-latest ships it at /usr/local/bin/node, so a workflow
 #                never installs it and never declares it. prek's root-lint hook
@@ -166,13 +168,44 @@ RUN dnf install -y --setopt=install_weak_deps=False \
 # smoke test reported `nothing is in /opt/hostedtoolcache/Python` against an
 # image that demonstrably had it. runner-init copies the seed in when the lane's
 # cache does not already have it.
+#
+# AND PIP, WHICH SETUP-PYTHON DOES NOT SUPPLY AND FEDORA HAS NO PACKAGE FOR.
+# `actions/setup-python` resolves 3.13 out of this cache in about 150ms and
+# hands back an interpreter; it does not install pip, it assumes the tool cache
+# entry already has one, and GitHub's own Ubuntu images do. Here it did not, so
+# a workflow's `python3 -m pip` failed on the line AFTER the step printed
+# "Successfully set up CPython" - which reads as a broken workflow rather than a
+# missing package.
+#
+# `ensurepip`, NOT A PACKAGE, BECAUSE THERE IS NO PACKAGE. Fedora 44 ships
+# `python3-pip` for its DEFAULT python3, which is 3.14.7. It ships no pip for
+# the parallel-installed `python3.13` at all: measured 2026-08-27,
+# `dnf list --available python3.13-pip` is "No matching packages" and
+# `repoquery --whatprovides "python3.13dist(pip)"` is empty. The bundled wheel
+# is present - `ensurepip.version()` reads 26.0.1 - so this is the supported
+# route rather than a workaround.
+#
+# `--altinstall` IS LOAD-BEARING. Without it ensurepip also writes `pip` and
+# `pip3` into the path, which on a machine whose `python3` is 3.14 means the
+# default interpreter's pip is now 3.13's. With it, only `pip3.13` is written.
+# Verified after the fact: `python3 -m pip` still reports "No module named pip"
+# for 3.14, which is the state Fedora shipped.
+#
+# There is no EXTERNALLY-MANAGED marker for 3.13 on this image, so an install is
+# not refused - `pip install six` was run end to end before this was written.
 RUN PYV=$(python3.13 -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])') \
  && D="/opt/hostedtoolcache-seed/Python/${PYV}/x64" \
  && mkdir -p "$D/bin" \
+ && python3.13 -m ensurepip --altinstall \
+ && PIP=$(command -v pip3.13) \
  && ln -sf /usr/bin/python3.13 "$D/bin/python3" \
  && ln -sf /usr/bin/python3.13 "$D/bin/python" \
+ && ln -sf "$PIP" "$D/bin/pip3" \
+ && ln -sf "$PIP" "$D/bin/pip" \
  && touch "/opt/hostedtoolcache-seed/Python/${PYV}/x64.complete" \
  && "$D/bin/python3" -V \
+ && "$D/bin/python3" -m pip -V \
+ && "$D/bin/pip" -V \
  && chown -R runner:runner /opt/hostedtoolcache-seed
 
 # THE NESTED ENGINE'S CONFIGURATION. Deliberately only two files: this image's

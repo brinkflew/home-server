@@ -279,6 +279,36 @@ case "$pyv" in
 		bad "the tool cache holds Python '$pyv', not a 3.13 - upskald's setup-toolchains asks for 3.13 and would go to the network for it" ;;
 esac
 
+# AND PIP, WHICH IS A SEPARATE ASSERTION BECAUSE IT WAS A SEPARATE ABSENCE.
+# setup-python resolved 3.13 out of the cache in about 150ms and handed back an
+# interpreter with no pip at all, so `python3 -m pip` failed on the line AFTER
+# the step printed "Successfully set up CPython" - which reads as a broken
+# workflow. The leg above passed throughout: an interpreter that runs and a
+# .complete marker are both true of a Python nobody can install into.
+#
+# BOTH SPELLINGS, because they fail differently. `python3 -m pip` needs the
+# MODULE on the interpreter setup-python handed back; `pip` needs a console
+# script in the bin/ directory setup-python prepends to PATH. Fedora ships
+# neither for a parallel-installed python3.13 - there is no python3.13-pip
+# package, measured - so both come from `ensurepip --altinstall` plus two
+# symlinks in apps/github-runner/Dockerfile, and either could be dropped alone.
+#
+# ASSERTED THROUGH THE TOOL CACHE PATH, NOT THROUGH /usr/bin. A workflow does
+# not run the system python; it runs whatever setup-python put on PATH, and
+# testing the wrong one is how the tool cache came to be tested by a check that
+# could not see it was empty.
+if [ -n "$pyv" ]; then
+	pipd="/opt/hostedtoolcache/Python/$pyv/x64/bin"
+	pipv=$(runner sh -c "PATH=$pipd:\$PATH pip -V 2>&1 | head -1" | tr -d '\r')
+	pipm=$(runner sh -c "$pipd/python3 -m pip -V 2>&1 | head -1" | tr -d '\r')
+	case "$pipv$pipm" in
+		*"No module named pip"* | *"not found"* | '')
+			bad "the tool cache Python has no usable pip - 'pip -V' said '${pipv:-nothing}' and 'python3 -m pip -V' said '${pipm:-nothing}'. Fedora ships no python3.13-pip package, so this comes from 'ensurepip --altinstall' in apps/github-runner/Dockerfile; a workflow would fail on the line after setup-python reports success" ;;
+		*)
+			ok "the tool cache Python has pip both ways ($(printf '%s' "$pipv" | cut -d' ' -f1-2)), so a workflow can install after actions/setup-python resolves it" ;;
+	esac
+fi
+
 # THE VERSION AGAINST UPSTREAM, WRITTEN DOWN RATHER THAN ACTED ON. GitHub
 # enforces a minimum runner version and a runner too far below it stops being
 # given jobs - a job that queues for ever while the runner shows online and idle.
@@ -554,15 +584,34 @@ rt=$(runner sh -c '
 	# guard then broke the loop early and the second retry never ran at all. A
 	# fresh lane hid that completely, which is why this asks for the number.
 	n2=$(grep -c "retry 2 of " /tmp/shimerr 2>/dev/null)
+	# THE POST-MORTEM ITSELF, ON STDERR, WHICH IS WHERE A JOB LOG READS IT.
+	# A copy also goes to a file under $HOME and the leg below asserts that
+	# half - but the two halves fail independently and only the file half was
+	# ever checked. Measured 2026-08-27: the two lane failures of 2026-08-26
+	# carry three post-mortem groups each in their forensic capture and ZERO in
+	# the job logs GitHub kept, because in "tee FILE 2>/dev/null >&2" the two
+	# redirections apply left to right, so the stdout of tee was pointed at the
+	# /dev/null that fd 2 had just been pointed at. Nothing failed, nothing was
+	# empty, and the --log-level=debug block was there both times - which is
+	# exactly why it went unnoticed.
+	#
+	# NO APOSTROPHES IN THIS COMMENT, AND THAT IS NOT STYLE. Everything from
+	# "runner sh -c" down is one single-quoted string, so a single apostrophe
+	# ends it and the parse error lands eighty lines away.
+	pm=$(grep -c "post-mortem for a failed" /tmp/shimerr 2>/dev/null)
+	# And the sampler, which is the only reading in that block not taken after
+	# libpod has already unmounted. A post-mortem that arrives without it is
+	# back to being rows that cannot discriminate.
+	sm=$(grep -c "taken DURING the start" /tmp/shimerr 2>/dev/null)
 	# And the attach guard: `docker start -a` returns the exit code OF THE
 	# CONTAINER, so retrying one would run the container twice. Never retried.
 	t1=$(date +%s)
 	docker start -a no-such-container-shimprobe >/dev/null 2>&1
 	ael=$(( $(date +%s) - t1 ))
-	echo "rc=$rc len=${#out} el=$el n=$n n2=$n2 ael=$ael"
+	echo "rc=$rc len=${#out} el=$el n=$n n2=$n2 ael=$ael pm=$pm sm=$sm"
 ' 2>/dev/null | tail -1 | tr -d '\r')
 
-eval "$(printf %s "$rt" | tr ' ' '\n' | grep -E '^(rc|len|el|n|n2|ael)=[0-9]+$' | sed 's/^/shim_/')"
+eval "$(printf %s "$rt" | tr ' ' '\n' | grep -E '^(rc|len|el|n|n2|ael|pm|sm)=[0-9]+$' | sed 's/^/shim_/')"
 if [ -z "${shim_rc:-}" ]; then
 	bad "the docker shim retry probe returned '${rt:-nothing}' - it did not run, so nothing here is asserted"
 elif [ "$shim_rc" = 0 ]; then
@@ -577,8 +626,12 @@ elif [ "${shim_el:-0}" -lt 6 ]; then
 	bad "a failing 'docker start' took ${shim_el}s and the declared backoff is 2s+5s - the retries were not actually attempted"
 elif [ "${shim_ael:-9}" -ge 2 ]; then
 	bad "'docker start -a' took ${shim_ael}s, so it WAS retried - an attached start returns the container's own exit code and retrying runs the container a second time"
+elif [ "${shim_pm:-0}" -lt 1 ]; then
+	bad "a failing 'docker start' put its post-mortem in \$HOME but NOTHING on stderr, so no job log will ever carry it - which is the state it shipped in from the day the tee was added. Check the redirection order on the tee in apps/github-runner/scripts/docker-shim.sh: they apply left to right, so '2>/dev/null >&2' sends tee's stdout to /dev/null"
+elif [ "${shim_sm:-0}" -lt 1 ]; then
+	bad "the post-mortem reached stderr without its 'taken DURING the start' block - every other reading in it is taken after libpod has unmounted, so without the samples it cannot tell a mount that never happened from one that was torn down. See sample_begin() in apps/github-runner/scripts/docker-shim.sh"
 else
-	ok "the shim retries a failing 'docker start' twice (${shim_el}s), still fails, keeps stdout empty, and does not retry an attached start"
+	ok "the shim retries a failing 'docker start' twice (${shim_el}s), still fails, keeps stdout empty, does not retry an attached start, and puts ${shim_pm} post-mortem(s) with ${shim_sm} sample block(s) where a job log can read them"
 fi
 
 # THE OTHER HALF OF THE SHIM'S CONTRACT, AND IT IS NOT ABOUT THIS SCRIPT AT ALL.
