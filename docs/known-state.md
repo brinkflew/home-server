@@ -3102,3 +3102,62 @@ and WebKit to be the hard one and offered to leave WebKit hosted. Both halves we
   fix.
 - **So a browser probe must go through the entrypoint and carry the lane's `--shm-size`**, or it
   measures a container no job will ever run in.
+
+## The fleet chooses its own work, and four things that look alike while it does
+
+- **`_plan_step` never read `status: blocked`.** It has been in `policy.PLAN_SCHEMA` and in
+  `prompts/plan.md` since the planning phase existed - the prompt calls a false premise "a good
+  outcome, not a failure" - and the step checked only the exit code and whether a plan was
+  produced. So a blocked plan exited 0, the plan was non-empty, the step returned `ok: true`, and
+  the flow carried straight on into a $15 dev phase to implement a task the planning phase had just
+  said could not be implemented. **Latent for as long as a person chose the task and was watching**;
+  the most likely way a round is wasted the moment conduct chooses. Fixed 2026-08-27.
+- **The task cannot be put back, and that turns out to be right.** `odoo.move` refuses any stage
+  outside the fleet's three, so conduct has no way to return a task to `Pending` and should not have
+  one. A blocked task stays in `Planning`, which `odoo.IN_PROGRESS` already excludes from every
+  candidate pool - so it removes itself from intake's reach until a person looks, and the chatter
+  note is how they find out why.
+- **Between `run_flow` and the flow's first suspend, nothing in the database says a task was
+  taken.** `chain_open` does not run until `_plan_step`, a tick later, so the next cycle sees an idle
+  fleet and picks a second task. That is **not** two runs: `state.chain_open` supersedes on a
+  differing `odoo_task`, so the second pick silently CLOSES the first one's round and shortens a
+  change nobody was watching. The `intake` claim is written before the start and restored on failure,
+  which is the rule `_continuation` already followed for the round counter.
+- **Falling out of the dispatch loop is not `idle`.** The loop `continue`s past a suspended
+  `await_human` because that module is unprefixed - it is a person's gate and conduct may not read
+  it - so a run waiting on somebody reaches the bottom of the cycle looking exactly like a quiet one.
+  Taking a second task there puts two changes on one worktree and `prepare_worktree` deletes the
+  first. The idle test asks seven local questions before the tracker is contacted at all.
+- **An intake that has stopped looks exactly like an empty backlog.** Both are "no run started",
+  both leave every unit active and every container healthy and the journal quiet - a revoked API
+  key, a renamed stage or an exception in the pass all present as a fleet with nothing to do, which
+  is the one explanation nobody investigates. So `agents.intake` grades the LOOK: conduct stamps
+  `intake_last_at` on every look including one that picked nothing, and a stamp that stops advancing
+  is the fault. Same shape as the mirror whose fetch stopped, where `FETCH_HEAD`'s mtime dates the
+  attempt rather than the change. Holding is `ok` with the reason in the message; the two are told
+  apart by the AGE and never by the string.
+- **The milestone ladder is ordered by the M-number in the NAME and by nothing else.** `deadline` is
+  unset on every milestone and `is_reached` is false on every milestone, so neither can order it -
+  and the id is the one that looks like it would work and does not: `M0b Scaleway estate` has the
+  highest id in project 17, so a ladder read off ids works the backlog backwards while every query
+  returns exactly what it was asked for. **Priority is not a milestone signal either**: the whole
+  `M0` tree sits at priority 0 because nobody re-starred it after grooming. A string sort is the
+  third trap - it puts `M10` between `M1` and `M2`.
+- **A dependency is clear only when `is_closed` is true.** Absence from the candidate pool is not
+  evidence of closure: a blocker sitting in `Review` is absent from that pool and is emphatically
+  not done. Anything the blocker read does not account for is treated as OPEN, which is the
+  direction that defers rather than the one that starts work on something still waiting.
+- **The select worktree is reused between looks, so `last_answer` without a `since` bound returns
+  the PREVIOUS look's choice.** A phase that exits 0 and answers nothing is a real shape - the
+  planning step guards for exactly it - and without the bound that phase hands conduct last look's
+  task, conduct re-checks it against a shortlist it is probably still on, every clause passes, and
+  the fleet starts a run that nothing chose today. Caught before it shipped, and only because the
+  same trap is already on record one section up: *"the most recent X on this worktree is the
+  previous TASK's X until this one overwrites it"*, which is why `state.last_answer` grew the
+  argument in the first place. **Proved by reverting the fix**: the pass took a task off a stale
+  answer.
+- **Nothing bounded the fleet as a whole.** Every other refusal here is about the health of one run.
+  `config.REVIEW_CAP` is the first that is not, and what it prevents is not a crash: it is twelve
+  open draft pull requests, each cut from a `main` that has moved further since the last, all of
+  them conflicting, and a person who has stopped reading them. The fleet moves a task to `Review`
+  when its PR opens and never past it, so that number only goes down when a human acts.

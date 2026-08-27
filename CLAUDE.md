@@ -966,6 +966,28 @@ signal read green.
   `--entrypoint` is root and measures a container no job runs in. Chromium hung five minutes as
   root, and reported `Target crashed` at podman's default 64 MB `/dev/shm`. Third of the family.
 
+### The fleet chooses its own work, and four things that look alike while it does
+- **`_plan_step` never read `status: blocked`**, which has been in the schema and the prompt since
+  the planning phase existed - so a blocked plan returned `ok: true` and the flow spent $15
+  implementing a task the planner had just said could not be implemented. The task cannot be moved
+  back and should not be: it parks in `Planning`, which the candidate pool already excludes.
+- **Between `run_flow` and the flow's first suspend nothing says a task was taken**, so a second
+  would be picked - and `chain_open` supersedes on a differing `odoo_task`, so that silently CLOSES
+  the first one's round. Claim before the start, restore on failure. **Falling out of the dispatch
+  loop is not `idle`** either: it `continue`s past the unprefixed human gate.
+- **An intake that has stopped looks exactly like an empty backlog**, so `agents.intake` grades the
+  LOOK and not the run. Holding is `ok` with the reason in the message; the two are told apart by
+  the AGE, never by the string.
+- **The milestone ladder is ordered by the M-number in the name and by nothing else** - `deadline`
+  and `is_reached` are unset on every rung, the id runs backwards, priority is not a milestone
+  signal, and a string sort puts `M10` between `M1` and `M2`. A dependency is clear only when
+  `is_closed` is true; absence from the pool is not evidence.
+- **The select worktree is reused, so `last_answer` without `since` returns the PREVIOUS look's
+  choice** - and a phase that exits 0 answering nothing is a real shape. The fleet would start a run
+  nothing chose today, with every clause passing. Same family as the stale review one row up.
+- **Nothing bounded the fleet as a whole** until `REVIEW_CAP`. What it prevents is not a crash - it
+  is twelve conflicting draft PRs and a person who has stopped reading them.
+
 ### The lane healed itself, because the remedy had been a person
 - **`api-checks` has passed since both lanes were emptied BY HAND**, which repaired nothing. A
   one-minute reproduction eliminated `ports:`, the runner's container-init path and the inherited

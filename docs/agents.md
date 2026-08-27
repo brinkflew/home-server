@@ -532,13 +532,15 @@ that admission about `TasksMax` until a real gate run measured it at 325.
 ## The marker, and why it is not in `backup-state`
 
 conduct writes `~/.cache/home-server/conduct-state`, flat `key=value`, in the shape of
-`backup-state` and `metrics-state`. **Four** checks in `bin/verify-host.sh`, **thirteen** series in
+`backup-state` and `metrics-state`. **Five** checks in `bin/verify-host.sh`, **fourteen** series in
 `bin/collect-metrics.py` and one refusal in `bin/reboot-when-staged.sh` read it.
 
 That sentence said "twelve checks, twenty-two series" until 2026-08-23, and both numbers were wrong
-*and* described the wrong thing: fourteen checks and twenty-one series exist in the agents section,
+*and* described the wrong thing: fourteen checks and twenty-one series existed in the agents section,
 but only four and thirteen of them read this file. `conduct/marker.py` carried the identical wrong
 sentence and moved with it - the same both-halves rule, applied to a count rather than to a finding.
+One more of each arrived with `agents.intake` on 2026-08-27, and both copies moved together again,
+which is the only reason the number is written down rather than left to be recounted.
 
 **It is its own file rather than a section of `backup-state`, and the reason is invisible until
 somebody tidies the two together**: `bin/backup-server.sh` rewrites `backup-state` **whole** at
@@ -555,6 +557,10 @@ Three asymmetries in the contract that look like mistakes and are not:
   family: worktree path, branch, PR number, job id, session id.
 - **`quota_window`** is the same, by the same precedent. Which of the four windows the API named is
   worth a sentence and is not worth a label dimension in a store that keeps 400 days.
+- **`intake_last_why`** is the third of that family and the most obviously right one: it is a
+  sentence about a *task*, unbounded and sometimes carrying a title, so a label dimensioned on it
+  would mint a new series for every task the fleet ever declined. `intake_last_at` beside it is a
+  stamp and is exported.
 
 **Omitted is not zero.** A key with no value is left out entirely, because the collector drops a
 sample that does not parse - so an unmeasured quota *vanishes* rather than reading as healthy, and
@@ -713,11 +719,11 @@ not built yet* for why the `verify` tag was **not** added to make it routable.
 
 ## The publish path, and the two live defects finishing it exposed
 
-**Six modules, three suspends, and only two of them are conduct's.** `f/agents/ship` is the whole
-chain; `f/agents/phase` stays what it was, two modules that run one gate and report. Two linear
-flows rather than one with a conditional, because the `phase` argument selects the *command a phase
-runs* and not whether the flow publishes - a `check` run through the long chain would refuse at
-`conduct_verify` for the right reason and read as a fault.
+**Six modules, three suspends, and only two of them are conduct's** - *as this flow shipped*.
+`f/agents/ship` is the whole chain; `f/agents/phase` stays what it was, two modules that run one
+gate and report. Two linear flows rather than one with a conditional, because the `phase` argument
+selects the *command a phase runs* and not whether the flow publishes - a `check` run through the
+long chain would refuse at `conduct_verify` for the right reason and read as a fault.
 
 ```
 0  await_conduct   identity, suspend      runs, Success, then the flow suspends
@@ -728,11 +734,28 @@ runs* and not whether the flow publishes - a `check` run through the long chain 
 5  publish_pr      rawscript              <- WaitingForEvents. A PERSON answers.
 ```
 
-**`publish_pr` is deliberately not prefixed**, and that one string is the only thing between conduct
-and its own approval - `user_auth_required: true` does **not** stop it, because conduct resumes with
-a workspace-owner token, which satisfies it perfectly. So the guard moved into `poll._resume`, where
-it is a property of resuming rather than of one call site. `self_approval_disabled` is deliberately
-absent: the workspace has one seat, so it would deadlock every run a person starts by hand.
+**THAT DIAGRAM IS THE HISTORICAL ONE AND `f/agents/ship` NOW HAS FOURTEEN MODULES.** The round added
+the plan, dev, review and squash steps and the retry module; autonomous publish added `publish_auto`.
+The current list is in *The round* below and in `conduct/flows/ship.py`, which is the only copy that
+cannot go stale. This block is kept because the argument above it - two linear flows rather than one
+conditional - is still the reason there are two, and because a reader who stops here should be told
+they are looking at 2026-08-22 rather than left to infer it. Corrected 2026-08-27, having been the
+wrong flow in this file for five days.
+
+**`publish_pr` is deliberately not prefixed**, and that one string is what stands between conduct
+and its own approval. So the guard lives in `poll._resume`, where it is a property of resuming
+rather than of one call site. `self_approval_disabled` is deliberately absent: the workspace has one
+seat, so it would deadlock every run a person starts by hand.
+
+**This paragraph used to add that `user_auth_required: true` does not stop conduct "because it
+resumes with a workspace-owner token, which satisfies it perfectly". That was measured wrong and is
+retracted.** The owner resume endpoint fails against it as *"Approvals for logged in users is an
+enterprise only feature"* - so there is a second lock, and conduct was already unable to answer the
+human gate by a mechanism nobody had found. See *Who answers which step* below, which has carried
+the correct measurement since it was taken; `docs/known-state.md` and `CLAUDE.md` both had it right
+and this file disagreed with itself for five days. Nothing was ever broken - the missing prefix is
+the enforcement either way - but a reader deciding how much the prefix carries was being told it
+carries everything. The identical stale claim in `conduct/flows/ship.py` moved with this.
 
 **A REPORT IS A VALUE, NOT A STATUS**, and this shipped wrong in the polling round. `conduct_phase`'s
 body was `def main(report: dict): return report`, so a payload saying `{"ok": false, "exit_code": 1}`
@@ -1983,6 +2006,133 @@ swallowing real work.
 `_merge_follow_ups` reasons from: a duplicate in Backlog is something a person deletes, and a finding
 dropped because a search timed out is gone. The tracker must never be able to stop the fleet, and
 that includes stopping it quietly - so the note is what keeps the degradation visible.
+
+## The fleet chooses its own work, and the claim that stops it choosing twice
+
+**Until 2026-08-27 exactly one thing in this pipeline was still a person: deciding what to work on.**
+`windmill.run_flow` had three call sites and none of them chose anything - `bin/conduct ship` (a
+human at a terminal), `_continuation` (the next round of a change already chosen) and `_failed_flow`
+(one automatic resume of a run conduct broke). The fourth path was somebody filling the run form.
+The workstation ran the `next-task` skill, read the answer, and typed the id into `conduct ship`.
+
+**It is a fourth pass in `poll.cycle()` and deliberately not a second Windmill flow.** That was the
+obvious shape and three measured facts rule it out. conduct polls Windmill and **Windmill has no
+route to this host at all** - a listener needs the podman-socket SELinux denial or a firewalld hole,
+which is the same argument that inverted the arrow in the first place - so a flow choosing work
+would need its own Odoo credential in a worker, breaking the one rule `conduct/odoo.py` opens with.
+Everything the decision reads is conduct's sqlite: the quota reading, the leases, the open chains,
+the pending publications. And conduct already ticks every 60 s. **There are also no Windmill
+schedules anywhere on this host**; adding one would be the first, and it would be exactly the drift
+`reconcile_flow()` exists to eliminate - a row in Postgres with nothing in `git diff`, and unlike a
+flow, nothing would rewrite it.
+
+The requested fifteen-minute cadence is `config.INTAKE_SEC`, not a second timer. The pass runs on
+the 60 s tick and short-circuits on a free local check before it ever calls the tracker.
+
+**It runs LAST, after every pass that services work already in flight**, and the position is
+load-bearing in both directions. `_publications` and `_continuations` create the conditions it
+reads, so running ahead of them would see a fleet that looks idle for one tick out of every round.
+And the dispatch loop's two early returns - the busy-host gate and the quota hold - skip it
+entirely, which is right: a fleet holding because the backup is running must not answer by starting
+something new.
+
+**Falling out of the dispatch loop is not by itself idle, and that is the trap the idle test exists
+for.** The loop `continue`s past a suspended `await_human` because that module is unprefixed - it is
+a person's gate and conduct may not read it - so a run waiting on somebody reaches the bottom of the
+cycle looking exactly like a quiet one. Taking a second task there puts two changes on one worktree
+and `prepare_worktree` deletes the first. So `_intake_idle` asks seven questions, all local and all
+free, before the tracker is contacted at all: nothing else happened this tick, no claim is open, no
+step is suspended, no answer is undelivered, no round is open, no publication is pending, and the
+cadence has elapsed.
+
+### The claim, and the double dispatch it closes
+
+After `run_flow` the flow takes seconds to reach `await_plan` and suspend, and `chain_open` does not
+run until `_plan_step` a tick later. **In that window nothing in the database says a task has been
+taken.** Without a claim the next cycle sees an idle fleet and picks a second task - and that is not
+two runs: `state.chain_open` supersedes on a differing `odoo_task`, so the second pick would
+silently *close* the first one's round and shorten a change nobody was watching.
+
+So the `intake` table carries one row per project, written **before** `run_flow` and restored on
+failure, which is the rule `_continuation` already follows for the round counter. Claiming
+afterwards means a crash between Windmill accepting the run and the row being written leaves the
+fleet free to choose again. `INTAKE_CLAIM_MAX_SEC` is the backstop: a job Windmill no longer knows
+about answers 404 for ever, so without an age bound one lost run would wedge intake permanently
+while every other signal read healthy.
+
+### Selection: conduct queries, a phase judges, conduct re-checks
+
+The `next-task` skill needs `mcp__odoo-mcp__*`, which no phase can hold, so the work splits along
+the line this design already draws everywhere else.
+
+**conduct narrows, on the host, with the credential.** `odoo.milestones()` reads the ladder,
+`odoo.candidates()` the pool, `odoo.dependencies_closed()` the blockers, and `odoo.shortlist()` -
+a pure function over rows already read, so the whole narrowing is assertable without a network -
+drops epics, work already in `Planning` or `Implementation`, and anything blocked, then keeps the
+earliest milestone rung with open work and caps what survives at twenty.
+
+**The ladder is ordered by the M-number in the NAME and by nothing else.** `deadline` is unset on
+every milestone and `is_reached` is false on every milestone, so neither can order it - and the id
+is the one that looks like it would work and does not: `M0b Scaleway estate` has the highest id in
+the project. A ladder read off ids works the backlog backwards while every query returns exactly
+what it was asked for. **Priority is not a milestone signal either**: the whole `M0` tree sits at
+priority 0 because nobody re-starred it after grooming.
+
+**The `select` phase judges what conduct offers it**, with the shortlist substituted into its prompt
+before the container starts. It holds no tracker credential, it is read-only, it prepares its tree
+rather than continuing one - "has this already been built?" is a question about current `main` - and
+it runs on **its own worktree**, because `prepare_worktree` resets and cleans, so choosing the next
+task on the ship worktree would delete the last one's commits.
+
+**And nothing it answers is trusted.** `dispatch.judge_selection` re-checks the id against the
+shortlist conduct itself built, against the stages, and against the dependencies. A phase naming a
+task outside that list picks nothing. The stage and dependency clauses look redundant beside a list
+built minutes earlier and are not: the phase runs for minutes, so a person moving a task into
+`Implementation` while it thinks is a real race.
+
+**One candidate is not a choice**, so nothing is spent making it - the phase's whole value is
+judgement between alternatives, and the premise check is one the planning phase repeats anyway with
+the full description in front of it.
+
+### The two brakes, and why one of them had to be invented
+
+**A blocked plan now stops the run, which it did not until this landed.** `blocked` has been in
+`policy.PLAN_SCHEMA` and in `prompts/plan.md` since the planning phase existed - the prompt calls a
+false premise "a good outcome, not a failure" - and `_plan_step` read only the exit code and whether
+a plan was produced. So a blocked plan exited 0, the plan was non-empty, and the flow carried
+straight on into a $15 dev phase to implement a task the planning phase had just said could not be
+implemented. Harmless while a person chose the task and was watching; the most likely way a round is
+wasted the moment conduct chooses.
+
+The task is **not** moved back, because it cannot be: `odoo.move` refuses any stage outside the
+fleet's three, and putting work back in the ready pile is a person's decision. It stays in
+`Planning`, which the candidate pool already excludes - so a blocked task removes itself from
+intake's reach until somebody looks at it, and the chatter note is how they find out why.
+
+**`config.REVIEW_CAP` is the only thing here that bounds the fleet as a whole.** Every other refusal
+in this document is about the health of one run. The fleet moves a task to `Review` when its pull
+request opens and never past it, so that number only goes down when a human acts - and the failure
+it prevents is not a crash. It is twelve open draft pull requests, each cut from a `main` that has
+moved further since the last, all of them conflicting, and a person who has stopped reading them. A
+hold rather than a refusal, like the quota: nothing is consumed and merging one clears it.
+
+### Armed by hand, after watching it choose
+
+`"intake": False` sits beside `"autopublish"` in the descriptor and ships **off**, for the reason
+that one was armed only after the whole chain had run end to end and reached a person. `conduct
+intake --dry-run` runs the entire pass - ladder, pool, closure, cap, and the selection phase itself
+- and stops one call short of `run_flow`. Run it against the real backlog several times, compare
+what it picks against the workstation `next-task` skill, and only then set the switch. There is
+deliberately no `--start` flag on it: starting a run by hand is what `conduct ship` is for, and a
+second, less careful way to spend twenty-eight dollars is not worth the convenience.
+
+**`agents.intake` grades the LOOK and not the run**, because an intake that has stopped looks
+exactly like an empty backlog - both are "no run started", both leave every unit active and every
+container healthy. conduct stamps `intake_last_at` on every look including one that picked nothing,
+so a stamp that stops advancing is the fault and a fresh stamp with a reason beside it is health.
+Holding is `ok` with the reason in the message; the two are told apart by the age, never by the
+string. The bound is four cadences rather than one, because a look is skipped while anything is in
+flight and a round is most of an hour.
 
 ## What is deliberately not built yet
 
