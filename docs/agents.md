@@ -1734,6 +1734,26 @@ before**, written by the publication pass, which is the only thing that ever lea
 and never by `publish_pr`, which holds the one write credential in the workspace and must keep
 containing no logic worth attacking. Nothing ever moves past Review.
 
+**IT IS ALSO THE ONLY THING THAT WRITES THE PULL REQUEST DOWN, AND FOR A LONG TIME IT DID NOT.** The
+pass read `result["url"]` off the finished flow, moved the tracker and posted a chatter note - and
+then dropped it, so **a sentence in Odoo was the only durable record that this fleet had ever opened
+a pull request**. Nothing on the host could answer which PR a round produced. `publication` carries
+`pr_url` and `pr_number` now, and three details of that shape are load-bearing:
+
+- **Both arguments are optional, and a closed row carrying neither is a REAL state.** The flow ended
+  without opening a pull request, which is what a declined approval and a seven-day timeout both
+  look like. Requiring them, or defaulting them to anything but NULL, would erase the difference
+  between "it declined to publish" and "it is still waiting to".
+- **`COALESCE` rather than a plain SET.** `reconcile` closes stale rows with no arguments at all,
+  and this pass's own per-row guard leaves a row to be closed again next cycle if the tracker work
+  raises after the url has been recorded - either would blank it on the second close.
+- **The number is coerced rather than trusted.** It arrives off a REST response through Windmill's
+  JSON, and SQLite stores `"249"` in an INTEGER column without complaint, after which every reader
+  comparing it against an int loses.
+
+Migrated on `pragma_table_info` and not on the exception a first UPDATE would raise, which is the
+trap already on record two sections down.
+
 **A tracker outage must never throw away work that already happened**, and the rule needed one more
 clause for this. Reading the work still *refuses* the planning and dev steps: a phase whose task
 cannot be fetched has nothing to do. By the review and the squash the commits exist and the gate has

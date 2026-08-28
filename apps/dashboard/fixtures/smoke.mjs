@@ -15,6 +15,8 @@ const { posterHeight, posterUrl } = await load("/src/images.ts");
 const { containerTone, laneTone, quotaTone, heartbeatTone } = await load("/src/health.ts");
 const { dailyPeaks, utcDayStarts } = await load("/src/uptime.ts");
 const { fleetDocument, fleetUnreadable } = await load("/fixtures/fleet.ts");
+const { roundState, roundAction, roundProgress, roundEtaAt, isSettled, byUrgency } =
+  await load("/src/fleet.ts");
 const fmt = await load("/src/format.ts");
 
 let failures = 0;
@@ -230,12 +232,25 @@ check("a day with no sample is NaN, not zero", Number.isNaN(peaks[0]), true);
 console.log("\n-- the fleet document --");
 const fleet = fleetDocument();
 
-check("the document names its upstream", Object.keys(fleet.sources), ["conduct_db"]);
+// conduct_db IS MANDATORY and github is not: the GitHub leg is absent entirely
+// on a run where no round had a pull request to ask about, which is different
+// from a run where the token failed. Asserting the exact key set would have
+// made that legitimate absence a test failure.
+check("the document names its database", "conduct_db" in fleet.sources, true);
+check("...and every source says whether it answered",
+  Object.values(fleet.sources).every((h) => typeof h.ok === "boolean"), true);
 
 // waiting_on null is IN FLIGHT, not "conduct". Rendering it as conduct's would
 // claim the fleet owns a step nobody has looked at.
-const byWaiting = fleet.rounds.map((r) => r.waiting_on);
-check("all three waiting states are present", byWaiting, ["person", "conduct", null]);
+//
+// OVER THE OPEN ROUNDS ONLY, since the board grew a history: a closed round has
+// nobody waiting on it by definition, so including them would let the three
+// live states disappear one by one without this noticing.
+const byWaiting = new Set(
+  fleet.rounds.filter((r) => r.closed_at === null).map((r) => r.waiting_on),
+);
+check("all three waiting states are present",
+  ["person", "conduct", null].map((w) => byWaiting.has(w)), [true, true, true]);
 
 // NO RESUME URL, EVER. A link carrying one would make a reader of this page able
 // to approve an agent's merge, which is the outcome the whole design prevents.
@@ -258,6 +273,103 @@ check("the fixture has an orphan notice", orphans.length, 1);
 const running = fleet.runs.filter((r) => r.result === null);
 check("the fixture has a run in flight", running.length, 1);
 check("an in-flight run is not a failure", fleet.totals.runs_failed_today < fleet.totals.runs_today, true);
+
+// --- the run board -----------------------------------------------------------
+//
+// THE OUTCOME IS DERIVED FROM THE PUBLICATION JOIN AND NEVER FROM closed_why.
+// conduct closes a round with a sentence, and every one of these rows carries
+// one - so an assertion that passed by reading them would look identical to
+// this and be wrong the first time somebody reworded a message.
+console.log("\n-- what a round's state is derived from --");
+
+const by = (id) => fleet.rounds.find((r) => r.worktree_id === id);
+
+check("a person owing an answer outranks everything",
+  roundState(by("wt-9f21c4")), { tone: "warn", state: "waiting on you" });
+check("waiting_on null is running, not conduct's",
+  roundState(by("wt-77d3e0")), { tone: "off", state: "running" });
+check("an open pull request is in review",
+  roundState(by("wt-2c44b1")), { tone: "ok", state: "in review" });
+check("a merged one says so",
+  roundState(by("wt-3311cd")), { tone: "ok", state: "merged" });
+
+// THE TWO CLOSED OUTCOMES THAT LOOK ALIKE. Both closed, both carry a sentence,
+// and only the publication join separates "the flow declined to open one" from
+// "it never reached the publish path".
+check("published but opened nothing is not a failure",
+  roundState(by("wt-55ee02")), { tone: "warn", state: "not published" });
+check("no publication row at all is",
+  roundState(by("wt-88fa10")), { tone: "fail", state: "stopped" });
+
+// Both of those rows carry a closed_why, so an implementation that read the
+// sentence could pass every check above. This is the one that would catch it.
+const reworded = { ...by("wt-88fa10"), closed_why: "reached the publish path" };
+check("rewording closed_why changes nothing", roundState(reworded).state, "stopped");
+
+console.log("\n-- hiding a round requires positive evidence --");
+
+// An unreachable GitHub leaves "unknown", and an unknown round MUST stay
+// visible. A row disappearing because a token expired is the same class of
+// error as an empty list reading as an idle fleet.
+check("a merged round is settled", isSettled(by("wt-3311cd")), true);
+check("an unknown one is not", isSettled(by("wt-1188aa")), false);
+check("...and reads as published rather than merged",
+  roundState(by("wt-1188aa")).state, "published");
+check("an open round is never settled", isSettled(by("wt-9f21c4")), false);
+check("exactly one round is hidden by default",
+  fleet.rounds.length - fleet.rounds.filter((r) => !isSettled(r)).length, 1);
+
+console.log("\n-- the action answers what is actually being waited for --");
+
+check("an approval offers conduct's own page",
+  roundAction(by("wt-9f21c4")).href, "https://agents.avanserv.com/run/job-aaa");
+check("an open pull request offers itself",
+  roundAction(by("wt-2c44b1")).label, "review #249");
+check("a merged one no longer asks for a review",
+  roundAction(by("wt-3311cd")).label, "task");
+check("a round mid-flight offers nothing",
+  roundAction(by("wt-77d3e0")).href, null);
+
+// A REFUSAL IS NOT AN APPROVAL. conduct will not publish it and there is
+// nothing to approve, so the chip must not say "approve" whatever link exists.
+const refused = { ...by("wt-9f21c4"), kind: "refused" };
+check("a refusal is not offered an approve button", roundAction(refused).label, "look");
+check("...and goes to the task instead", roundAction(refused).href, by("wt-9f21c4").odoo_url);
+
+// NO ACTION MAY EVER BE A RESUME URL. The board is a new place for one to
+// appear, so the assertion is repeated against every href it can produce.
+const hrefs = fleet.rounds.map((r) => roundAction(r).href).filter(Boolean);
+check("no action is a resume URL", hrefs.some((h) => h.includes("/resume/")), false);
+check("no action leaks a signature", hrefs.some((h) => h.includes("resume_id")), false);
+
+console.log("\n-- progress, and the ETA that is usually a dash --");
+
+check("progress is done over the round's own phases",
+  roundProgress(by("wt-9f21c4")), 0.8);
+check("a round that has finished nothing is zero", roundProgress(by("wt-77d3e0")), 0);
+check("every phase done is one", roundProgress(by("wt-3311cd")), 1);
+
+// THIN EVIDENCE IS A DASH, NOT A GUESS. The collector withholds the whole sum
+// when any remaining phase has fewer than five completed runs behind it.
+check("a withheld ETA stays null", roundEtaAt(by("wt-77d3e0"), 1787000000), null);
+
+// A ROUND WAITING ON A PERSON HAS NO ETA THE MACHINE CAN GIVE. The remaining
+// phases sum to a couple of minutes of `ship`; the actual wait is however long
+// somebody takes to look, bounded only by the seven-day human timeout. The
+// collector withholds it, and this asserts the contract rather than recomputing
+// it - "~1m" over a gate that has been waiting since last night would be the
+// most confidently wrong number on the page.
+check("a human gate carries no ETA", by("wt-9f21c4").eta_seconds, null);
+check("...nor a sample count to justify one", by("wt-9f21c4").eta_samples, null);
+check("an ETA is measured from the document, not from now",
+  roundEtaAt(by("wt-4ab810"), 1787000000), 1787000000 + 3080);
+
+console.log("\n-- the board puts what needs acting on at the top --");
+
+const ordered = [...fleet.rounds].sort(byUrgency).map((r) => r.worktree_id);
+check("a person's answer comes first", ordered[0], "wt-9f21c4");
+check("no finished round outranks a live one",
+  ordered.slice(0, 3).every((id) => by(id).closed_at === null), true);
 
 // A LOCKED DATABASE IS NOT AN IDLE FLEET, and both produce the same empty list.
 const broken = fleetUnreadable();

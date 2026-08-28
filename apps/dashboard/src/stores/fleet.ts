@@ -24,6 +24,7 @@ import { fetchFleet } from "@/api/fleet";
 import { SignedOutError } from "@/api/http";
 import { freshness, type Freshness } from "@/freshness";
 import { coarse, isoToUnix } from "@/format";
+import { isSettled } from "@/fleet";
 import { useHostStore } from "@/stores/host";
 import type { FleetDocument, FleetNotice, FleetRound } from "@/types";
 
@@ -70,7 +71,14 @@ export const useFleetStore = defineStore("fleet", () => {
   const sourceNotes = computed(() => {
     const notes: string[] = [];
     for (const [name, health] of Object.entries(doc.value?.sources ?? {})) {
-      if (!health.ok) {
+      // GITHUB IS EXCLUDED BECAUSE THE SENTENCE WOULD BE WRONG. Every other
+      // upstream here supplies rows, so "absent, not zero" is exactly right for
+      // it. GitHub supplies one FIELD on rows that are already present - it can
+      // only ever cost a merged state - and saying its rows are absent would
+      // send a reader looking for missing rounds that are on the screen in
+      // front of them. The board prints its own sentence about what actually
+      // failed: that nothing could be confirmed merged, so nothing is hidden.
+      if (!health.ok && name !== "github") {
         notes.push(`${name} did not answer in this run; its rows are absent, not zero`);
       }
     }
@@ -82,6 +90,28 @@ export const useFleetStore = defineStore("fleet", () => {
   const dbUnreadable = computed(() => doc.value !== null && !(doc.value.sources.conduct_db?.ok ?? false));
 
   const rounds = computed<FleetRound[]>(() => doc.value?.rounds ?? []);
+
+  /**
+   * The rounds worth looking at: everything except a finished round whose pull
+   * request is merged.
+   *
+   * HIDING REQUIRES POSITIVE EVIDENCE, which is `isSettled`'s whole contract.
+   * When GitHub could not be asked the state is "unknown" and the round stays,
+   * so an expired token makes the board longer rather than shorter. The page
+   * offers the full list behind a toggle and prints how many it is holding
+   * back, because a filter nobody can see is a filter that lies.
+   */
+  const openRounds = computed<FleetRound[]>(() => rounds.value.filter((r) => !isSettled(r)));
+
+  const settledCount = computed(() => rounds.value.length - openRounds.value.length);
+
+  /** Keyed by phase. Empty rather than absent, so a caller need not guard. */
+  const phaseStats = computed(() => doc.value?.phase_stats ?? {});
+
+  /** The document's own clock, which every ETA is measured from - NOT `now`.
+   *  A document is up to five minutes old and the estimate was computed against
+   *  the database as it stood when it was written. */
+  const generatedAt = computed(() => isoToUnix(doc.value?.generated_at));
   const publications = computed(() => doc.value?.publications ?? []);
   const notices = computed<FleetNotice[]>(() => doc.value?.notices ?? []);
   const runs = computed(() => doc.value?.runs ?? []);
@@ -119,6 +149,10 @@ export const useFleetStore = defineStore("fleet", () => {
     sourceNotes,
     dbUnreadable,
     rounds,
+    openRounds,
+    settledCount,
+    phaseStats,
+    generatedAt,
     publications,
     notices,
     runs,

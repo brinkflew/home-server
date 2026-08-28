@@ -334,7 +334,23 @@ export interface FleetNotice {
   waiting_on: FleetWaiting;
 }
 
-/** One open review round: a task being carried through the phases. */
+/** How long a phase actually takes on this host, and what that rests on. */
+export interface FleetPhaseStat {
+  /** Median of completed, successful runs in the last 30 days. Null with none. */
+  median_seconds: number | null;
+  /** Below FLEET_ETA_MIN_SAMPLES the collector withholds every ETA that would
+   *  have used this phase. Carried so the page can say what it is refusing on. */
+  samples: number;
+}
+
+/**
+ * One review round: a task being carried through the phases.
+ *
+ * NOT ONLY OPEN ONES since the run board landed. `closed_at` distinguishes
+ * them, and the collector keeps every open round plus a capped tail of closed
+ * ones - a round used to vanish the moment it closed, which made "published"
+ * and "stopped" states this page could never draw.
+ */
 export interface FleetRound {
   worktree_id: string;
   project: string;
@@ -358,6 +374,49 @@ export interface FleetRound {
   waiting_on: FleetWaiting | null;
   link: string | null;
   summary: string | null;
+  /** The notice's own kind - "approval" or "refused" - or null when nobody has
+   *  been asked. It is what decides WHICH action a waiting row offers. */
+  kind: string | null;
+
+  /** Null while the round is open. Set means it will not run again. */
+  closed_at: string | null;
+  /**
+   * conduct's sentence for why it closed. DISPLAYED AND NEVER PARSED - the
+   * outcome is derived from `published` and `pr_state`, which are structural.
+   */
+  closed_why: string | null;
+  /** The phases this round has finished. Cleared wholesale when a round starts
+   *  again, so it is progress through the CURRENT attempt - which is why the
+   *  row must keep printing "attempt N of 2" beside it. */
+  done: string[];
+  /** The full sequence, so the denominator travels with the numerator. */
+  phases: string[];
+
+  /** conduct's tracker page for `odoo_task`, built host-side from ODOO_URL.
+   *  Null when unset, which ChipLink renders as a disabled box. */
+  odoo_url: string | null;
+  branch: string | null;
+  pr_url: string | null;
+  pr_number: number | null;
+  /**
+   * "open" | "merged" | "closed" | "unknown", or null when there is no pull
+   * request. UNKNOWN IS THE FAIL-OPEN VALUE: an unreachable GitHub or a missing
+   * token must leave a round visible, never hide it.
+   */
+  pr_state: string | null;
+  /**
+   * True once a publication row for this round has CLOSED WITH a pull request.
+   * A closed publication carrying none is a flow that ended without opening one
+   * - a declined approval, a seven-day timeout - and must not read as a round
+   * still waiting to publish.
+   */
+  published: boolean;
+
+  /** Seconds until the round is expected to finish, or null. Measured from the
+   *  document's `generated_at`, not from now. */
+  eta_seconds: number | null;
+  /** The weakest sample count in that sum. Null whenever eta_seconds is. */
+  eta_samples: number | null;
 }
 
 /** A branch conduct pushed whose pull request has not opened yet. */
@@ -427,8 +486,13 @@ export interface FleetDocument {
   notices: FleetNotice[];
   runs: FleetRun[];
   intake: FleetIntake[];
+  /** Keyed by phase name. Every phase is present, with nulls where there is no
+   *  evidence - a key that came and went would force a reader to guess. */
+  phase_stats: Record<string, FleetPhaseStat>;
   totals: FleetTotals;
-  /** `conduct_db`. Not optional: a locked database and an idle fleet are the
-   *  same empty list without it. */
+  /** `conduct_db`, and `github` once a pull request has been asked about. Not
+   *  optional: a locked database and an idle fleet are the same empty list
+   *  without it. `github` is ABSENT when nothing needed asking, which is not
+   *  the same as a run where the token failed. */
   sources: Record<string, SourceHealth>;
 }

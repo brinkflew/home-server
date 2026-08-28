@@ -3287,3 +3287,79 @@ and WebKit to be the hard one and offered to leave WebKit hosted. Both halves we
   and the slice's own 30-day maximum being exactly `MemoryHigh` is the paragraph above it saying so.
   If the hold returns it should return narrower - holding only the lanes above the second - and on
   a measurement rather than on an argument.
+
+
+## A board that could not show an outcome, and four ways it nearly asserted one it had not measured
+
+**The Agents page shipped with a board that read `chain WHERE closed_at IS NULL`**, so a round
+vanished the moment it closed. `published` and `stopped` were states the page could never draw, and
+the only question a reader ever actually has - what happened to the thing the fleet was doing
+yesterday - had no answer anywhere on the host. Four things had to be got right to answer it, and
+three of them are the same mistake in different clothes.
+
+- **THE OUTCOME IS STRUCTURAL, BECAUSE `closed_why` IS PROSE.** conduct closes a round with a
+  sentence - "reached the publish path", "the rounds are used up", "the flow failed: ..." - and the
+  obvious implementation string-matches it. That is the habit this file names as a defect in six
+  other places under a different name ("key on the id, never parse the message"), and it fails the
+  first time somebody rewords a message with every test still green. **The publication join says
+  the same thing structurally**: whether a round reached the publish path is a row's existence,
+  whether it published is a column on that row. `fixtures/smoke.mjs` rewords a `closed_why` and
+  asserts the state does not move, which is the only assertion that could have caught the parse.
+- **A CLOSED PUBLICATION CARRYING NO PULL REQUEST IS A THIRD OUTCOME.** The flow ended without
+  opening one, which is what a declined approval and a seven-day timeout both look like. It is
+  neither "still waiting to publish" nor "gave up before the publish path", and collapsing it into
+  either neighbour loses the distinction that says whether a person declined something.
+- **THE PULL REQUEST WAS BEING THROWN AWAY.** `poll._publication` read `result["url"]` off the
+  finished flow, moved the tracker, posted a chatter note - and dropped it. **A sentence in Odoo was
+  the only durable record of a pull request this fleet had opened**, so nothing on the host could
+  answer which PR a round produced. `publication` now carries `pr_url` and `pr_number`, and both
+  arguments are optional precisely so the paragraph above stays expressible. `COALESCE` rather than
+  a plain SET, because reconcile closes stale rows with no arguments and `_publication`'s own
+  per-row guard leaves a row to be closed again next cycle - either would blank a recorded url.
+- **PROGRESS IS PER ATTEMPT AND ONLY THE ATTEMPT COUNTER SAYS SO.** `chain.done` is append-only
+  within a round and `chain_restart` clears it wholesale, because a re-plan is the entire point of
+  another round. So 2/5 on attempt 2 is work being redone, not work that was lost, and a bar without
+  "attempt N of 2" beside it asserts the second thing.
+
+### An ETA is a prediction, and this one says a dash more often than a number
+- **conduct records no expectation anywhere.** `flows/ship.py` carries prose in its module summaries
+  ("dev 10-25 minutes") and nothing machine-readable, so an estimate is either derived from what
+  this host has actually done or it is invented. It is a median of **successful, completed** runs
+  per phase over 30 days: a killed phase stopped early and a failed one may have stopped anywhere,
+  so including them would predict a shorter round the worse things were going.
+- **It is withheld ENTIRELY below five samples** rather than computed from two, and `phase_stats`
+  travels with the document so the tooltip can name what the number rests on. On a young fleet the
+  dash is the common case and that is correct.
+- **A ROUND WAITING ON A PERSON CARRIES NO ETA AT ALL**, and this was caught on screen rather than
+  by reasoning. The remaining phases sum to the MACHINE's work - a couple of minutes of `ship` for a
+  round sitting on the publish gate - while the real wait is however long somebody takes to look,
+  bounded only by the seven-day `HUMAN_TIMEOUT`. The first render drew **"~1m" against a gate that
+  had been waiting eleven hours**, which would have been the most confidently wrong number on the
+  page.
+
+### Hiding a row needs positive evidence, and the leg that supplies it fails open
+- **A merged round is hidden and an UNKNOWN one is not.** `pr_state` is `unknown` whenever GitHub
+  could not be asked - no token, a timeout, an expired credential - and an unknown round stays on
+  the board. A row disappearing because a token lapsed is the same class of error as an empty list
+  reading as an idle fleet, which is the failure `fleet.json`'s `sources` exists to prevent. The
+  toggle prints its own count whether or not it is on, because **a filter a reader cannot see is a
+  filter that lies**.
+- **`github` is the one source `sourceNotes` must NOT speak for.** Every other upstream supplies
+  rows, so "absent, not zero" is exactly right for it. GitHub supplies one FIELD on rows that are
+  already present, so the generic sentence sends a reader looking for missing rounds that are on
+  the screen in front of them. Found by reading the rendered page, not the code.
+- **It is the FIRST host-side network call `bin/collect-metrics.py` makes.** Every other outbound
+  request in that file is `podman exec <container> curl`, and this one cannot be: the token must not
+  enter a container, which is the rule `docs/ci.md` already states for the credential that never
+  enters a lane. `GITHUB_PR_READ_TOKEN` is a **third** GitHub credential deliberately - the Windmill
+  variable is `pull_requests: write` and `GITHUB_RUNNER_PAT` is org-scoped, so widening either would
+  give a monitor the ability to act.
+- **On the monitor rather than in conduct**, for the reason `docs/agents.md` already gives: a
+  reconciler that stops is safe and a monitor that stops is blind. One dead flow job has already
+  stopped that fleet for two hours.
+
+### Two panels called "Runs" counted different things
+- The board is **rounds** - one task through five phases - and the strip below it is
+  `home_server_agent_runs_today`, which counts **phase executions**. `runs_today = 6` could be one
+  round or three, so leaving both labelled "Runs" put two numbers on one page that disagree with
+  each other and gave a reader no way to tell which. The strip is "Phase runs" now.

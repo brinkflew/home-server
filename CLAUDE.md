@@ -1096,6 +1096,22 @@ signal read green.
   wall clock, 67% of which is test execution. The third lane is for e2e shard WIDTH, not a queue.
 
 
+### A board that could not show an outcome, and an ETA that is usually a dash
+- The round board read `closed_at IS NULL`, so `published` and `stopped` were states it could never
+  draw. The outcome is the publication JOIN, never `closed_why`, which is prose - and a closed
+  publication carrying no pull request is a THIRD outcome, not either neighbour.
+- **conduct was throwing the pull request away**: a sentence in Odoo was the only record one had
+  ever been opened. `publication` carries it now, optionally, and closes with COALESCE.
+- Progress is `chain.done`, which is per ATTEMPT - so the row must keep printing "attempt N of 2".
+- **A round waiting on a person gets no ETA.** The remaining phases are the machine's work; the real
+  wait is a person, bounded by a seven-day timeout. The first render said "~1m" over an eleven-hour
+  gate. Below five samples the estimate is withheld entirely rather than guessed.
+- **Hiding a merged round needs positive evidence and the GitHub leg fails open** - `unknown` stays
+  visible. It is the FIRST host-side network call the collector makes, on a third, read-only token,
+  and `github` is the one source `sourceNotes` must not speak for.
+- Two panels called "Runs" counted rounds and phase executions; `runs_today = 6` could be one round.
+
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless
