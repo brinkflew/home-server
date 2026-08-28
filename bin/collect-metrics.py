@@ -3144,6 +3144,138 @@ def _fleet_eta(stats, done, phase, phase_elapsed):
     return int(round(total)), weakest
 
 
+# How many run rows are read to reconstruct rounds. A round is at most a handful
+# of runs, so this comfortably covers FLEET_ROUNDS of them; the oldest group in
+# the window may be truncated, and it is dropped by that cap before anybody sees
+# it. A count rather than a date, for the reason FLEET_ROUNDS already gives.
+FLEET_RUN_WINDOW = 400
+
+# The suffix a verification's own worktree carries. dispatch.run_verify claims
+# `<id>-verify` under a lease of its own, so a round's gate runs on a DIFFERENT
+# worktree id from the rest of it - fold it back or every round loses its verify
+# phase and reads 3/5 for ever.
+FLEET_VERIFY_SUFFIX = "-verify"
+
+
+def _fleet_parent(worktree_id):
+    """The worktree a run belongs to, with a verification folded back."""
+    text = str(worktree_id or "")
+    if text.endswith(FLEET_VERIFY_SUFFIX):
+        return text[:-len(FLEET_VERIFY_SUFFIX)]
+    return text
+
+
+def _fleet_derive_rounds(conn):
+    """Reconstruct rounds from the run log, newest first.
+
+    `chain` CANNOT DO THIS AND NEVER COULD. Its worktree_id is a PRIMARY KEY,
+    chain_open does INSERT OR REPLACE, and the worktree is REUSED for every
+    change - so each round overwrites the last one's row and the table holds
+    one. Measured on the live host: 1 row in chain against 67 in run, covering
+    eleven rounds over six days. Reading a history out of chain is not a thing
+    that can be made to work; the run log is the only durable record.
+
+    A `plan` RUN STARTS A ROUND, which is conduct's own definition of an attempt
+    - chain.attempts counts plan phases. Runs on a worktree before any plan form
+    one leading group: that is hand-driven work from before the fleet chose its
+    own, it carries no task, and it ages out of the cap.
+    """
+    rounds = []
+    open_group = {}
+    rows = _fleet_rows(conn, """
+        SELECT id, project, phase, worktree_id, started_at, ended_at, result,
+               exit_code, cost_usd, tokens_in, tokens_out, task%s
+          FROM run ORDER BY id DESC LIMIT ?
+    """ % (", odoo_task" if _fleet_has(conn, "run", "odoo_task") else ""),
+        (FLEET_RUN_WINDOW,))
+
+    for row in reversed(rows):
+        if row["phase"] not in FLEET_PHASES:
+            # select is the fleet CHOOSING work - the Intake panel reports it -
+            # and check/probe/hello are hand-run diagnostics. Neither is a step
+            # in a task's journey, and drawing them as rounds would say the
+            # fleet had done work it had not.
+            continue
+        worktree = _fleet_parent(row["worktree_id"])
+        group = open_group.get(worktree)
+        if group is None or row["phase"] == "plan":
+            group = {
+                "worktree_id": worktree,
+                "project": row["project"],
+                "started_at": row["started_at"],
+                "ended_at": row["ended_at"],
+                "done": [],
+                "phase": row["phase"],
+                "odoo_task": row.get("odoo_task"),
+                "task": row["task"],
+                "cost_usd": 0.0,
+                "tokens_in": 0,
+                "tokens_out": 0,
+                "running": False,
+                "failed": False,
+            }
+            rounds.append(group)
+            open_group[worktree] = group
+
+        group["phase"] = row["phase"]
+        if row["phase"] not in group["done"]:
+            group["done"].append(row["phase"])
+        group["ended_at"] = row["ended_at"]
+        group["cost_usd"] += row["cost_usd"] or 0.0
+        group["tokens_in"] += row["tokens_in"] or 0
+        group["tokens_out"] += row["tokens_out"] or 0
+        # ONLY A GROUP THAT OPENED WITH A PLAN MAY ADOPT A LATER RUN'S TASK.
+        # The fallback exists for the transition, where a round's plan predates
+        # run.odoo_task and its later phases carry it. The leading no-plan group
+        # runs until the first plan, so without this guard it would adopt the id
+        # of the round that ENDED it and claim hand-driven work for a task that
+        # had nothing to do with it.
+        if group["odoo_task"] is None and "plan" in group["done"]:
+            group["odoo_task"] = row.get("odoo_task")
+        if group["task"] is None:
+            group["task"] = row["task"]
+        # conduct's own predicate, and the one an earlier version of this file
+        # got backwards: a NULL result is a run still going, not a failure.
+        group["running"] = row["result"] is None
+        group["failed"] = row["result"] not in (None, "ok")
+
+    # ATTEMPT N OF THE SAME TASK, which is the number chain.attempts used to
+    # carry. Null without a task id, because "attempt 1" about a round whose
+    # task is unknown is a claim rather than a count - every row that predates
+    # run.odoo_task is in that position.
+    seen = {}
+    for group in rounds:
+        task_id = group["odoo_task"]
+        if task_id is None:
+            group["attempts"] = None
+            continue
+        seen[task_id] = seen.get(task_id, 0) + 1
+        group["attempts"] = seen[task_id]
+
+    # A GROUP WITH NEITHER A PLAN NOR A TASK IS NOT A TASK'S JOURNEY. It is a
+    # phase somebody ran by hand against a scratch worktree - `upskald-probe`
+    # running a lone verify is the live example - and drawing it as a round says
+    # the fleet attempted work it never attempted. A group with a task but no
+    # plan IS kept: that is hand-driven work from before the fleet chose its
+    # own, and it really did happen.
+    rounds = [g for g in rounds if "plan" in g["done"] or g["task"]]
+
+    rounds.reverse()
+    return rounds
+
+
+def _fleet_has(conn, table, column):
+    """Whether a column exists - the discriminator conduct's _migrate uses.
+
+    CREATE TABLE IF NOT EXISTS does not add a column to an existing table, and
+    this file and conduct deploy independently, so every column added on the
+    conduct side has a window where naming it raises `no such column` and takes
+    the whole board down with it.
+    """
+    return column in {row[1] for row in
+                      conn.execute("SELECT * FROM pragma_table_info(?)", (table,))}
+
+
 def _fleet_phase_started(conn, worktree_id, phase):
     """When the phase now in flight on this worktree started, or None.
 
@@ -3344,132 +3476,163 @@ def source_fleet(m, doc):
         # The ORDER BY sorts open rows (closed_at NULL) ahead of closed ones and
         # then puts the most recent first within each group, so the LIMIT can
         # only ever discard old closed rounds.
-        rounds = _fleet_rows(conn, """
-            SELECT worktree_id, project, odoo_task, ref, phase, opened_at,
-                   attempts, flow_job_id, head, resumed_at, closed_at,
-                   closed_why, done
-              FROM chain
-             ORDER BY closed_at IS NOT NULL, COALESCE(closed_at, opened_at) DESC
-             LIMIT ?
-        """, (FLEET_ROUNDS,))
+        # THE ROWS COME FROM THE RUN LOG, NOT FROM `chain`. See
+        # _fleet_derive_rounds: chain is a current-state table on a REUSED
+        # worktree, so it holds one row however much the fleet has done.
+        rounds = _fleet_derive_rounds(conn)
         stats = _fleet_phase_stats(conn)
 
-        # THE PUBLICATION JOIN IS WHAT MAKES THE OUTCOME STRUCTURAL. closed_why
-        # is prose - "reached the publish path", "the rounds are used up" - and
-        # keying a state on it would be parsing a message, which is the habit
-        # this repository names as a defect everywhere else. Whether a round
-        # reached the publish path is a row's existence; whether it published is
-        # a column on that row.
-        # THE PR COLUMNS ARE ASKED FOR ONLY IF THEY EXIST, and that is a
-        # deployment-ordering fix rather than defensiveness.
-        #
-        # This file and conduct deploy independently: a `git pull` brings the
-        # new SELECT in, and the columns do not appear until conduct next opens
-        # the database and runs its own migration. Naming them unconditionally
-        # raises `no such column: pr_url`, which this function catches and
-        # reports as `conduct_db` unreadable - so the whole Agents board would
-        # read "these rows are absent, not zero" over a perfectly healthy fleet
-        # for however long the two halves were out of step. MEASURED against the
-        # live database before the migration had run, not reasoned about.
-        #
-        # pragma_table_info is the same discriminator conduct's own _migrate
-        # uses, and for the same reason: CREATE TABLE IF NOT EXISTS does not add
-        # a column to an existing table.
-        columns = {row[1] for row in
-                   conn.execute("SELECT * FROM pragma_table_info('publication')")}
-        has_pr = "pr_url" in columns and "pr_number" in columns
-        by_worktree = {}
+        # `chain` IS STILL READ, FOR THE ONE THING IT IS ACCURATE ABOUT: the
+        # round in flight. It is where waiting_on, the approval link and the
+        # tracker id for the current round live, and none of that is in the run
+        # log. It cannot speak for any round that has finished.
+        live = {}
         for row in _fleet_rows(conn, """
+            SELECT worktree_id, project, odoo_task, ref, phase, opened_at,
+                   attempts, flow_job_id, closed_at, closed_why
+              FROM chain WHERE closed_at IS NULL
+        """):
+            live[row["worktree_id"]] = row
+
+        # THE PR COLUMNS ARE ASKED FOR ONLY IF THEY EXIST, and that is a
+        # deployment-ordering fix rather than defensiveness. This file and
+        # conduct deploy independently, and naming a column before conduct has
+        # migrated raises `no such column`, which this function catches and
+        # reports as an unreadable database - so the whole board would read
+        # "absent, not zero" over a perfectly healthy fleet. MEASURED against
+        # the live database before the migration had run.
+        has_pr = (_fleet_has(conn, "publication", "pr_url")
+                  and _fleet_has(conn, "publication", "pr_number"))
+        pubs = _fleet_rows(conn, """
             SELECT worktree_id, branch, closed_at, opened_at%s
               FROM publication ORDER BY opened_at
-        """ % (", pr_url, pr_number" if has_pr else "")):
-            by_worktree[row["worktree_id"]] = row
+        """ % (", pr_url, pr_number" if has_pr else ""))
 
-        for row in rounds:
+        # A PUBLICATION BELONGS TO THE ROUND THAT WAS RUNNING WHEN IT OPENED,
+        # and the join has to say so. Matching on worktree alone was invisible
+        # while chain held one row and is wrong the moment history appears:
+        # every round ever run on `upskald-ship` would carry the same pull
+        # request. The verification push is what opens the row, so the owner is
+        # the latest round on that worktree that had already started.
+        for pub in pubs:
+            owner = None
+            for group in rounds:
+                if (group["worktree_id"] == pub["worktree_id"]
+                        and group["started_at"] <= (pub["opened_at"] or "")):
+                    if owner is None or group["started_at"] > owner["started_at"]:
+                        owner = group
+            if owner is not None and "publication" not in owner:
+                owner["publication"] = pub
+
+        # THE LATEST ROUND ON A WORKTREE IS THE ONE THE CHAIN DESCRIBES, and
+        # `rounds` is newest-first, so the first occurrence of each worktree is
+        # it. An earlier round on the same worktree finished long ago; letting
+        # it inherit a live chain row would draw a finished round as though
+        # somebody were still waiting on it.
+        latest = {}
+        for index, group in enumerate(rounds):
+            latest.setdefault(group["worktree_id"], index)
+
+        for index, row in enumerate(rounds):
+            chain = live.get(row["worktree_id"])
+            is_open = chain is not None and latest[row["worktree_id"]] == index
+
+            row["max_attempts"] = FLEET_MAX_ATTEMPTS
+            row["phases"] = list(FLEET_PHASES)
+            row["ref"] = chain["ref"] if chain and is_open else None
+            row["flow_job_id"] = chain["flow_job_id"] if chain and is_open else None
+            row["head"] = None
+            row["resumed_at"] = None
+            row["closed_why"] = _fleet_text(
+                chain["closed_why"], 200) if chain and is_open else None
+
+            if chain and is_open:
+                # The chain knows the task even when the run rows predate
+                # run.odoo_task, so prefer it for the round in flight.
+                row["odoo_task"] = chain["odoo_task"] or row["odoo_task"]
+                row["phase"] = chain["phase"] or row["phase"]
+                row["attempts"] = chain["attempts"] or row["attempts"]
+                row["closed_at"] = None
+            else:
+                # Not the round in flight, so it is finished. `closed_at` is
+                # what every reader keys "open" on, and a derived round has no
+                # sentence conduct wrote for it.
+                row["closed_at"] = row["ended_at"] or row["started_at"]
+
             # BEST EFFORT, AND NULL WHERE IT CANNOT BE KNOWN. chain.flow_job_id
             # is the job that STOPPED, not the one running - state.py says so -
             # so a round mid-flight legitimately matches no notice. Null means
-            # "in flight", and `notices` below is the authoritative account of
-            # what a person has actually been asked. Defaulting to "conduct"
-            # here would claim the fleet owns a step nobody has looked at.
-            matched = by_job.get(row.get("flow_job_id")) or []
+            # "in flight"; defaulting to "conduct" would claim the fleet owns a
+            # step nobody has looked at.
+            matched = by_job.get(row["flow_job_id"]) or [] if row["flow_job_id"] else []
             person = [n for n in matched if n["waiting_on"] == "person"]
-            row["waiting_on"] = ("person" if person
-                                 else "conduct" if matched else None)
+            if row["closed_at"] is None:
+                row["waiting_on"] = ("person" if person
+                                     else "conduct" if matched else None)
+            else:
+                row["waiting_on"] = None
             row["link"] = person[0]["link"] if person else None
-            row["summary"] = person[0]["summary"] if person else None
-            row["max_attempts"] = FLEET_MAX_ATTEMPTS
             row["kind"] = person[0]["kind"] if person else (
                 matched[0]["kind"] if matched else None)
+            # THE TASK TITLE IS THE ROW'S SUBJECT. run.task holds the phase's
+            # whole prompt, so the first line is the title and the rest is the
+            # brief - and the id is read from odoo_task, never parsed out of
+            # this. An approval notice's summary is better still, when there is
+            # one, because it says what is being ASKED.
+            title = (row.pop("task", None) or "").split("\n")[0]
+            row["summary"] = (person[0]["summary"] if person
+                              else _fleet_text(title, 160))
+            row["odoo_url"] = _fleet_odoo_url(env, row["odoo_task"])
 
-            # Progress through the CURRENT attempt. chain_restart clears `done`
-            # wholesale when a round starts again, which is why the board must
-            # keep printing "attempt N of 2" beside this - without it a second
-            # attempt reads as work that was lost.
-            try:
-                done = [p for p in json.loads(row.pop("done") or "[]") or []
-                        if p in FLEET_PHASES]
-            except (TypeError, ValueError):
-                done = []
-            row["done"] = done
-            row["phases"] = list(FLEET_PHASES)
-            row["closed_why"] = _fleet_text(row.get("closed_why"), 200)
-            row["odoo_url"] = _fleet_odoo_url(env, row.get("odoo_task"))
-
-            published = by_worktree.get(row["worktree_id"]) or {}
+            published = row.pop("publication", None) or {}
             row["branch"] = published.get("branch")
             row["pr_url"] = _fleet_link(published.get("pr_url"))
             row["pr_number"] = published.get("pr_number")
-            # PUBLISHED AT ALL, which is a different question from "merged".
-            # A closed publication with no pr_url is a flow that ended without
-            # opening one - a declined approval, a seven-day timeout - and that
-            # must not read as a round still waiting to publish.
+            # PUBLISHED AT ALL, which is a different question from "merged". A
+            # closed publication with no pr_url is a flow that ended without
+            # opening one - a declined approval, a seven-day timeout - and must
+            # not read as a round still waiting to publish.
             row["published"] = bool(published) and published.get(
                 "closed_at") is not None
 
             # "unknown" IS NOT ONLY GITHUB BEING DOWN. It also covers a
             # publication row this collector could not read a pull request off
-            # at all, which is every row that predates the two columns - a
-            # migration is a moment in time and rows written before it hold NULL
-            # whether or not they opened one.
-            #
-            # Without this the single historical row on this host, which really
-            # did open avanserv/upskald#249, would read "not published" for
-            # ever. A null pr_url only means "opened none" when this code could
-            # have seen a url had there been one.
+            # at all: the column absent, or the row closed before conduct began
+            # writing it. Without it the one round this fleet has actually
+            # merged reads "not published" for ever. A null pr_url means "opened
+            # none" only when a url would have been visible had there been one.
             if row["pr_url"]:
                 row["pr_state"] = "unknown"
             elif row["published"] and (
                     not has_pr
                     or (published.get("closed_at") or "") < FLEET_PR_RECORDED_FROM):
-                # Either this collector could not read the column at all, or the
-                # row closed before conduct started writing it. Both mean the
-                # same thing: a NULL here is not evidence of anything.
                 row["pr_state"] = "unknown"
             else:
                 row["pr_state"] = None
 
             # NULL WHENEVER THE EVIDENCE IS THIN, which is most of the time on a
-            # young fleet. _fleet_eta withholds the whole sum rather than
-            # computing one from two runs.
+            # young fleet - _fleet_eta withholds the whole sum rather than
+            # computing one from two runs. And NO ETA WHILE A PERSON OWES AN
+            # ANSWER: the remaining phases are the machine's work, while the
+            # real wait is however long somebody takes to look, bounded only by
+            # conduct's seven-day HUMAN_TIMEOUT.
             elapsed = None
-            if row["closed_at"] is None and row.get("phase"):
+            if row["closed_at"] is None and row["phase"]:
                 started = _fleet_phase_started(conn, row["worktree_id"],
                                                row["phase"])
                 if started is not None:
                     elapsed = max(0, now() - started)
-            # NO ETA WHILE A PERSON OWES AN ANSWER, and this is not a detail.
-            # The remaining phases sum to the MACHINE's work - a couple of
-            # minutes of `ship` for a round sitting on the publish gate - while
-            # the actual wait is however long somebody takes to look, bounded
-            # only by conduct's seven-day HUMAN_TIMEOUT. Drawing "~1m" over a
-            # round that has been waiting since last night would be the most
-            # confidently wrong number on the page.
             waiting = row["waiting_on"] == "person"
             eta, samples = (None, None) if row["closed_at"] or waiting else _fleet_eta(
-                stats, set(done), row.get("phase"), elapsed)
+                stats, set(row["done"]), row["phase"], elapsed)
             row["eta_seconds"] = eta
             row["eta_samples"] = samples
+            row["cost_usd"] = round(row["cost_usd"], 4) or None
+            row.pop("running", None)
+            row.pop("failed", None)
+
+        rounds = rounds[:FLEET_ROUNDS]
+
 
         publications = _fleet_rows(conn, """
             SELECT job_id, project, worktree_id, odoo_task, branch, opened_at

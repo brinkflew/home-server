@@ -55,6 +55,37 @@ stands - `home_server_agent_quota_status` is still what paces it. `run.cost_usd`
 all, and a document keeps no history - so reporting it cannot turn into a second currency or a
 400-day series. If it ever grows one, the refusal has been reversed by accident.
 
+**THE BOARD DRAWS ROUNDS OUT OF THE RUN LOG, BECAUSE `chain` IS NOT A HISTORY AND CANNOT BE MADE
+ONE.** The first version read it and drew **one row where there should have been eleven**.
+`chain.worktree_id` is a PRIMARY KEY, `chain_open` does `INSERT OR REPLACE`, and **the worktree is
+reused for every change** - every task this fleet has ever run went through `upskald-ship` - so each
+round overwrites the last one's row and the table holds exactly one. Measured on the live host: 1
+row in `chain` against 67 in `run`, covering eleven rounds over six days. "Open rounds plus a capped
+tail of closed ones" was a premise about a table that has no tail.
+
+`run` is the durable log - `AUTOINCREMENT`, one row per phase execution, never deleted - and
+`source_fleet` groups it: **a `plan` run starts a round**, which is conduct's own definition of an
+attempt (`chain.attempts` counts plan phases). `verify` runs on `<worktree>-verify` under its own
+lease and is folded back, or every round loses its gate and reads 3/5 for ever. `select` is the
+fleet choosing work and `check`/`probe`/`hello` are hand-run diagnostics; none is a step in a task's
+journey, and a group with neither a plan nor a task is dropped outright.
+
+**`chain` IS STILL READ, FOR THE ONE THING IT DESCRIBES ACCURATELY**: the round in flight. It
+supplies `waiting_on`, the approval link and the tracker id, and only to the latest round on its
+worktree - letting an earlier one inherit a live chain row would draw a finished round as though
+somebody were waiting on it.
+
+**THE PUBLICATION JOIN HAD TO BECOME WINDOWED IN THE SAME CHANGE.** Matching on `worktree_id` alone
+was invisible while `chain` held one row and is wrong the instant history appears: all ten rounds on
+`upskald-ship` would have carried the same pull request. A publication belongs to the latest round
+that had already started when it opened - the verification push is what opens that row. Measured:
+2 of 11 rounds, and the correct two.
+
+**AND A ROUND'S TASK ID CANNOT BE PARSED OUT OF `run.task`.** That column holds the phase's whole
+prompt, which happens to contain the words "(task 1251)". `run.odoo_task` is a column on the conduct
+side for exactly that reason. It fills in **going forward only**: every round run before it stays
+null, renders a disabled chip and hides its attempt line rather than guessing "attempt 1 of 2".
+
 **THE RUN BOARD SHOWS FINISHED ROUNDS, AND EVERY OUTCOME ON IT IS STRUCTURAL.** The first cut read
 `chain WHERE closed_at IS NULL`, so a round vanished the moment it closed and `published` and
 `stopped` were states the page could never draw. What replaced it does **not** read `closed_why` -

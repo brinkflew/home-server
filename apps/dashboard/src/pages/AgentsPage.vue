@@ -256,6 +256,16 @@ function etaLabel(r: FleetRound): string {
   return remaining <= 0 ? `overdue ${fmt.coarse(-remaining)}` : `~${fmt.coarse(remaining)}`;
 }
 
+const rowCostTip = computed(() => ({
+  title: "cost",
+  lines: [
+    "summed over this attempt's own phase runs",
+    `${fmt.number(totals.value?.cost_today ?? Number.NaN, 2)} USD today across every round`,
+  ],
+  caveat:
+    "conduct's own tally from the CLI's result event, not a price anybody invented - and it is reported, never retained. There is deliberately no dollar metric and no spend ceiling: the quota status is what paces the fleet, so this can be read and cannot become a second currency.",
+}));
+
 const etaTip = computed(() => ({
   title: "ETA",
   lines: Object.entries(fleet.phaseStats).map(
@@ -428,7 +438,7 @@ const costTip = computed(() => ({
     <PanelBox label="Runs" :stale="fleet.stale">
       <template #aside>
         <span class="mono">
-          {{ fleet.openRounds.length }} live / {{ fleet.waitingOnPerson.length }} waiting on you
+          {{ fleet.openRounds.length }} shown / {{ fleet.waitingOnPerson.length }} waiting on you
         </span>
         <!-- THE COUNT IS SHOWN WHETHER OR NOT THE TOGGLE IS ON, because a
              filter a reader cannot see is a filter that lies to them. -->
@@ -457,6 +467,7 @@ const costTip = computed(() => ({
           <span>phase</span>
           <span>progress</span>
           <span v-bind="tip.hover('ag-eta', etaTip)">eta</span>
+          <span v-bind="tip.hover('ag-cost', rowCostTip)">cost</span>
           <span>pull request</span>
           <span></span>
         </div>
@@ -486,10 +497,13 @@ const costTip = computed(() => ({
 
           <span class="cell mono phase">
             {{ phaseLabel(row.r) }}
-            <!-- ATTEMPT BESIDE PROGRESS, NOT INSTEAD OF IT. `done` is cleared
-                 when a round starts again, so 2/5 on attempt 2 is a re-plan
-                 rather than work that was lost - and only this says so. -->
-            <span class="sub">attempt {{ row.r.attempts }} of {{ row.r.max_attempts }}</span>
+            <!-- ATTEMPT BESIDE PROGRESS, NOT INSTEAD OF IT. Each row IS one
+                 attempt, so this says which - and it is counted among rounds
+                 sharing a task, so a round whose runs predate run.odoo_task
+                 cannot have one. Hidden rather than guessed at "1 of 2". -->
+            <span v-if="row.r.attempts !== null" class="sub"
+              >attempt {{ row.r.attempts }} of {{ row.r.max_attempts }}</span
+            >
           </span>
 
           <span class="cell">
@@ -505,6 +519,13 @@ const costTip = computed(() => ({
             row.eta
           }}</span>
 
+          <!-- What this attempt cost, which the totals panel below cannot show:
+               today's five rounds span $2.47 to $17.94 and an expensive failure
+               is invisible in a daily sum. Display only - never a series. -->
+          <span class="cell mono cost">{{
+            row.r.cost_usd === null ? fmt.NO_DATA : `$${row.r.cost_usd.toFixed(2)}`
+          }}</span>
+
           <span class="cell mono pr">
             <ChipLink
               v-if="row.r.pr_url"
@@ -513,8 +534,14 @@ const costTip = computed(() => ({
               :title="`the pull request this round opened (${row.r.pr_state})`"
             />
             <!-- A ROUND THAT CLOSED WITHOUT ONE IS NOT A ROUND STILL WAITING.
-                 A declined approval and a seven-day timeout both land here. -->
-            <span v-else-if="row.r.published" class="nolink">opened none</span>
+                 A declined approval and a seven-day timeout both land here.
+                 ONLY WHEN A URL WOULD HAVE BEEN VISIBLE HAD THERE BEEN ONE:
+                 pr_state "unknown" means the collector could not read the
+                 column at all, and "opened none" beside a state of "published"
+                 is the row contradicting itself. -->
+            <span v-else-if="row.r.published && row.r.pr_state !== 'unknown'" class="nolink"
+              >opened none</span
+            >
             <span v-else class="nolink">-</span>
           </span>
 
@@ -767,7 +794,7 @@ const costTip = computed(() => ({
 /* --cols DEFINED ONCE, so the header row and every body row are laid out by
    the same declaration and cannot drift apart. LibraryPage's convention. */
 .table {
-  --cols: 132px 1.5fr 128px 1fr 84px 104px 112px;
+  --cols: 128px 1.5fr 124px 1fr 78px 76px 96px 108px;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--r-md);

@@ -376,6 +376,29 @@ check("...nor a sample count to justify one", by("wt-9f21c4").eta_samples, null)
 check("an ETA is measured from the document, not from now",
   roundEtaAt(by("wt-4ab810"), 1787000000), 1787000000 + 3080);
 
+console.log("\n-- a round whose task is unknown claims nothing --");
+
+// EVERY ROUND THIS FLEET RAN BEFORE run.odoo_task IS IN THIS POSITION. The
+// collector cannot know which task it was for: run.task holds the phase's whole
+// prompt, and reading an id out of a paragraph is the parse this codebase
+// refuses. So the chip must be disabled and the attempt line hidden - never a
+// guessed link, and never "attempt 1 of 2" about something unknown.
+check("a round with no task id has no tracker link", by("wt-hist01").odoo_url, null);
+check("...and no attempt number", by("wt-hist01").attempts, null);
+check("...and still renders a state", roundState(by("wt-hist01")).state, "stopped");
+check("...whose action falls back to nothing clickable",
+  roundAction(by("wt-hist01")).href, null);
+
+// ONE ROW PER ATTEMPT is the whole point: a failed first attempt keeps its own
+// cost and its own failure instead of collapsing into "attempt 2 of 2".
+const attempts1601 = fleet.rounds
+  .filter((r) => r.odoo_task === 1601)
+  .map((r) => r.attempts)
+  .sort();
+check("two attempts at one task are two rows", attempts1601, [1, 2]);
+check("...and each carries its own cost",
+  new Set(fleet.rounds.filter((r) => r.odoo_task === 1601).map((r) => r.cost_usd)).size, 2);
+
 console.log("\n-- the board puts what needs acting on at the top --");
 
 const ordered = [...fleet.rounds].sort(byUrgency).map((r) => r.worktree_id);
