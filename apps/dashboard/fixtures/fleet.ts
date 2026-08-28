@@ -187,6 +187,39 @@ export function fleetDocument(): FleetDocument {
         eta_seconds: null,
         eta_samples: null,
       },
+      // PUBLISHED BEFORE THE PR COLUMNS EXISTED, so the collector could not
+      // read a url off the row whether or not one was opened. It must NOT fall
+      // through to "not published": a migration is a moment in time, and every
+      // round this fleet published before the feature shipped looks like this.
+      {
+        worktree_id: "wt-0044ab",
+        project: "upskald",
+        odoo_task: 1266,
+        ref: "agents/task-1266",
+        phase: "ship",
+        opened_at: iso(200 * 3600),
+        attempts: 1,
+        max_attempts: 2,
+        flow_job_id: "job-jjj",
+        head: "3c8c616",
+        resumed_at: null,
+        waiting_on: null,
+        link: null,
+        summary: "Cap the size of a request body",
+        kind: null,
+        closed_at: iso(196 * 3600),
+        closed_why: "reached the publish path",
+        done: PHASES,
+        phases: PHASES,
+        odoo_url: "https://avanserv.com/web#id=1266&model=project.task",
+        branch: "agents/task-1266",
+        pr_url: null,
+        pr_number: null,
+        pr_state: "unknown",
+        published: true,
+        eta_seconds: null,
+        eta_samples: null,
+      },
       // A publication that closed carrying NO pull request: the flow ended
       // without opening one - a declined approval, or a seven-day timeout.
       // Not the same outcome as the row below, and only this join says so.

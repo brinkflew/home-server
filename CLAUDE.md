@@ -1109,6 +1109,10 @@ signal read green.
 - **Hiding a merged round needs positive evidence and the GitHub leg fails open** - `unknown` stays
   visible. It is the FIRST host-side network call the collector makes, on a third, read-only token,
   and `github` is the one source `sourceNotes` must not speak for.
+- **The two halves deploy separately**: a SELECT naming `pr_url` before conduct migrates reads as an
+  unreadable database and blanks the board. Guarded on `pragma_table_info`, caught against a copy of
+  the LIVE database - every fixture already had the column. And a row written before those columns
+  read "not published" permanently, so `unknown` outranks that claim.
 - Two panels called "Runs" counted rounds and phase executions; `runs_today = 6` could be one round.
 
 

@@ -301,6 +301,16 @@ check("published but opened nothing is not a failure",
 check("no publication row at all is",
   roundState(by("wt-88fa10")), { tone: "fail", state: "stopped" });
 
+// THE ROW THAT PREDATES THE PR COLUMNS. A migration is a moment in time, so
+// every round this fleet published before the feature shipped holds a NULL
+// pr_url whether or not it opened one - and the real database had exactly one
+// of these, for a pull request that was merged. Falling through to "not
+// published" would put a permanent, confident lie on it.
+check("a round that published before the columns existed is not accused",
+  roundState(by("wt-0044ab")), { tone: "ok", state: "published" });
+check("...and only a readable NULL means opened none",
+  roundState({ ...by("wt-0044ab"), pr_state: null }).state, "not published");
+
 // Both of those rows carry a closed_why, so an implementation that read the
 // sentence could pass every check above. This is the one that would catch it.
 const reworded = { ...by("wt-88fa10"), closed_why: "reached the publish path" };
@@ -316,6 +326,8 @@ check("an unknown one is not", isSettled(by("wt-1188aa")), false);
 check("...and reads as published rather than merged",
   roundState(by("wt-1188aa")).state, "published");
 check("an open round is never settled", isSettled(by("wt-9f21c4")), false);
+check("an unreadable column is not evidence of a merge either",
+  isSettled(by("wt-0044ab")), false);
 check("exactly one round is hidden by default",
   fleet.rounds.length - fleet.rounds.filter((r) => !isSettled(r)).length, 1);
 

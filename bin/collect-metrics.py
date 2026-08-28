@@ -3340,11 +3340,29 @@ def source_fleet(m, doc):
         # this repository names as a defect everywhere else. Whether a round
         # reached the publish path is a row's existence; whether it published is
         # a column on that row.
+        # THE PR COLUMNS ARE ASKED FOR ONLY IF THEY EXIST, and that is a
+        # deployment-ordering fix rather than defensiveness.
+        #
+        # This file and conduct deploy independently: a `git pull` brings the
+        # new SELECT in, and the columns do not appear until conduct next opens
+        # the database and runs its own migration. Naming them unconditionally
+        # raises `no such column: pr_url`, which this function catches and
+        # reports as `conduct_db` unreadable - so the whole Agents board would
+        # read "these rows are absent, not zero" over a perfectly healthy fleet
+        # for however long the two halves were out of step. MEASURED against the
+        # live database before the migration had run, not reasoned about.
+        #
+        # pragma_table_info is the same discriminator conduct's own _migrate
+        # uses, and for the same reason: CREATE TABLE IF NOT EXISTS does not add
+        # a column to an existing table.
+        columns = {row[1] for row in
+                   conn.execute("SELECT * FROM pragma_table_info('publication')")}
+        has_pr = "pr_url" in columns and "pr_number" in columns
         by_worktree = {}
         for row in _fleet_rows(conn, """
-            SELECT worktree_id, branch, pr_url, pr_number, closed_at, opened_at
+            SELECT worktree_id, branch, closed_at, opened_at%s
               FROM publication ORDER BY opened_at
-        """):
+        """ % (", pr_url, pr_number" if has_pr else "")):
             by_worktree[row["worktree_id"]] = row
 
         for row in rounds:
@@ -3388,7 +3406,23 @@ def source_fleet(m, doc):
             # must not read as a round still waiting to publish.
             row["published"] = bool(published) and published.get(
                 "closed_at") is not None
-            row["pr_state"] = "unknown" if row["pr_url"] else None
+
+            # "unknown" IS NOT ONLY GITHUB BEING DOWN. It also covers a
+            # publication row this collector could not read a pull request off
+            # at all, which is every row that predates the two columns - a
+            # migration is a moment in time and rows written before it hold NULL
+            # whether or not they opened one.
+            #
+            # Without this the single historical row on this host, which really
+            # did open avanserv/upskald#249, would read "not published" for
+            # ever. A null pr_url only means "opened none" when this code could
+            # have seen a url had there been one.
+            if row["pr_url"]:
+                row["pr_state"] = "unknown"
+            elif row["published"] and not has_pr:
+                row["pr_state"] = "unknown"
+            else:
+                row["pr_state"] = None
 
             # NULL WHENEVER THE EVIDENCE IS THIN, which is most of the time on a
             # young fleet. _fleet_eta withholds the whole sum rather than

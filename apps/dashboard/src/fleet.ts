@@ -82,8 +82,16 @@ export function roundState(r: FleetRound): RoundState {
     if (r.pr_state === "unknown") return { tone: "ok", state: "published" };
     return { tone: "ok", state: "in review" };
   }
-  // A publication row that closed carrying no pull request: the flow ended
-  // without opening one, which is a declined approval or a seven-day timeout.
+  // NO URL AND "unknown" IS NOT THE SAME AS NO URL. The collector cannot read a
+  // pull request off a publication row written before the two columns existed,
+  // and a migration is a moment in time - so every round that published before
+  // this feature shipped holds NULL whether or not it opened one. Falling
+  // through to "not published" would put a permanent, confident lie on the one
+  // round this fleet has actually merged.
+  if (r.pr_state === "unknown") return { tone: "ok", state: "published" };
+  // A publication row that closed carrying no pull request, on a database this
+  // code COULD have read one from: the flow ended without opening one, which is
+  // a declined approval or a seven-day timeout.
   if (r.published) return { tone: "warn", state: "not published" };
   // No publication row at all - it never reached the publish path.
   return { tone: "fail", state: "stopped" };

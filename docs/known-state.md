@@ -3337,6 +3337,19 @@ three of them are the same mistake in different clothes.
   had been waiting eleven hours**, which would have been the most confidently wrong number on the
   page.
 
+### The two halves deploy separately, and the gap was measured rather than reasoned about
+- **A SELECT naming `publication.pr_url` before conduct has migrated raises `no such column`**, which
+  `source_fleet` catches and reports as an unreadable database - so the whole board would have read
+  "absent, not zero" over a healthy fleet for the length of the deployment window. The columns are
+  asked for on `pragma_table_info`, the same discriminator conduct's own `_migrate` uses. Caught by
+  running the new collector against a copy of the LIVE database, which is the only thing that could
+  have caught it: every synthetic fixture already had the column.
+- **The fix exposed a second defect that would never have healed.** A publication row written before
+  the columns existed holds NULL whether or not it opened a pull request, so the one round this fleet
+  has actually merged read **"not published"** - permanently, with no later run correcting it.
+  `pr_state` is `unknown` when the column could not be read at all, and `unknown` outranks the claim:
+  a null means "opened none" only when a url would have been visible had there been one.
+
 ### Hiding a row needs positive evidence, and the leg that supplies it fails open
 - **A merged round is hidden and an UNKNOWN one is not.** `pr_state` is `unknown` whenever GitHub
   could not be asked - no token, a timeout, an expired credential - and an unknown round stays on

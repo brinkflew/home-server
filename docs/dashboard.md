@@ -85,6 +85,23 @@ waiting on a person carries none at all**: the remaining phases sum to a couple 
 human timeout. "~1m" over a gate that has been waiting since last night would be the most
 confidently wrong number on the page.
 
+**TWO HALVES DEPLOY INDEPENDENTLY, AND THE FIRST VERSION TOOK THE BOARD DOWN BETWEEN THEM.** The
+collector arrives by `git pull` and the `publication.pr_url` column does not exist until conduct next
+opens the database and runs its own migration. A SELECT naming it raises `no such column: pr_url`,
+which `source_fleet` catches and reports as `conduct_db` unreadable - so the whole board would read
+"these rows are absent, not zero" over a perfectly healthy fleet for however long the two were out of
+step. **Measured against the live database before the migration had run, not reasoned about.** The
+columns are asked for on `pragma_table_info`, which is the same discriminator conduct's own `_migrate`
+uses.
+
+**AND THE FIX EXPOSED A SECOND ONE THAT WOULD HAVE BEEN PERMANENT.** A row written before those
+columns existed holds NULL whether or not it opened a pull request - a migration is a moment in time -
+so the one round this fleet has actually merged, `avanserv/upskald#249`, read **"not published"**. That
+is a confident lie that no later run would have corrected. `pr_state` is therefore `unknown` for a
+publication row this code could not have read a url off at all, and `unknown` outranks the
+"not published" claim: **a null only means "opened none" when a url would have been visible had there
+been one.**
+
 **HIDING A MERGED ROUND REQUIRES POSITIVE EVIDENCE, AND THE GITHUB LEG FAILS OPEN.** The board drops
 a round once its pull request is merged and offers the rest behind a toggle that prints its own
 count - a filter a reader cannot see is a filter that lies. `pr_state` is `unknown` whenever GitHub
