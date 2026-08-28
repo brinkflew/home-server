@@ -413,7 +413,18 @@ export interface FleetRound {
   /** conduct's tracker page for `odoo_task`, built host-side from ODOO_URL.
    *  Null when unset, which ChipLink renders as a disabled box. */
   odoo_url: string | null;
+  /**
+   * The branch this round pushed, or null before it pushed one.
+   *
+   * FROM THE RUN LOG FIRST AND `publication.branch` ONLY AS A FALLBACK. That
+   * row opens when the pull request does, which made this null for every round
+   * that was refused or is still in flight - so the board fell back to the
+   * worktree id and drew `upskald-ship` on every row ever rendered.
+   */
   branch: string | null;
+  /** The branch's page on GitHub, built host-side, or null when
+   *  AGENTS_REPO_SLUG is unset or disagrees with a pull request's own owner. */
+  branch_url: string | null;
   pr_url: string | null;
   pr_number: number | null;
   /**
@@ -441,6 +452,18 @@ export interface FleetRound {
   cost_usd: number | null;
   tokens_in: number | null;
   tokens_out: number | null;
+
+  /**
+   * Why the round's last failing run failed, in conduct's own sentences, or
+   * null. DISPLAYED AND NEVER PARSED, the same contract as `closed_why`.
+   *
+   * ON THE RUN ROW BECAUSE NOTHING ELSE IN conduct IS A LOG. `report` and
+   * `chain` are both keyed on a REUSED worktree and hold exactly one row, so
+   * either would answer about the newest round whichever round was asked
+   * about. Null also covers a refusal that happened before conduct opened a run
+   * row at all - so absent means "not recorded", never "nothing went wrong".
+   */
+  error: string | null;
 }
 
 /** A branch conduct pushed whose pull request has not opened yet. */

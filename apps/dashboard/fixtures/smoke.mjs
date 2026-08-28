@@ -15,8 +15,16 @@ const { posterHeight, posterUrl } = await load("/src/images.ts");
 const { containerTone, laneTone, quotaTone, heartbeatTone } = await load("/src/health.ts");
 const { dailyPeaks, utcDayStarts } = await load("/src/uptime.ts");
 const { fleetDocument, fleetUnreadable } = await load("/fixtures/fleet.ts");
-const { roundState, roundAction, roundProgress, roundEtaAt, isSettled, byUrgency } =
-  await load("/src/fleet.ts");
+const {
+  roundState,
+  roundAction,
+  roundBranch,
+  roundError,
+  roundProgress,
+  roundEtaAt,
+  isSettled,
+  byUrgency,
+} = await load("/src/fleet.ts");
 const fmt = await load("/src/format.ts");
 
 let failures = 0;
@@ -348,11 +356,71 @@ const refused = { ...by("wt-9f21c4"), kind: "refused" };
 check("a refusal is not offered an approve button", roundAction(refused).label, "look");
 check("...and goes to the task instead", roundAction(refused).href, by("wt-9f21c4").odoo_url);
 
+// THE BRANCH IS WHERE THE CODE IS, AND THIS COLUMN IS NOT ABOUT THAT. It is a
+// link in the pull-request column, which stays empty until a pull request
+// exists precisely so it can hold one - and the same destination twice on one
+// row is the row saying it does not know which of them matters.
+check("a round mid-gate is not asked to act on its own branch",
+  roundAction(by("wt-4ab810")).label, "-");
+check("...and the branch is a link in the column that holds it",
+  by("wt-4ab810").branch_url,
+  "https://github.com/avanserv/upskald/tree/feat/1601-intake-form");
+check("a merged round goes to its task", roundAction(by("wt-3311cd")).label, "task");
+
 // NO ACTION MAY EVER BE A RESUME URL. The board is a new place for one to
 // appear, so the assertion is repeated against every href it can produce.
+// THE BRANCH LINK IS A NEW HREF ON A ROW, which is exactly why this loop reads
+// every action rather than a list somebody maintains.
 const hrefs = fleet.rounds.map((r) => roundAction(r).href).filter(Boolean);
 check("no action is a resume URL", hrefs.some((h) => h.includes("/resume/")), false);
 check("no action leaks a signature", hrefs.some((h) => h.includes("resume_id")), false);
+
+console.log("\n-- why a round stopped, in conduct's own words --");
+
+// THE EXPANDER EXISTS ONLY WHERE THERE IS SOMETHING BEHIND IT. A round that
+// ended well has neither a run error nor a chain sentence, and an affordance
+// that opens onto nothing would be on every row.
+check("a healthy round has nothing to expand", roundError(by("wt-2c44b1")).length, 0);
+// conduct WRITES closed_why ON EVERY ROUND IT CLOSES, "reached the publish
+// path" included - so keying the expander on the sentence would put one on
+// every finished row, opening onto a reason nothing went wrong.
+check("...even though conduct wrote it a sentence",
+  by("wt-2c44b1").closed_why, "reached the publish path");
+check("a round that hit the cap shows conduct's sentence",
+  roundError(by("wt-88fa10")),
+  ["the gate failed on `e2e-test`", "the rounds are used up"]);
+
+// TWO SOURCES, AND THEY OFTEN SAY THE SAME THING. conduct builds closed_why as
+// "the flow failed: <the refusal>", so on a refused round the run's own reason
+// is repeated with a prefix - and printing both is the row saying it twice.
+check("a repeated reason is printed once",
+  roundError(by("wt-4ab810-r1")),
+  ["the gate failed in the pristine tree (exit 2, e2e-test)"]);
+
+// DISPLAYED AND NEVER PARSED, the same contract closed_why already had. The
+// outcome is derived from `published` and `pr_state`, which are structural.
+const rewritten = {
+  ...by("wt-88fa10"),
+  error: "something else entirely",
+  closed_why: "and a different sentence",
+};
+check("rewording a reason does not change the state",
+  roundState(rewritten).state, roundState(by("wt-88fa10")).state);
+check("...nor how many lines are shown", roundError(rewritten).length, 2);
+
+console.log("\n-- the branch has a name a person can read --");
+
+// THE `agents/` PREFIX IS ON EVERY BRANCH conduct PUSHES - publish.branch_name
+// refuses a name outside it, which is the whole boundary keeping a phase off
+// main - so printing it costs characters on every row and distinguishes none.
+check("the prefix is dropped for display",
+  roundBranch(by("wt-4ab810")), "feat/1601-intake-form");
+check("a round that has pushed nothing has no branch",
+  roundBranch(by("wt-77d3e0")), null);
+// AND ONLY THAT PREFIX. A branch that does not carry it is shown whole rather
+// than trimmed by guesswork.
+check("an unprefixed branch is left alone",
+  roundBranch({ ...by("wt-4ab810"), branch: "some/other-branch" }), "some/other-branch");
 
 console.log("\n-- progress, and the ETA that is usually a dash --");
 

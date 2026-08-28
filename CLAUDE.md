@@ -1120,6 +1120,22 @@ signal read green.
   read "not published" permanently, so `unknown` outranks that claim.
 - Two panels called "Runs" counted rounds and phase executions; `runs_today = 6` could be one round.
 
+### The gate rewrites the tree it is measuring, and the loop for that was unreachable
+- `make check` runs `format` and `lint` BEFORE everything that reads, so the tested tree is the
+  dirty one and committing it satisfies the assertion. A protected path and 2 MB are still refusals.
+- **`_review_step`'s "the base passes it, so the change broke it" could never print**: judge_base
+  refuses in exactly that case, so a red gate that was the change's fault never reached the review.
+- A REPAIR keeps the plan and re-runs dev and the gate; it must count itself, because `chain_open`
+  counts from inside the planning phase a repair skips. `MAX_ATTEMPTS` 2 -> 3.
+- The branch is pushed at the end of dev, so a refused round now leaves one on GitHub for ever.
+- `run.error` and `run.branch`: neither `report` nor `chain` is a log, both hold one row.
+
+### Two dashboard regressions the fixtures could not see, and four properties that never existed
+- `opened_at` was never emitted, so every row read "opened never"; `closed_why` was read only while
+  the round was open, so it was null on every round that had stopped.
+- `attempts !== null` does not catch `undefined`, and the collector and the bundle deploy
+  separately. `--ink*`/`--t-micro` are in no stylesheet, so those declarations did nothing.
+
 
 ## Target architecture
 

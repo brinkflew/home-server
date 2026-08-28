@@ -45,7 +45,15 @@ import { useFleetStore } from "@/stores/fleet";
 import { instant, range, value } from "@/api/prometheus";
 import { AGENTS } from "@/queries";
 import { heartbeatTone, quotaTone } from "@/health";
-import { byUrgency, roundAction, roundEtaAt, roundProgress, roundState } from "@/fleet";
+import {
+  byUrgency,
+  roundAction,
+  roundBranch,
+  roundError,
+  roundEtaAt,
+  roundProgress,
+  roundState,
+} from "@/fleet";
 import { toPoints } from "@/charts";
 import { dailyPeaks, utcDayStarts } from "@/uptime";
 import type { FleetRound, InstantSeries, Tone } from "@/types";
@@ -220,6 +228,19 @@ const showAll = ref(false);
  * means the template never contains the state machine, which is the whole point
  * of src/fleet.ts being a module.
  */
+/**
+ * Which row has its failure open, by worktree id, or null.
+ *
+ * ONE AT A TIME, which is useTooltip's rule and for its reason: two open
+ * failures on a board whose job is to say what needs acting on is two answers
+ * to a question nobody asked twice. Clicking the open row closes it.
+ */
+const opened = ref<string | null>(null);
+
+function toggle(id: string): void {
+  opened.value = opened.value === id ? null : id;
+}
+
 const board = computed(() =>
   [...(showAll.value ? fleet.rounds : fleet.openRounds)].sort(byUrgency).map((r) => ({
     r,
@@ -227,6 +248,15 @@ const board = computed(() =>
     action: roundAction(r),
     progress: roundProgress(r),
     eta: etaLabel(r),
+    branch: roundBranch(r),
+    error: roundError(r),
+    // THE NUMBER IS ONLY WORTH THE LINE WHEN IT IS NOT ONE. Every round that
+    // went through once reads "attempt 1 of 3", which is on every row and
+    // distinguishes none of them - and `> 1` also happens to be exactly the
+    // guard `!== null` was reaching for, without the hole: the collector and
+    // this bundle deploy separately, so a document written by an older one has
+    // no `attempts` key at all, and `undefined !== null` is true.
+    attempt: typeof r.attempts === "number" && r.attempts > 1 ? r.attempts : null,
   })),
 );
 
@@ -472,15 +502,31 @@ const costTip = computed(() => ({
           <span></span>
         </div>
 
-        <div v-for="row in board" :key="row.r.worktree_id" class="row" :class="row.tone">
-          <span class="cell state">
+        <template v-for="row in board" :key="row.r.worktree_id">
+        <div class="row" :class="[row.tone, { open: opened === row.r.worktree_id }]">
+          <!-- THE STATE CELL IS THE CONTROL, and only when there is something
+               behind it. A round that ended well has no error and no sentence,
+               so it gets no affordance at all rather than an expander that
+               opens onto nothing - which is what would put one on every row. -->
+          <component
+            :is="row.error.length ? 'button' : 'span'"
+            class="cell state"
+            :class="{ expander: row.error.length }"
+            :type="row.error.length ? 'button' : undefined"
+            :aria-expanded="row.error.length ? opened === row.r.worktree_id : undefined"
+            :title="row.error.length ? 'why this round stopped' : undefined"
+            @click="row.error.length && toggle(row.r.worktree_id)"
+          >
             <StatusDot
               :tone="row.tone"
               :live="row.r.closed_at === null && row.r.waiting_on === 'person'"
               :size="7"
             />
             <StatePill :label="row.state" :tone="row.tone" size="sm" />
-          </span>
+            <span v-if="row.error.length" class="caret" aria-hidden="true">{{
+              opened === row.r.worktree_id ? "-" : "+"
+            }}</span>
+          </component>
 
           <!-- The tracker task this round is carrying. A disabled chip when
                ODOO_URL is unset, which is also the `npm run dev` case. -->
@@ -497,16 +543,18 @@ const costTip = computed(() => ({
 
           <span class="cell mono phase">
             {{ phaseLabel(row.r) }}
-            <!-- ATTEMPT BESIDE PROGRESS, NOT INSTEAD OF IT. Each row IS one
-                 attempt, so this says which - and it is counted among rounds
-                 sharing a task, so a round whose runs predate run.odoo_task
-                 cannot have one. Hidden rather than guessed at "1 of 2". -->
-            <span v-if="row.r.attempts !== null" class="sub"
-              >attempt {{ row.r.attempts }} of {{ row.r.max_attempts }}</span
+            <!-- ATTEMPT BESIDE PROGRESS, NOT INSTEAD OF IT, AND ONLY WHEN IT
+                 IS NOT THE FIRST. Each row IS one attempt, so this says which -
+                 but "attempt 1 of 3" is on every round that went through once,
+                 which is a line on every row saying nothing. See `attempt` in
+                 the script: the same guard is what stops a document written by
+                 an older collector rendering "attempt  of 3". -->
+            <span v-if="row.attempt !== null" class="sub"
+              >attempt {{ row.attempt }} of {{ row.r.max_attempts }}</span
             >
           </span>
 
-          <span class="cell">
+          <span class="cell progress">
             <ProgressBar
               :ratio="row.progress"
               :tone="row.tone"
@@ -533,6 +581,18 @@ const costTip = computed(() => ({
               :href="row.r.pr_url"
               :title="`the pull request this round opened (${row.r.pr_state})`"
             />
+            <!-- NO PULL REQUEST YET, BUT THERE IS CODE TO READ. conduct
+                 pushes the branch at the end of dev, minutes before a gate that
+                 runs for fifteen to thirty - so for most of a round's life this
+                 column would otherwise be empty at exactly the moment somebody
+                 wants to look. The `agents/` prefix is dropped because it is on
+                 every branch and distinguishes none of them. -->
+            <ChipLink
+              v-else-if="row.branch"
+              :label="row.branch"
+              :href="row.r.branch_url"
+              title="the branch this round pushed, before any pull request"
+            />
             <!-- A ROUND THAT CLOSED WITHOUT ONE IS NOT A ROUND STILL WAITING.
                  A declined approval and a seven-day timeout both land here.
                  ONLY WHEN A URL WOULD HAVE BEEN VISIBLE HAD THERE BEEN ONE:
@@ -549,6 +609,19 @@ const costTip = computed(() => ({
             <ChipLink :label="row.action.label" :href="row.action.href" :title="row.action.title" />
           </span>
         </div>
+
+        <!-- WHY IT STOPPED, IN conduct'S OWN WORDS. A SIBLING ROW spanning
+             every column, not a child: `.row` is the grid, so anything inside
+             it becomes an eighth cell and shifts the seven beside it.
+             THE GATE LOG IS NAMED AND NEVER LINKED. It is ten megabytes on the
+             host, outside anything this container can serve, so a link would be
+             an offer the page cannot keep. -->
+        <div v-if="opened === row.r.worktree_id" class="row detail" :class="row.tone">
+          <div class="why mono">
+            <p v-for="(line, i) in row.error" :key="i">{{ line }}</p>
+          </div>
+        </div>
+        </template>
       </div>
 
       <p v-else-if="fleet.settledCount > 0" class="empty mono">
@@ -818,7 +891,7 @@ const costTip = computed(() => ({
   font: var(--t-label);
   text-transform: uppercase;
   letter-spacing: var(--track-label);
-  color: var(--ink-faint);
+  color: var(--fg-5);
   background: var(--surface-sunken);
 }
 
@@ -843,6 +916,67 @@ const costTip = computed(() => ({
   gap: 5px;
 }
 
+/* THE STATE CELL BECOMES A BUTTON when there is a failure behind it, and it has
+   to keep the grid it was a `span` in - a button's own display, padding, border
+   and font would all move the column. */
+.expander {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.expander:hover .caret,
+.expander:focus-visible .caret {
+  color: var(--fg-2);
+}
+
+.caret {
+  margin-left: auto;
+  font: var(--t-mono-xs);
+  color: var(--fg-5);
+}
+
+/* THE FAILURE, SPANNING EVERY COLUMN. A sibling row rather than a child of the
+   one above it: `.row` IS the grid, so anything inside it becomes another cell
+   and shifts the seven beside it. It keeps the row's tint so the two read as
+   one block, and drops the border between them for the same reason. */
+.row.open {
+  border-bottom: none;
+}
+
+.row.detail {
+  /* THE FIRST COLUMN AGAIN, so the reason starts under the row's subject rather
+     than under its state pill - it belongs to the change, not to the badge. */
+  grid-template-columns: var(--cols);
+  padding-top: 0;
+}
+
+.row.detail .why {
+  grid-column: 2 / -1;
+}
+
+.why {
+  font: var(--t-mono-xs);
+  color: var(--fg-4);
+  /* Wraps rather than scrolls: these are conduct's sentences, sometimes with a
+     list of file names in them, and a reader needs all of it. */
+  overflow-wrap: anywhere;
+}
+
+.why p {
+  margin: 0 0 3px;
+}
+
+.why p:last-child {
+  margin-bottom: 0;
+}
+
 .cell.phase .sub {
   white-space: nowrap;
 }
@@ -862,16 +996,18 @@ const costTip = computed(() => ({
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--ink-dim);
+  color: var(--fg-4);
 }
 
 .cell .sub {
-  font: var(--t-micro);
-  color: var(--ink-faint);
+  font: var(--t-mono-xs);
+  color: var(--fg-5);
 }
 
-/* The whole progress cell stacks, so the bar keeps its full width. */
-.row .cell:nth-child(4) {
+/* The whole progress cell stacks, so the bar keeps its full width. BY CLASS AND
+   NOT BY POSITION: this was :nth-child(4), which is correct only while nobody
+   adds a cell, and silently restyles its neighbour the moment somebody does. */
+.cell.progress {
   flex-direction: column;
   align-items: stretch;
   gap: 3px;
@@ -881,7 +1017,7 @@ const costTip = computed(() => ({
   margin-left: 10px;
   padding: 1px 7px;
   font: inherit;
-  color: var(--ink-dim);
+  color: var(--fg-4);
   background: var(--surface-sunken);
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
@@ -889,12 +1025,12 @@ const costTip = computed(() => ({
 }
 
 .toggle:hover {
-  color: var(--ink);
+  color: var(--fg-2);
   border-color: var(--line-strong);
 }
 
 .nolink {
-  color: var(--ink-faint);
+  color: var(--fg-5);
 }
 
 .orphans {

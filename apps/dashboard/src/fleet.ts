@@ -31,6 +31,11 @@ import type { FleetRound, Tone } from "@/types";
  *  round carries its own `phases`, so this is only the fallback. */
 export const PHASE_SEQUENCE = ["plan", "dev", "verify", "review", "ship"];
 
+/** conduct's `branch_prefix`, and every branch it pushes starts with it -
+ *  publish.branch_name refuses a name that does not, which is the whole thing
+ *  keeping a phase off `main`. Stripped for display only; never for a link. */
+export const BRANCH_PREFIX = "agents/";
+
 /** A state a round is in, and how it should read. */
 export interface RoundState {
   tone: Tone;
@@ -126,6 +131,12 @@ export function roundAction(r: FleetRound): RoundAction {
       title: "the pull request this round opened",
     };
   }
+  // THE BRANCH IS DELIBERATELY NOT HERE, though it is the thing to read while
+  // the gate runs. It is already a link in the pull-request column, which is
+  // empty until a pull request exists precisely so that it can hold one - and
+  // the same destination twice on one row is the row saying it does not know
+  // which of them matters. This column answers "what is owed to a person";
+  // that one answers "where is the code".
   if (r.closed_at !== null && r.odoo_url) {
     return { label: "task", href: r.odoo_url, title: "open this task in the tracker" };
   }
@@ -176,5 +187,49 @@ export function byUrgency(a: FleetRound, b: FleetRound): number {
   if (a.closed_at !== null && b.closed_at !== null) {
     return b.closed_at.localeCompare(a.closed_at);
   }
-  return a.opened_at.localeCompare(b.opened_at);
+  return (a.opened_at ?? "").localeCompare(b.opened_at ?? "");
+}
+
+/**
+ * The short branch name for the pull-request column, or null.
+ *
+ * THE `agents/` PREFIX IS DROPPED AND ONLY THAT ONE. It is on every branch
+ * conduct pushes - publish.branch_name refuses a name outside it, which is the
+ * whole boundary that keeps a phase off `main` - so printing it costs eight
+ * characters on every row and distinguishes none of them. What is left is the
+ * part a person recognises: `feat/1247-intake-form`.
+ */
+export function roundBranch(r: FleetRound): string | null {
+  if (!r.branch) return null;
+  return r.branch.startsWith(BRANCH_PREFIX) ? r.branch.slice(BRANCH_PREFIX.length) : r.branch;
+}
+
+/**
+ * The failure to show under a row. Empty when the round did not fail.
+ *
+ * TWO SOURCES AND THEY ARE NOT REDUNDANT. `error` is what a run recorded when
+ * it failed - one row per execution, so it is right for every round on the
+ * board. `closed_why` is conduct's sentence for the round as a whole, and it
+ * exists only for the newest round on a worktree, because `chain` holds one row.
+ * Both are DISPLAYED AND NEVER PARSED: nothing here or in roundState branches
+ * on their wording.
+ *
+ * THE TRIGGER IS THE OUTCOME, NOT THE PRESENCE OF A SENTENCE. conduct writes
+ * `closed_why` on every round it closes, including "reached the publish path" -
+ * which is a round that worked. Keying on it would put an expander on every
+ * finished row, most of them opening onto a sentence that says nothing went
+ * wrong. `tone` is the structural answer roundState already derived, so this
+ * asks that instead of reading the words.
+ */
+export function roundError(r: FleetRound): string[] {
+  if (roundState(r).tone === "ok") return [];
+  const lines: string[] = [];
+  if (r.error) lines.push(r.error);
+  // NOT WHEN IT REPEATS THE RUN'S OWN REASON. conduct builds closed_why as "the
+  // flow failed: <the refusal>", so on a refused round the two say the same
+  // thing twice and the second one is the one with the prefix.
+  if (r.closed_why && !(r.error && r.closed_why.includes(r.error.split("\n")[0]))) {
+    lines.push(r.closed_why);
+  }
+  return lines;
 }

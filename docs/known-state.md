@@ -3403,3 +3403,50 @@ three of them are the same mistake in different clothes.
   `home_server_agent_runs_today`, which counts **phase executions**. `runs_today = 6` could be one
   round or three, so leaving both labelled "Runs" put two numbers on one page that disagree with
   each other and gave a reader no way to tell which. The strip is "Phase runs" now.
+
+### The gate's own formatting closed the round, and the loop for it was unreachable
+- **`make check` rewrites the tree it is measuring**, and until 2026-08-28 that was a terminal
+  refusal: `after the gate ran, the tree is not clean: web/bun.lock`. Three rounds died on it in one
+  morning. Committing what the gate wrote is sound because of the target ORDER - `check-gate:
+  version-check format lint deadcode deps type-check unit-test verify-site e2e-test`, so `format`
+  and `lint` are prerequisites of everything that reads and every test ran against the mutated tree.
+  Measured on the mirror, not assumed.
+- **A protected path is still refused**, and that is reachable rather than hypothetical: `format`
+  runs over the whole tree and `Makefile` is in it. So is anything past `GATE_DIFF_MAX`, which is
+  2 MB because this repository's lockfiles are 1.2 MB rewritten whole - **the first draft said
+  512 KB and would have refused the exact case the repair exists for.**
+- **`_review_step`'s "the gate failed and the base passes it" could never print.** `judge_base`
+  refuses precisely in that case, so a red gate that was the change's fault returned `ok: false` and
+  never reached the review at all - the only one that ever got there was one the base already
+  failed, where `again` is false by construction. The retry loop existed on paper for as long as it
+  has existed. `report["retryable"]` is set off the MEASUREMENT, never off the wording of a reason.
+- **A REPAIR IS NOT A ROUND**: a review's findings may invalidate the plan, a red gate cannot, so a
+  repair keeps `plan` in `done` and re-runs dev and the gate. `resume: True` is the whole mechanism
+  and the only thing `_may_skip` reads. **It must count itself** - `chain_open` counts a round from
+  inside the planning phase, which a repair skips - and must put the count back if the flow never
+  starts, or a Windmill outage closes a change as "the rounds are used up".
+- `MAX_ATTEMPTS` 2 -> 3: two was the whole loop while a refusal ENDED the run, so leaving it would
+  have made the fix a cut in what a review may ask for.
+- **The branch is pushed at the end of dev now**, behind `verify.inspect`'s cheap refusals, so the
+  code is readable during the thirty minutes the gate takes. A refused round therefore leaves a
+  branch on GitHub, and conduct never deletes a ref.
+- **`run.error` and `run.branch`, because neither `report` nor `chain` is a log** - both keyed on a
+  REUSED worktree, both holding one row. Same premise that drew one row on the board where there
+  should have been eleven.
+
+### Two regressions the fixtures could not see, and four properties that never existed
+- **`opened_at` was never emitted** after the board moved off `chain`, so every row read "opened
+  never" and `byUrgency` would throw on two same-rank open rounds. `types.ts` declares it
+  non-optional and every fixture supplied it, so nothing failed - only the live document was missing
+  the key.
+- **`closed_why` was read only while the chain row was OPEN**, and the same branch nulls `closed_at`
+  - so the one field whose purpose is saying why something stopped was null on every round that had
+  stopped. It belongs to the LATEST round on a worktree, open or closed, because `chain` holds one
+  row and that is the round it speaks for.
+- **`v-if="attempts !== null"` does not defend against `undefined`**, and the collector and the
+  bundle deploy separately - so a document written by an older collector rendered `attempt  of 3`.
+  It renders only above one now, because "attempt 1 of 3" is a line on every row saying nothing.
+- **`--ink`, `--ink-dim`, `--ink-faint` and `--t-micro` are in no stylesheet.** Every declaration
+  naming one was invalid-at-computed-value-time, so the board's sub-lines silently inherited the
+  row's font and colour. `.row .cell:nth-child(4)` was the matching hazard in the other direction:
+  correct only while nobody adds a cell.
