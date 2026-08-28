@@ -14,7 +14,7 @@
 // should not have been offered.
 // =============================================================================
 
-import type { FleetControl, FleetRound } from "./types";
+import type { FleetControl, FleetRound, Tone } from "./types";
 import type { ControlAction } from "./api/control";
 
 /** A control as the board renders it: what it does, and why it may not. */
@@ -63,6 +63,56 @@ export function intakeState(
     return { on: null, source: "default", at: entry.at, note: entry.note };
   }
   return { on: entry.value === "on", source: "set", at: entry.at, note: entry.note };
+}
+
+/**
+ * The intake switch as a control: what it reads, and the one command that moves
+ * it.
+ *
+ * THE LABEL AND THE ACTION COME OFF ONE BRANCH, which is the entire reason this
+ * exists rather than staying two ternaries in the template. The board draws this
+ * switch TWICE now - in the fleet header, where it is the first thing the page
+ * says, and in the Intake panel, which is the record of who set it and why. The
+ * last time this application drew one fact in two places the two drawings
+ * disagreed about a tone no fixture carried, and nothing could see it. A chip
+ * reading `arm` that sends `intake_off` is that same defect with a far worse
+ * consequence: a button that does the opposite of what it says.
+ *
+ * WHAT IT DELIBERATELY DOES NOT CARRY is the sentence printed under each
+ * drawing. The header answers "is the fleet armed"; the panel answers "who said
+ * so, and why". Those are different sentences on purpose, so they are composed
+ * at each site rather than shared and forced to become one.
+ */
+export interface IntakeSwitch {
+  /** True armed, false disarmed, null when nobody has overridden the descriptor. */
+  on: boolean | null;
+  /** The word the board prints for that state. */
+  state: string;
+  /** `null` takes the off tone, exactly as the panel has always coloured it:
+   *  nobody has said, so the board must not claim the fleet is running. */
+  tone: Tone;
+  /** The chip: what pressing it will do, never what is true now. */
+  label: string;
+  action: ControlAction;
+  title: string;
+  source: "set" | "default";
+  at: string | null;
+  note: string | null;
+}
+
+/** The switch for one project, from the same row `intakeState` reads. */
+export function intakeSwitch(control: FleetControl, project: string): IntakeSwitch {
+  const now = intakeState(control, project);
+  return {
+    ...now,
+    state: now.on === null ? "as shipped" : now.on ? "armed" : "disarmed",
+    tone: now.on ? "ok" : "off",
+    label: now.on ? "disarm" : "arm",
+    action: now.on ? "intake_off" : "intake_on",
+    title: now.on
+      ? "stop the fleet choosing its own work - a round already open still runs to its gate"
+      : "let the fleet choose its own work",
+  };
 }
 
 /**

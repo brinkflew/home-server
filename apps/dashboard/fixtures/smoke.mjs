@@ -25,7 +25,7 @@ const {
   isSettled,
   byUrgency,
 } = await load("/src/fleet.ts");
-const { holdExpiresIn, intakeState, roundControls, HOLD_TIMEOUT_S } =
+const { holdExpiresIn, intakeState, intakeSwitch, roundControls, HOLD_TIMEOUT_S } =
   await load("/src/control.ts");
 const fmt = await load("/src/format.ts");
 
@@ -532,6 +532,35 @@ check("...without claiming to know the default", intakeState(ctl, "other").on, n
 // this - reading it as `off` would invent a state nothing chose.
 const odd = { ...ctl, intake: [{ subject: "upskald", value: "maybe", at: null, note: null }] };
 check("a value neither on nor off defers too", intakeState(odd, "upskald").on, null);
+
+// THE LABEL AND THE COMMAND COME OFF ONE BRANCH, and this is what holds them
+// there. The board draws this switch TWICE now - once in the fleet header,
+// where it is the first thing the page says, and once in the Intake panel - and
+// the last time this application drew one fact in two places, the two drawings
+// disagreed about a tone no fixture carried and nothing could see it. Here the
+// same defect would be a chip reading `arm` that sends `intake_off`: a button
+// doing the exact opposite of what it says.
+const armed = intakeSwitch(ctl, "upskald");
+const disarmed = intakeSwitch(
+  { ...ctl, intake: [{ subject: "upskald", value: "off", at: null, note: null }] }, "upskald");
+const shipped = intakeSwitch(ctl, "other");
+
+check("armed offers to disarm",
+  [armed.state, armed.tone, armed.label, armed.action],
+  ["armed", "ok", "disarm", "intake_off"]);
+check("disarmed offers to arm",
+  [disarmed.state, disarmed.tone, disarmed.label, disarmed.action],
+  ["disarmed", "off", "arm", "intake_on"]);
+// THE THIRD STATE, WHICH NO FIXTURE CARRIES and which is exactly why it is
+// asserted here rather than left to a document. Nobody has overridden conduct's
+// descriptor, so the board may not claim the fleet is running: it takes the off
+// tone and offers to arm.
+check("nobody having said reads as shipped",
+  [shipped.state, shipped.tone, shipped.label, shipped.action],
+  ["as shipped", "off", "arm", "intake_on"]);
+check("the chip and the command never disagree",
+  [armed, disarmed, shipped].every((sw) => (sw.label === "disarm") === (sw.action === "intake_off")),
+  true);
 
 console.log("\n-- the board puts what needs acting on at the top --");
 
