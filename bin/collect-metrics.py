@@ -4321,78 +4321,93 @@ def source_round_detail(m):
     DELETES, which a directory contracted to "nothing accumulates" needs once
     the filenames stop being fixed.
 
+    EVERY METRIC IS EMITTED EXACTLY ONCE, AT THE END. `Metrics.add` APPENDS a
+    sample line; it does not replace one. Declaring a metric early and filling
+    it in later - which reads perfectly and is what the first draft did - puts
+    TWO sample lines for one name in the exposition file, and a duplicate sample
+    rejects the WHOLE scrape, not just that series. Same family as the fact-key
+    collision bin/lint-repo.sh leg 9 exists for.
+
     IT MUST NEVER RAISE for the reason source_fleet gives: the fleet page is one
     of six, and an unreadable conduct.db must cost this source and nothing else.
     """
-    m.add("home_server_agent_round_documents", 0, None,
+    documents = 0
+    total = 0
+    pending = 0
+    redacted = 0
+    written = set()
+    conn = None
+
+    if os.path.exists(CONDUCT_DB):
+        pairs = _round_redaction(load_env())
+        if pairs is None:
+            # FAIL CLOSED. See _round_redaction: this is the render-env.sh
+            # window, and writing an unredacted transcript is not a recoverable
+            # mistake. The sweep is skipped too - deleting what is there would
+            # take the browser's only copy on the way past.
+            print("collect-metrics: round detail skipped - .env unreadable, so "
+                  "no redaction pass could be built", file=sys.stderr)
+        else:
+            redacted = 1
+            try:
+                conn = sqlite3.connect("file:%s?mode=ro" % CONDUCT_DB, uri=True,
+                                       timeout=2.0)
+                conn.execute("PRAGMA busy_timeout = 2000")
+                rounds = _fleet_derive_rounds(conn)[:ROUND_KEEP]
+                windows = _round_windows(rounds)
+                index = _round_log_index()
+                spoken_for = {row["log"] for row in _fleet_rows(
+                    conn, "SELECT log FROM base_gate WHERE log IS NOT NULL")
+                    if row.get("log")}
+                budget = {"files": ROUND_LOG_FILES_PER_RUN,
+                          "bytes": ROUND_LOG_BYTES_PER_RUN}
+                for row in rounds:
+                    key = _round_key(row)
+                    path = _round_path(key)
+                    # KEPT WHETHER OR NOT IT IS REWRITTEN THIS PASS. The sweep
+                    # deletes what is not in this set, and a round that was
+                    # already current would otherwise be swept for being fresh.
+                    written.add(path)
+                    body, short = _round_document(conn, row, windows[key], index,
+                                                  spoken_for, pairs, budget)
+                    pending += short
+                    if body is None:
+                        continue
+                    if _ROUND_DRY_RUN[0]:
+                        sys.stdout.write("# %s\n%s"
+                                         % (os.path.basename(path), body))
+                    else:
+                        write_document(path, body)
+            except (sqlite3.Error, OSError, IndexError, ValueError) as exc:
+                print("collect-metrics: round detail: %s" % exc, file=sys.stderr)
+            finally:
+                if conn is not None:
+                    conn.close()
+            documents, total = _round_sweep(written)
+
+    m.add("home_server_agent_round_documents", documents, None,
           "Round documents on disk after this run. Each is one round's events, "
           "its approval card and its rendered phase conversations.")
-    m.add("home_server_agent_round_bytes", 0, None,
+    m.add("home_server_agent_round_bytes", total, None,
           "Total size of those documents.")
-    m.add("home_server_agent_round_pending", 0, None,
-          "Rounds whose logs have not been rendered yet. Non-zero is ordinary "
+    m.add("home_server_agent_round_pending", pending, None,
+          "Phases whose logs have not been rendered yet. Non-zero is ordinary "
           "on a cold start - the per-run budget makes it converge over several "
           "passes rather than blow the unit's 25-second timeout.")
-    m.add("home_server_agent_round_redacted", 0, None,
+    m.add("home_server_agent_round_redacted", redacted, None,
           "1 when the redaction pass was built from .env and the render ran. 0 "
           "means .env could not be read and NOTHING was rendered - the pass "
           "fails closed, because a redactor built from an empty environment "
           "looks exactly like one that found nothing to redact.")
 
-    if not os.path.exists(CONDUCT_DB):
-        return
-
-    pairs = _round_redaction(load_env())
-    if pairs is None:
-        # FAIL CLOSED. See _round_redaction: this is the render-env.sh window,
-        # and writing an unredacted transcript is not a recoverable mistake.
-        print("collect-metrics: round detail skipped - .env unreadable, so no "
-              "redaction pass could be built", file=sys.stderr)
-        return
-    m.add("home_server_agent_round_redacted", 1, None, None)
-
-    conn = None
-    written = {}
-    pending = 0
-    try:
-        conn = sqlite3.connect("file:%s?mode=ro" % CONDUCT_DB, uri=True,
-                               timeout=2.0)
-        conn.execute("PRAGMA busy_timeout = 2000")
-        rounds = _fleet_derive_rounds(conn)[:ROUND_KEEP]
-        windows = _round_windows(rounds)
-        index = _round_log_index()
-        spoken_for = {row["log"] for row in _fleet_rows(
-            conn, "SELECT log FROM base_gate WHERE log IS NOT NULL")
-            if row.get("log")}
-        budget = {"files": ROUND_LOG_FILES_PER_RUN,
-                  "bytes": ROUND_LOG_BYTES_PER_RUN}
-        for row in rounds:
-            key = _round_key(row)
-            path = _round_path(key)
-            written[key] = path
-            body, short = _round_document(conn, row, windows[key], index,
-                                          spoken_for, pairs, budget)
-            pending += short
-            if body is None:
-                continue
-            if _ROUND_DRY_RUN[0]:
-                sys.stdout.write("# %s\n%s" % (os.path.basename(path), body))
-            else:
-                write_document(path, body)
-    except (sqlite3.Error, OSError, IndexError, ValueError) as exc:
-        print("collect-metrics: round detail: %s" % exc, file=sys.stderr)
-    finally:
-        if conn is not None:
-            conn.close()
-
-    kept, total = _round_sweep(set(written))
-    m.add("home_server_agent_round_documents", kept, None, None)
-    m.add("home_server_agent_round_bytes", total, None, None)
-    m.add("home_server_agent_round_pending", pending, None, None)
-
 
 def _round_sweep(keep):
-    """Delete round documents for rounds that have aged off the board.
+    """`keep` IS A SET OF FULL PATHS, not keys - the first draft passed
+    `set(written)` over a dict and got its keys, so no path ever matched and
+    every document was deleted immediately after being written. The symptom was
+    a metric reading 0 documents beside another reading 35 phases pending.
+
+    Delete round documents for rounds that have aged off the board.
 
     THE FIRST RECONCILIATION THIS FILE PERFORMS, and it is what keeps the
     directory's own contract - "rewritten whole on every run, nothing
