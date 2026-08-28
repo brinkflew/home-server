@@ -33,6 +33,25 @@ bundle never sees, and conduct answers the resulting suspended step on its next 
 browser writes to a container; the host polls. **`paths.ts` still carries `conduct` as outbound-only,
 and `bin/lint-repo.sh` now enforces that** rather than only asserting it in prose.
 
+**THE INTAKE SWITCH IS DRAWN TWICE, AND THAT IS THE FIX RATHER THAN THE PROBLEM.** It shipped in the
+Intake panel alone, at the foot of the Agents page below six other panels, where it was correct,
+enabled and *missed* - the first thing asked of it after it shipped was where it was. It is now also
+a tile in the fleet header, beside conduct, phase, quota and worktrees, because it is the one
+control that decides whether any of the rest of that page has anything to describe. The panel keeps
+its copy: **the header answers "is the fleet armed", the panel answers "who said so, and why"**, and
+only the panel's sentence carries the note.
+
+**What must not be drawn twice is the decision**, which is why `control.ts` gained `intakeSwitch()`.
+The state word, the tone, the chip's label and the command it sends all come off one branch there,
+so a chip reading `arm` cannot send `intake_off` - the same defect as the findings strip and the
+list disagreeing about a tone, with a far worse consequence than a colour. `fixtures/smoke.mjs`
+asserts the pairing across all three states, including the `as shipped` case no fixture carries.
+
+**And the Agents page no longer teleports `read only` into the toolbar**, because it is not: intake,
+hold, release and restart all act. It says `asks the fleet`, which is the weaker claim the chips
+themselves make - conduct applies a command on its next cycle, so the board asks and never does. The
+other four pages keep `read only`, correctly.
+
 **Six sources, and the split is the point:**
 
 | Source | Carries |

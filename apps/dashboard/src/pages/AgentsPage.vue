@@ -47,7 +47,7 @@ import { instant, range, value } from "@/api/prometheus";
 import { AGENTS } from "@/queries";
 import { heartbeatTone, quotaTone } from "@/health";
 import { control } from "@/api/control";
-import { holdExpiresIn, intakeState, roundControls } from "@/control";
+import { holdExpiresIn, intakeSwitch, roundControls } from "@/control";
 import {
   byUrgency,
   roundAction,
@@ -255,13 +255,17 @@ function toggle(id: string): void {
 const controlState = computed(
   () => fleet.doc?.control ?? { available: false, restart_floor_sec: 600, intake: [], holds: [] },
 );
-const intake = computed(() => intakeState(controlState.value, "upskald"));
+const intake = computed(() => intakeSwitch(controlState.value, "upskald"));
 const controlDisabled = computed(() =>
   controlState.value.available ? null : "the control route has no token - see WINDMILL_DASHBOARD_TOKEN",
 );
 
 async function toggleIntake(): Promise<void> {
-  await control({ action: intake.value.on ? "intake_off" : "intake_on", project: "upskald" });
+  // THE ACTION IS THE ONE THE CHIP IS LABELLED WITH, read rather than
+  // re-derived. Two ternaries over one boolean agree only for as long as
+  // somebody keeps them agreeing, and the failure is a button that does the
+  // opposite of what it reads.
+  await control({ action: intake.value.action, project: "upskald" });
   // ASKED, NOT DONE. conduct applies it on its next cycle, so the honest way to
   // learn what happened is the next document rather than an optimistic local
   // flip - which would show `armed` over a fleet that had refused.
@@ -446,7 +450,11 @@ const costTip = computed(() => ({
 <template>
   <div class="page">
     <Teleport defer to="#toolbar">
-      <span class="mono note">read only</span>
+      <!-- NOT "read only" ANY MORE, and this page is the only one of the five
+           where that is so: intake, hold, release and restart all act. What is
+           still true is the weaker claim the chips themselves make - conduct
+           applies them on its next cycle, so the board asks and never does. -->
+      <span class="mono note">asks the fleet</span>
       <WindowPicker />
     </Teleport>
 
@@ -494,6 +502,27 @@ const costTip = computed(() => ({
             {{ fmt.number(m?.worktreesOnDisk ?? Number.NaN) }} on disk
           </span>
           <span class="mono sub">leases in the database, directories on disk</span>
+        </div>
+
+        <!-- THE ONE CONTROL THAT DECIDES WHETHER ANY OF THE REST HAPPENS, and
+             it is in the header for that reason. It was only in the Intake
+             panel at the foot of the page, six panels down, where it was
+             correct, enabled, and missed. The panel keeps it too: this tile
+             answers "is the fleet armed", that one answers "who said so". -->
+        <div class="tile">
+          <span class="mono tlabel">intake</span>
+          <span class="tvalue">
+            <StatePill :label="intake.state" :tone="intake.tone" size="sm" />
+            <ChipButton
+              :label="intake.label"
+              :disabled="controlDisabled"
+              :act="() => toggleIntake()"
+              :title="intake.title"
+            />
+          </span>
+          <span class="mono sub">{{
+            intake.source === "set" ? `set by hand ${fmt.sinceIso(intake.at)}` : "conduct's own default"
+          }}</span>
         </div>
       </div>
     </PanelBox>
@@ -889,23 +918,24 @@ const costTip = computed(() => ({
              "default" does not claim to know WHICH default. -->
         <div class="switch">
           <span class="mono sname">choose its own work</span>
-          <span class="mono" :class="intake.on ? 'onish' : 'offish'">{{
-            intake.on === null ? "as shipped" : intake.on ? "armed" : "disarmed"
+          <span class="mono" :class="intake.tone === 'ok' ? 'onish' : 'offish'">{{
+            intake.state
           }}</span>
+          <!-- THE SENTENCE IS THIS DRAWING'S OWN, and the header's is not. This
+               one carries the note, because the panel is the record of who set
+               it and why; the header carries only the age, because it answers a
+               different question. The state, the chip and the command are the
+               parts that must not differ, and those come from one function. -->
           <span class="mono sub">{{
             intake.source === "set"
               ? `set by hand ${fmt.sinceIso(intake.at)}${intake.note ? ` - ${intake.note}` : ""}`
               : "conduct's own default, unchanged"
           }}</span>
           <ChipButton
-            :label="intake.on ? 'disarm' : 'arm'"
+            :label="intake.label"
             :disabled="controlDisabled"
             :act="() => toggleIntake()"
-            :title="
-              intake.on
-                ? 'stop the fleet choosing its own work - a round already open still runs to its gate'
-                : 'let the fleet choose its own work'
-            "
+            :title="intake.title"
           />
         </div>
 
