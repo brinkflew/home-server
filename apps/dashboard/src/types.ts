@@ -464,6 +464,49 @@ export interface FleetRound {
    * row at all - so absent means "not recorded", never "nothing went wrong".
    */
   error: string | null;
+
+  /**
+   * True while a person has stopped dispatch for this round's worktree.
+   *
+   * ON THE ROUND IN FLIGHT AND NO OTHER. A control row outlives the round it
+   * was set for, because the worktree is reused - so attaching it to every
+   * round on that tree would draw a finished one as though somebody were still
+   * holding it.
+   */
+  held: boolean;
+  /** When the hold was set, or null. What the board counts the 24h suspend
+   *  timeout down from. */
+  held_at: string | null;
+  /** The note that came with it, or null. Displayed, never parsed. */
+  held_why: string | null;
+}
+
+/** One switch a person has set, as `fleet.json` carries it. */
+export interface FleetControlEntry {
+  /** The project for an intake switch, the worktree for a hold. */
+  subject: string;
+  /** "on" or "off". A value that is neither means conduct deferred to the
+   *  descriptor, and the board must not claim to know which way. */
+  value: string;
+  at: string;
+  note: string | null;
+}
+
+/**
+ * What a person has asked the fleet to do, and whether they can ask at all.
+ *
+ * `available` IS NOT A GUESS ABOUT CADDY. The collector reads the same `.env`
+ * Caddy is given the token from. Unset means the route answers 401, so every
+ * control renders disabled with a reason rather than as a button that fails -
+ * absent and broken are different findings.
+ */
+export interface FleetControl {
+  available: boolean;
+  /** conduct's CONTROL_RESTART_MIN_SEC, so the board can disable a restart it
+   *  knows will be refused rather than sending one. */
+  restart_floor_sec: number;
+  intake: FleetControlEntry[];
+  holds: FleetControlEntry[];
 }
 
 /** A branch conduct pushed whose pull request has not opened yet. */
@@ -536,6 +579,7 @@ export interface FleetDocument {
   /** Keyed by phase name. Every phase is present, with nulls where there is no
    *  evidence - a key that came and went would force a reader to guess. */
   phase_stats: Record<string, FleetPhaseStat>;
+  control: FleetControl;
   totals: FleetTotals;
   /** `conduct_db`, and `github` once a pull request has been asked about. Not
    *  optional: a locked database and an idle fleet are the same empty list

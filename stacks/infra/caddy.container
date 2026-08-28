@@ -80,6 +80,13 @@ PublishPort=${PORT_CADDY_HTTPS}:443
 Environment=TZ=${TIMEZONE}
 Environment=DOMAIN=${DOMAIN}
 Environment=GANDI_BEARER_TOKEN=${GANDI_BEARER_TOKEN}
+# THE CONTROL ROUTE'S CREDENTIAL, AND THE WORKSPACE IT ADDRESSES. Caddy injects
+# the token on home.{$DOMAIN}/api/control/* so the dashboard can ask the fleet to
+# do something while holding nothing itself - the browser never sees it. Empty is
+# a supported state: the route then answers 401 and the board disables its
+# controls, which is the rollout rather than a fault. See .env.sample.
+Environment=WINDMILL_WORKSPACE=${WINDMILL_WORKSPACE}
+Environment=WINDMILL_DASHBOARD_TOKEN=${WINDMILL_DASHBOARD_TOKEN}
 # Upstream ports for the services whose listening port is itself set from the
 # environment, so the Caddyfile cannot drift from the service config.
 Environment=PORT_TDARR_WEB=${PORT_TDARR_WEB}

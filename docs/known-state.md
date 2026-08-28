@@ -3450,3 +3450,43 @@ three of them are the same mistake in different clothes.
   naming one was invalid-at-computed-value-time, so the board's sub-lines silently inherited the
   row's font and colour. `.row .cell:nth-child(4)` was the matching hazard in the other direction:
   correct only while nobody adds a cell.
+
+### The dashboard can act, and the shape that made that acceptable was already here
+- **The refused thing was an inbound RPC to the host**, in five files and always the same sentence:
+  a listener spends real containment to give an internet-facing container an RPC that spawns
+  `claude`. The shape that was NOT refused is the one this stack already runs on - a human clicks
+  Approve in Windmill, conduct polls, conduct forks `podman run`. A command is a suspended flow step
+  on that same path, so nothing new reaches the host and `paths.ts` is unchanged.
+- **`rewrite` is a stronger guard than a path allowlist**, and the difference is that there is
+  nothing to get past: whatever the client asked for is discarded and one literal substituted.
+  Proved with requests, because `caddy validate` cannot see this class of mistake - a GET is 405, a
+  traversal reaches the control flow with its path thrown away, a client's own `Authorization` is
+  replaced rather than forwarded, and the token appears on no other upstream. **A bare
+  `/api/control` does not match `/api/control/*`** and falls through to the bundle.
+- **`config.py` is read at import, and a restart reaps a live phase.** reconcile keys a lease on
+  conduct's OWN pid with no grace period, so arming intake by restarting would destroy a running
+  phase's network, datastores and worktree. The control row is read every cycle instead - the
+  descriptor stays the default and keeps its argument, and `serve._intake_keys` asks the same
+  question so the marker cannot contradict the pass.
+- **Absent is not `off`, three times over**: a missing row means nobody has said, a value that is
+  neither defers, and an action conduct does not recognise is REFUSED rather than ignored - a command
+  that silently does nothing sends the person away believing the fleet is held.
+- **A hold is bounded by something the person setting it does not control.** conduct does not answer
+  a held step and `CONDUCT_TIMEOUT` is 24h, so a hold left long enough does not pause a round, it
+  fails one. `agents.control_holds` is a `note` while it is young - a deliberate pause must not read
+  as a fault, which this repository learned the expensive way - and a `warn` past 20h.
+- **A restart cancels before it starts, and that ordering is the only one here that is not
+  interchangeable.** Closing the chain leaves the Windmill job suspended and still visible to the
+  dispatch loop, so a second flow is two rounds on one worktree and the next `prepare_worktree`
+  deletes the first one's commits. `CONTROL_RESTART_MIN_SEC` exists because a double click produces
+  exactly that.
+- **`paths.ts`'s "conduct is never a `to`" was prose in three files and enforced nowhere** - the
+  lint's paths leg `continue`d past every pseudo-node edge before its check ran. It is declared as
+  `NEVER_A_DESTINATION` now and asserted, and the assertion was PROVED to fire on a planted edge. A
+  first draft tried to read the direction out of the descriptions and failed six correct edges:
+  `internet` is "outbound only" because it is where traffic goes and `conduct` is "outbound only"
+  because it is what starts the connection - the same two words, opposite ends of an edge.
+- **`FLEET_MAX_ATTEMPTS` was still 2 while conduct had moved to 3**, found while adding the control
+  block beside it. Nothing failed and no test noticed; the board would have drawn "attempt 3 of 2"
+  the first time a change used its third. A second copy of a fact is a thing to check when the first
+  one moves, and there are now two of them in that file.

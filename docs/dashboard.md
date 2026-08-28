@@ -18,13 +18,20 @@ cd apps/dashboard && npm run dev                             # fixtures, no serv
 Library landed 2026-08-17** and needed a data layer before they needed a design. **Network split out
 of Services on 2026-08-18**, and needed a measurement that did not exist - see below.
 
-**It is READ-ONLY, and that is structural rather than a v1 shortcut.** The design has restart, pull,
-approve and terminate buttons, and no container here can have them: `container_t -> unconfined_t :
-unix_stream_socket connectto` is DENY and is not fixable by relabelling. Actions need a privileged
-host-side surface reachable from a browser, which is a decision to take on its own merits. **Every
-one of those chips is a deep link into the owning application instead**, which keeps the design's
-layout slot and is what its own fallback chip already did - `src/links.ts` holds the mapping, derived
-from `window.location.hostname` so no build-time variable is involved.
+**It READS, and since 2026-08-28 it can ask the fleet for three things.** The design has restart,
+pull, approve and terminate buttons, and no container here can have them: `container_t ->
+unconfined_t : unix_stream_socket connectto` is DENY and is not fixable by relabelling. Nothing here
+restarts a unit, pulls an image or terminates a stream, and every one of those chips is still a deep
+link into the owning application - `src/links.ts` holds the mapping, derived from
+`window.location.hostname` so no build-time variable is involved.
+
+**The three that act do not breach that rule, they route around it.** A host-side listener was the
+refused shape, in five files and always in the same sentence: it spends real containment to give an
+internet-facing container an RPC that spawns `claude`. So a command goes the way work already goes -
+the browser POSTs to Caddy, Caddy rewrites it to one literal Windmill path and adds a token the
+bundle never sees, and conduct answers the resulting suspended step on its next 60-second poll. The
+browser writes to a container; the host polls. **`paths.ts` still carries `conduct` as outbound-only,
+and `bin/lint-repo.sh` now enforces that** rather than only asserting it in prose.
 
 **Six sources, and the split is the point:**
 

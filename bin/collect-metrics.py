@@ -2956,9 +2956,19 @@ CONDUCT_MODULE_PREFIX = "conduct_"
 
 # conduct/config.py's MAX_ATTEMPTS. Duplicated rather than imported, because the
 # collector is stdlib-only and must run on a host where /var/agents is absent -
-# and a round board that cannot say "attempt 2 of 2" has lost the number that
+# and a round board that cannot say "attempt 2 of 3" has lost the number that
 # says whether the fleet is about to give up.
-FLEET_MAX_ATTEMPTS = 2
+#
+# IT WENT TO 3 ON 2026-08-28 AND THIS DID NOT FOLLOW, which is the whole cost of
+# duplicating a constant: nothing failed, no test noticed, and the board would
+# have drawn "attempt 3 of 2" the first time a change used its third. A second
+# copy of a fact is a thing to check when the first one moves.
+FLEET_MAX_ATTEMPTS = 3
+
+# conduct/config.py's CONTROL_RESTART_MIN_SEC, duplicated for the same reason and
+# with the same warning attached. The board disables a restart inside the floor
+# rather than offering one conduct will refuse.
+FLEET_RESTART_FLOOR_SEC = 600
 
 # How many recent runs the document carries. A run row holds a task body and a
 # raw verdict, both unbounded, and this file is fetched by a browser every five
@@ -3328,6 +3338,47 @@ def _fleet_phase_started(conn, worktree_id, phase):
         return None
 
 
+def _fleet_control(conn, env):
+    """What a person has asked the fleet to do, and whether they can ask at all.
+
+    THE SWITCH HAS TWO SOURCES AND THE BOARD HAS TO SAY WHICH IS IN FORCE.
+    conduct's descriptor is the shipped default and a `control` row overrides it
+    without a restart, so "is intake armed" now has an answer and a plausible
+    wrong one. The row is what this can read; the descriptor is a Python literal
+    in another repository and is not readable from here at all - so `source` says
+    `set` or `default`, and `default` deliberately does not claim to know WHICH
+    default. `conduct status` is where both are printed side by side.
+
+    `available` IS NOT A GUESS ABOUT CADDY. It reads the same .env Caddy is given
+    the token from, which is the only place either of them can agree. Unset means
+    the route answers 401, and the board must render its controls disabled and
+    say why rather than offering a button that fails - absent and broken are
+    different findings, which is the rule this whole document is written around.
+    """
+    block = {
+        "available": bool(str(env.get("WINDMILL_DASHBOARD_TOKEN") or "").strip()),
+        "restart_floor_sec": FLEET_RESTART_FLOOR_SEC,
+        "intake": [],
+        "holds": [],
+    }
+    if not _fleet_has(conn, "control", "name"):
+        # conduct and this file deploy separately, and the table arrives with a
+        # conduct restart. Absent is the ordinary state for a minute, not a fault.
+        return block
+    for row in _fleet_rows(conn, "SELECT name, value, at, note FROM control"
+                                 " ORDER BY at"):
+        name, _, subject = str(row["name"]).partition(":")
+        if not subject:
+            continue
+        entry = {"subject": subject, "value": row["value"], "at": row["at"],
+                 "note": _fleet_text(row.get("note"), 200)}
+        if name == "intake":
+            block["intake"].append(entry)
+        elif name == "hold":
+            block["holds"].append(entry)
+    return block
+
+
 def _fleet_odoo_url(env, odoo_task):
     """The tracker's own page for a task, or None.
 
@@ -3495,6 +3546,9 @@ def source_fleet(m, doc):
     doc.set("notices", [])
     doc.set("runs", [])
     doc.set("intake", [])
+    doc.set("control", {"available": False,
+                        "restart_floor_sec": FLEET_RESTART_FLOOR_SEC,
+                        "intake": [], "holds": []})
     doc.set("phase_stats", {p: {"median_seconds": None, "samples": 0}
                             for p in FLEET_PHASES})
     doc.set("totals", {"runs_today": None, "runs_failed_today": None,
@@ -3549,6 +3603,12 @@ def source_fleet(m, doc):
         # worktree, so it holds one row however much the fleet has done.
         rounds = _fleet_derive_rounds(conn)
         stats = _fleet_phase_stats(conn)
+        control = _fleet_control(conn, env)
+        doc.set("control", control)
+        # KEYED FOR THE ROW LOOP BELOW, because a hold belongs to a WORKTREE and
+        # rounds are what the board draws - several rounds share one worktree and
+        # only the newest of them is the one a hold is about.
+        holds = {entry["subject"]: entry for entry in control["holds"]}
 
         # `chain` IS STILL READ, FOR THE TWO THINGS IT IS ACCURATE ABOUT: the
         # round in flight, and the sentence conduct wrote when the newest round
@@ -3619,6 +3679,14 @@ def source_fleet(m, doc):
                        and chain["closed_at"] is None)
 
             row["max_attempts"] = FLEET_MAX_ATTEMPTS
+            # HELD IS ABOUT THE ROUND IN FLIGHT AND NO OTHER. A control row
+            # outlives the round it was set for - the worktree is reused - so
+            # attaching it to every round on that tree would draw a finished one
+            # as though somebody were still holding it.
+            entry = holds.get(row["worktree_id"]) if is_open else None
+            row["held"] = bool(entry and entry["value"] == "on")
+            row["held_at"] = entry["at"] if row["held"] else None
+            row["held_why"] = entry["note"] if row["held"] else None
             row["phases"] = list(FLEET_PHASES)
             row["ref"] = chain["ref"] if chain and is_open else None
             row["flow_job_id"] = chain["flow_job_id"] if chain and is_open else None

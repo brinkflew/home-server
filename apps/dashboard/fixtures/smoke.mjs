@@ -25,6 +25,8 @@ const {
   isSettled,
   byUrgency,
 } = await load("/src/fleet.ts");
+const { holdExpiresIn, intakeState, roundControls, HOLD_TIMEOUT_S } =
+  await load("/src/control.ts");
 const fmt = await load("/src/format.ts");
 
 let failures = 0;
@@ -466,6 +468,70 @@ const attempts1601 = fleet.rounds
 check("two attempts at one task are two rows", attempts1601, [1, 2]);
 check("...and each carries its own cost",
   new Set(fleet.rounds.filter((r) => r.odoo_task === 1601).map((r) => r.cost_usd)).size, 2);
+
+console.log("\n-- what a person may ask the fleet to do --");
+
+const ctl = fleet.control;
+const nowUnix = Date.now() / 1000;
+const open = by("wt-4ab810");
+const closed = by("wt-2c44b1");
+
+// A CONTROL THAT COULD NEVER APPLY IS NOISE ON EVERY CLOSED ROW. Holding a
+// finished round stops nothing, and restarting one has no chain for conduct to
+// close - it would be a second, less careful way to start a round.
+check("a finished round offers nothing", roundControls(closed, ctl, nowUnix).length, 0);
+check("a round in flight offers two things",
+  roundControls(open, ctl, nowUnix).map((c) => c.action), ["hold", "restart"]);
+
+// THE HELD ROUND OFFERS THE INVERSE, so the chip never lies about what pressing
+// it will do.
+check("a held round offers release rather than hold",
+  roundControls(by("wt-77d3e0"), ctl, nowUnix)[0].action, "release");
+// AND THE FIXTURE AGREES WITH ITSELF, which is not decoration: the collector
+// derives a round's `held` from the same rows the control block carries, so a
+// fixture where the two disagreed would pass whatever the derivation did.
+check("...and the document says the same thing twice",
+  ctl.holds.some((h) => h.subject === "wt-77d3e0" && h.value === "on")
+    && by("wt-77d3e0").held, true);
+
+// NO TOKEN IS NOT NO BUTTON, IT IS A BUTTON THAT SAYS WHY. Absent and broken
+// are different findings, and a chip that lands somewhere it cannot act is
+// worse than one that says less.
+const noToken = { ...ctl, available: false };
+const offers = roundControls(open, noToken, nowUnix);
+check("without a token every control is disabled", offers.every((c) => c.disabled !== null), true);
+check("...and each says why", offers.every((c) => c.disabled.includes("WINDMILL_DASHBOARD_TOKEN")), true);
+
+// conduct REFUSES A RESTART INSIDE ITS FLOOR, so offering one teaches a reader
+// to distrust the other chips. Two restarts close together are two flows on one
+// worktree, which is the hazard the floor exists for.
+const fresh = { ...open, started_at: new Date(Date.now() - 30_000).toISOString() };
+const restart = roundControls(fresh, ctl, nowUnix).find((c) => c.action === "restart");
+check("a restart inside conduct's floor is not offered", restart.disabled !== null, true);
+check("...and the hold beside it still is",
+  roundControls(fresh, ctl, nowUnix)[0].disabled, null);
+
+// A HOLD IS BOUNDED BY SOMETHING THE PERSON SETTING IT DOES NOT CONTROL: conduct
+// does not answer a held step and the step's own timeout is 24h, so a hold left
+// long enough does not pause a round, it fails one.
+check("a round nobody held has no countdown", holdExpiresIn(open, nowUnix), null);
+const old = { ...open, held: true,
+  held_at: new Date(Date.now() - 23 * 3600 * 1000).toISOString() };
+const left = holdExpiresIn(old, nowUnix);
+check("a hold counts down to the step's timeout", left > 0 && left < 3700, true);
+check("...from 24 hours", HOLD_TIMEOUT_S, 86400);
+
+// THE SWITCH HAS TWO SOURCES AND THE BOARD MUST SAY WHICH IS IN FORCE. The
+// collector cannot read a Python literal in another repository, so "default"
+// deliberately does not claim to know which default.
+check("a row that set it says so", intakeState(ctl, "upskald").source, "set");
+check("...and which way", intakeState(ctl, "upskald").on, true);
+check("a project nobody set defers", intakeState(ctl, "other").source, "default");
+check("...without claiming to know the default", intakeState(ctl, "other").on, null);
+// conduct defers to the descriptor on a value it does not define, and so must
+// this - reading it as `off` would invent a state nothing chose.
+const odd = { ...ctl, intake: [{ subject: "upskald", value: "maybe", at: null, note: null }] };
+check("a value neither on nor off defers too", intakeState(odd, "upskald").on, null);
 
 console.log("\n-- the board puts what needs acting on at the top --");
 

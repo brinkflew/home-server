@@ -53,6 +53,24 @@ export const PSEUDO_NODES: Record<string, string> = {
   runner: "a phase runner, podman run --rm on its own network - outbound only",
 };
 
+/**
+ * The pseudo-nodes that may never appear as a `to`, declared so that something
+ * checks it.
+ *
+ * IT WAS PROSE IN THREE FILES AND ENFORCED NOWHERE. `bin/lint-repo.sh`'s paths
+ * leg `continue`s past every edge touching a pseudo-node before its reachability
+ * check runs, so `{ from: "wan", to: "conduct" }` passed the lint, passed the
+ * smoke test, and drew an arrow into the host that contradicts the comment above
+ * it. For conduct that comment is not modelling convenience - a route INTO the
+ * host is what five files here refuse, in the same sentence each time.
+ *
+ * DECLARED RATHER THAN DERIVED FROM THE DESCRIPTIONS. `internet` is "outbound
+ * only" because it is where outbound traffic goes; `conduct` is "outbound only"
+ * because it is what starts the connection. Same two words, opposite ends of an
+ * edge, so the direction cannot be read out of the prose.
+ */
+export const NEVER_A_DESTINATION = ["conduct", "runner"];
+
 export interface Path {
   from: string;
   to: string;

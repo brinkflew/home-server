@@ -14,6 +14,10 @@
  * The design's layout slot and column widths are unchanged; only the semantics
  * are, and its own fallback chip already said "Open".
  *
+ * ChipButton.vue IS THE EXCEPTION AND IT IS NOT ONE OF THESE. It sends a command
+ * to the control plane conduct polls; it still reaches nothing itself, and it
+ * still cannot restart a unit or pull an image. This component stays the rule.
+ *
  * A NULL href RENDERS A DISABLED BOX, NOT A LINK. That is the `npm run dev` case,
  * where the hostname is localhost and there is no sibling to reach - and a chip
  * that silently pointed at `sonarr.localhost` would be worse than one that says
