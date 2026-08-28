@@ -2134,6 +2134,24 @@ Holding is `ok` with the reason in the message; the two are told apart by the ag
 string. The bound is four cadences rather than one, because a look is skipped while anything is in
 flight and a round is most of an hour.
 
+**Pausing it is the same word and one restart, and the restart is the part with a cost.** The
+descriptor is read at import, so `"intake": False` moves nothing until `systemctl --user restart
+home-server-conduct` - and `reconcile` keys a lease on **conduct's own pid** with no grace period on
+that branch, so restarting on top of a live phase reaps its network, its datastores and its worktree
+while the container is still running. Read `phase_in_flight` out of the marker and restart on a `0`.
+Nothing else needs unwinding: a round already open runs to its gate, the run form still works, and
+every continuation, publication and approval is untouched - the pass this skips is the only writer
+of the claim row.
+
+**A pause must not read as a fault, and it did.** The `intake` table outlives the flag, so a project
+armed once keeps `intake_last_at` at its last look for ever - which ages past `agents.intake`'s hour
+and reaches `AgentCheckWarning`, the catch-all over the whole section, every thirty minutes.
+`serve._intake_keys` skips a disarmed project for that reason, so the keys go absent with the switch
+and the check lands on its silent `note` branch. That branch names the switch and not the history,
+because absence cannot tell a fleet that has never chosen from one that was stopped - and the
+docstring promising exactly this behaviour had been there, unimplemented, since before anything
+could be turned off.
+
 ## What is deliberately not built yet
 
 **No gate runs after the model call, and adding one would break a good run.** `make lint` is
