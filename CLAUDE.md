@@ -1058,6 +1058,17 @@ signal read green.
   would take every bar's peak from the previous day. A NULL `run.result` is in flight, not failed.
   The oldest approval's age lives in a check's message and in no fact.
 
+### The lane that held its work and stopped saying so
+- **The hold loop napped without writing the marker**, so `ci.heartbeat` warned on two perfectly
+  healthy held lanes - 710s and 258s stale, units active, registrations online. Same defect as the
+  idle case forty lines below in the same file, where the fix and the reason were already written.
+  Nothing acted on it: `reboot-host.sh` needs `job_in_flight=1` AND a fresh heartbeat, and a held
+  lane has neither.
+- **The hold's "costs almost nothing" rested on a 6.9% duty cycle measured at two lanes holding
+  one**, and the third lane joined the held set by the predicate saying nothing. A 2026-08-28 spot
+  reading put the held lanes near 36-38% of a busy morning. The number is deleted rather than
+  restated, the behaviour is unchanged, and it is being re-measured in normal use.
+
 ### A lane at 45% of its cores was not waiting on the network
 - 45% mean, 71% p90, 76% max across a lane's two pinned cores with 0.8% iowait reads as "give it
   more cores", and does not mean that. **Both long jobs on upskald's critical path are

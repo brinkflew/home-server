@@ -3224,3 +3224,34 @@ and WebKit to be the hard one and offered to leave WebKit hosted. Both halves we
   matches no notice. `waiting_on: null` therefore means "in flight" and must not default to
   "conduct" - that would claim the fleet owns a step nobody has looked at. It is also why an
   orphaned notice has to be rendered separately: dropping it would hide an unanswered approval.
+
+### The lane that held its work and stopped saying so
+- **The hold loop napped without writing the marker, so a healthy held lane went stale.**
+  `bin/github-runner.sh` holds every lane above the first while a conduct phase is in flight, and
+  the loop that does it was `log` + `nap 60` and nothing else. `nap()` samples the scope every two
+  seconds and writes no marker, so the heartbeat moved once per HOLD rather than once per poll:
+  measured on 2026-08-28 at **710s on lane 3 and 258s on lane 2**, both units `active/running`,
+  `NRestarts=0`, `Result=success`, both registrations online, six jobs each that day. `ci.heartbeat`
+  grades at 300s against a 30s poll, and a `conduct_dev` phase runs past thirty minutes - so **every
+  phase longer than five minutes warned on two lanes that were working exactly as designed**.
+- **It is the same defect as the idle case forty lines below, in the same file**, where the fix was
+  already made and the comment already says why: an idle lane is the normal state, it was measured
+  at 465s stale on the first live lane, and "a check that fires on the normal case is a check
+  somebody learns to ignore." Holding is equally normal - it is what a lane above the first does
+  whenever the fleet works. Two places in one loop can sit still; only one of them had been found.
+- **Nothing acted on the stale value, which is why it survived.** `bin/reboot-host.sh` requires
+  `job_in_flight=1` **and** a fresh heartbeat before it warns that a reboot would kill CI work, and
+  a held lane has `job_in_flight=0` - so it was correctly silent rather than wrongly silent. The
+  cost was a false warning on the hourly battery and a grey lane on the dashboard, not a lost job.
+  The inverse case is the one still worth watching: a lane genuinely mid-job whose marker went stale
+  would be invisible to that gate, and only the busy branch's `marker_write 1` prevents it.
+- **The hold's cost was justified by a number that had stopped being true, and the number is now
+  deleted rather than restated.** The comment read "at a measured 6.9% phase duty cycle this costs
+  almost nothing and CI never drops to zero", off a 30-day mean of
+  `home_server_agent_phase_in_flight` taken when the fleet was two lanes and the predicate held
+  exactly one. Both halves moved underneath it: the third lane joined the held set on 2026-08-27 by
+  the predicate saying nothing, and the fleet began chaining rounds with no gap. A spot reading over
+  08:18-10:35 on 2026-08-28 put lanes 2 and 3 in the hold for about **49 and 51 of 137 minutes, some
+  36-38%**. That is one window on one busy morning and **not** a replacement measurement - which is
+  the whole reason no figure is asserted in its place. The behaviour is unchanged and under
+  observation; the recorded 2026-08-26 measurements stay where they are as history.
