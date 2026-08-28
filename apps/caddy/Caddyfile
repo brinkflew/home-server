@@ -335,6 +335,44 @@ home.{$DOMAIN} {
 		reverse_proxy prometheus:9090
 	}
 
+	# THE ONE THING THIS PAGE CAN DO RATHER THAN OPEN, and the reason it is
+	# not the restart button the design asked for.
+	#
+	# NO CONTAINER HERE MAY REACH THE PODMAN SOCKET and a host-side listener
+	# was refused in five places - both spend real containment to give an
+	# internet-facing container an RPC that spawns `claude`. So this proxies to
+	# the control plane conduct ALREADY POLLS. A command lands as a suspended
+	# flow step, conduct answers it on its next cycle, and the arrow is
+	# unchanged: nothing new can reach the host, and `paths.ts` still carries
+	# conduct as outbound-only. The edge this uses, caddy -> windmill-server,
+	# was already drawn for agents.{$DOMAIN}.
+	#
+	# `rewrite` IS THE GUARD, AND IT IS STRONGER THAN AN ALLOWLIST. Whatever
+	# path the client asked for is DISCARDED and one literal substituted, so
+	# this is a single endpoint rather than a matcher with holes in it - there
+	# is no traversal to find and no second endpoint to reach. Only the body
+	# passes through, and the body is checked twice: by the flow's schema here,
+	# and by conduct on the host, which is the guard that counts because a
+	# guard on the far side of a network is one an attacker has already passed.
+	#
+	# THE DOUBLED `f/` IS NOT A TYPO. The endpoint is jobs/run/f/{path} and
+	# every flow path already begins with `f/` - see conduct/windmill.py, which
+	# records that a single one answers 404 with no body.
+	#
+	# THE TOKEN NEVER REACHES THE BROWSER. Empty is a supported state: Windmill
+	# answers 401, the board disables its controls and says so.
+	handle_path /api/control/* {
+		# INSIDE THE handle_path, like the two below it and for the reason
+		# spelled out above them - at the top level this is dead code.
+		@notpost not method POST
+		respond @notpost "post only" 405
+
+		rewrite * /api/w/{$WINDMILL_WORKSPACE}/jobs/run/f/f/agents/control
+		reverse_proxy windmill-server:8000 {
+			header_up Authorization "Bearer {$WINDMILL_DASHBOARD_TOKEN}"
+		}
+	}
+
 	handle_path /api/alerts/* {
 		# Alertmanager has had no route at all until now, and it is not getting
 		# a writable one. POST /api/v2/silences is how an alert is muted, and

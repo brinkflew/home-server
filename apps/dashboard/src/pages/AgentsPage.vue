@@ -29,6 +29,7 @@ import PanelBox from "@/components/PanelBox.vue";
 import StatusDot from "@/components/StatusDot.vue";
 import StatePill from "@/components/StatePill.vue";
 import ChipLink from "@/components/ChipLink.vue";
+import ChipButton from "@/components/ChipButton.vue";
 import ProgressBar from "@/components/ProgressBar.vue";
 import MetricChart from "@/components/MetricChart.vue";
 import ActivityBars from "@/components/ActivityBars.vue";
@@ -45,6 +46,8 @@ import { useFleetStore } from "@/stores/fleet";
 import { instant, range, value } from "@/api/prometheus";
 import { AGENTS } from "@/queries";
 import { heartbeatTone, quotaTone } from "@/health";
+import { control } from "@/api/control";
+import { holdExpiresIn, intakeState, roundControls } from "@/control";
 import {
   byUrgency,
   roundAction,
@@ -241,6 +244,30 @@ function toggle(id: string): void {
   opened.value = opened.value === id ? null : id;
 }
 
+/**
+ * What a person has asked for, and whether they can ask at all.
+ *
+ * `available` IS READ AND NOT ASSUMED. The collector reads the same .env Caddy
+ * takes the token from, so an unset one disables every control with a reason
+ * rather than offering a button that 401s - absent and broken are different
+ * findings, which is the rule the whole document is written around.
+ */
+const controlState = computed(
+  () => fleet.doc?.control ?? { available: false, restart_floor_sec: 600, intake: [], holds: [] },
+);
+const intake = computed(() => intakeState(controlState.value, "upskald"));
+const controlDisabled = computed(() =>
+  controlState.value.available ? null : "the control route has no token - see WINDMILL_DASHBOARD_TOKEN",
+);
+
+async function toggleIntake(): Promise<void> {
+  await control({ action: intake.value.on ? "intake_off" : "intake_on", project: "upskald" });
+  // ASKED, NOT DONE. conduct applies it on its next cycle, so the honest way to
+  // learn what happened is the next document rather than an optimistic local
+  // flip - which would show `armed` over a fleet that had refused.
+  await fleet.refresh();
+}
+
 const board = computed(() =>
   [...(showAll.value ? fleet.rounds : fleet.openRounds)].sort(byUrgency).map((r) => ({
     r,
@@ -257,8 +284,15 @@ const board = computed(() =>
     // this bundle deploy separately, so a document written by an older one has
     // no `attempts` key at all, and `undefined !== null` is true.
     attempt: typeof r.attempts === "number" && r.attempts > 1 ? r.attempts : null,
+    controls: roundControls(r, controlState.value, host.now),
+    holdLeft: holdExpiresIn(r, host.now),
   })),
 );
+
+async function send(action: "hold" | "release" | "restart", target: string): Promise<void> {
+  await control({ action, target });
+  await fleet.refresh();
+}
 
 /** The phase in flight, and its position in the round's own sequence. Reads
  *  "dev 2/5" while running and "done 5/5" once every phase has finished. */
@@ -560,7 +594,23 @@ const costTip = computed(() => ({
               :tone="row.tone"
               :live="row.r.closed_at === null && row.r.waiting_on === null"
             />
-            <span class="mono sub">opened {{ fmt.sinceIso(row.r.opened_at) }}</span>
+            <!-- A HOLD IS BOUNDED BY SOMETHING THE PERSON SETTING IT DOES NOT
+                 CONTROL. conduct does not answer a held step, and the step's own
+                 suspend timeout is 24h - so a hold left long enough does not
+                 pause a round, it fails one. The countdown is the only thing
+                 that says so before it happens. -->
+            <span
+              v-if="row.r.held"
+              class="mono sub warnish"
+              :title="`Held ${fmt.sinceIso(row.r.held_at)}${row.r.held_why ? ` - ${row.r.held_why}` : ''}. conduct does not answer a held step, and the step's own suspend timeout is 24h - past that this stops being a pause and fails the flow.`"
+              >held {{ fmt.sinceIso(row.r.held_at) }} -
+              {{
+                row.holdLeft === null || row.holdLeft <= 0
+                  ? "past the timeout"
+                  : `${fmt.coarse(row.holdLeft)} left`
+              }}</span
+            >
+            <span v-else class="mono sub">opened {{ fmt.sinceIso(row.r.opened_at) }}</span>
           </span>
 
           <span class="cell mono eta" v-bind="tip.hover(`ag-eta-${row.r.worktree_id}`, etaTip)">{{
@@ -607,6 +657,25 @@ const costTip = computed(() => ({
 
           <span class="cell r">
             <ChipLink :label="row.action.label" :href="row.action.href" :title="row.action.title" />
+            <!-- THE CONTROLS, AND ONLY ON A ROUND THAT IS STILL RUNNING.
+                 Holding a finished round stops nothing and restarting one has no
+                 chain for conduct to close - roundControls returns an empty list
+                 rather than a disabled pair, because a control that could never
+                 apply is noise on every closed row. -->
+            <ChipButton
+              v-for="c in row.controls"
+              :key="c.action"
+              :label="c.label"
+              :disabled="c.disabled"
+              :act="() => send(c.action as 'hold' | 'release' | 'restart', c.target ?? '')"
+              :title="
+                c.action === 'restart'
+                  ? 'close this round, cancel its flow, and start it again with the same task'
+                  : c.action === 'hold'
+                    ? 'stop dispatching this round - the phase running now finishes first'
+                    : 'start dispatching this round again'
+              "
+            />
           </span>
         </div>
 
@@ -811,6 +880,35 @@ const costTip = computed(() => ({
           </div>
         </div>
         <p v-else class="empty mono">The fleet has not looked for work on this host yet.</p>
+
+        <!-- THE SWITCH IN FRONT OF THE PASS THAT CHOOSES, and it says which of
+             the two sources is in force. conduct's descriptor is the shipped
+             default and a control row overrides it without a restart, so "is
+             intake armed" now has an answer and a plausible wrong one. The
+             collector cannot read a Python literal in another repository, so
+             "default" does not claim to know WHICH default. -->
+        <div class="switch">
+          <span class="mono sname">choose its own work</span>
+          <span class="mono" :class="intake.on ? 'onish' : 'offish'">{{
+            intake.on === null ? "as shipped" : intake.on ? "armed" : "disarmed"
+          }}</span>
+          <span class="mono sub">{{
+            intake.source === "set"
+              ? `set by hand ${fmt.sinceIso(intake.at)}${intake.note ? ` - ${intake.note}` : ""}`
+              : "conduct's own default, unchanged"
+          }}</span>
+          <ChipButton
+            :label="intake.on ? 'disarm' : 'arm'"
+            :disabled="controlDisabled"
+            :act="() => toggleIntake()"
+            :title="
+              intake.on
+                ? 'stop the fleet choosing its own work - a round already open still runs to its gate'
+                : 'let the fleet choose its own work'
+            "
+          />
+        </div>
+
         <p class="note mono">
           AN INTAKE THAT HAS STOPPED LOOKS EXACTLY LIKE AN EMPTY BACKLOG. Both leave every unit
           active and every container healthy, and only the AGE of that last look tells them apart -
@@ -867,7 +965,9 @@ const costTip = computed(() => ({
 /* --cols DEFINED ONCE, so the header row and every body row are laid out by
    the same declaration and cannot drift apart. LibraryPage's convention. */
 .table {
-  --cols: 128px 1.5fr 124px 1fr 78px 76px 96px 108px;
+  /* The last column carries the action chip AND the round's controls, so it is
+     wider than the 108px it was when it held one link. */
+  --cols: 128px 1.5fr 124px 1fr 78px 76px 96px 190px;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--r-md);
@@ -914,6 +1014,49 @@ const costTip = computed(() => ({
 
 .cell.state {
   gap: 5px;
+}
+
+/* The intake switch: a label, its state, where the answer came from, and the
+   one control that moves it. */
+.switch {
+  display: grid;
+  grid-template-columns: minmax(0, auto) auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0 3px;
+  border-top: 1px solid var(--line-faint);
+  margin-top: 8px;
+}
+
+.switch .sname {
+  font: var(--t-mono-sm);
+  color: var(--fg-3);
+}
+
+.switch .onish {
+  color: var(--ok);
+}
+
+.switch .offish {
+  color: var(--fg-5);
+}
+
+.switch .sub {
+  font: var(--t-mono-xs);
+  color: var(--fg-5);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cell .sub.warnish {
+  color: var(--warn);
+  /* The progress cell stacks, so a wrapping sub-line makes the whole row two
+     lines tall and shifts every one beside it. The full sentence is on the
+     title. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* THE STATE CELL BECOMES A BUTTON when there is a failure behind it, and it has

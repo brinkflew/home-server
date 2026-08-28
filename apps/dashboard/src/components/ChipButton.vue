@@ -1,0 +1,125 @@
+<script setup lang="ts">
+/**
+ * THE ONE CHIP ON THIS PAGE THAT DOES SOMETHING, AND THE LIMITS OF THAT.
+ *
+ * ChipLink beside it is still the rule: no container here may reach the podman
+ * socket, so nothing restarts a unit, pulls an image or terminates a stream, and
+ * every one of those affordances is a link into the owning application. What
+ * this adds is narrower than it looks - it POSTs a command to the control plane
+ * conduct already polls, and conduct decides what to do with it on the host.
+ *
+ * SO IT REPORTS "ASKED", NEVER "DONE". Windmill accepts the run and returns a
+ * job id immediately; conduct applies it within its next 60-second cycle, and
+ * what actually happened arrives in the next `fleet.json`. A button that went
+ * green on the POST would be reporting the message rather than the outcome, and
+ * on a page whose whole argument is that absent must never read as zero, that is
+ * the wrong lie to tell.
+ *
+ * A DISABLED CHIP CARRIES ITS REASON. Same rule the link version follows: a chip
+ * that lands somewhere it cannot act is worse than one that says less, so the
+ * caller passes a sentence rather than a boolean.
+ */
+import { ref } from "vue";
+import type { Tone } from "@/types";
+
+const props = withDefaults(
+  defineProps<{
+    label: string;
+    /** Null when it can be pressed; a sentence explaining why not otherwise. */
+    disabled?: string | null;
+    title?: string;
+    tone?: Tone;
+    /** Asks the fleet. Rejecting is expected and is rendered, not thrown. */
+    act: () => Promise<unknown>;
+  }>(),
+  { title: "", tone: "off", disabled: null },
+);
+
+const busy = ref(false);
+const failed = ref<string | null>(null);
+const asked = ref(false);
+
+async function press(): Promise<void> {
+  if (busy.value || props.disabled) return;
+  busy.value = true;
+  failed.value = null;
+  try {
+    await props.act();
+    asked.value = true;
+  } catch (error) {
+    // SHOWN ON THE CHIP RATHER THAN THROWN. An unauthorised route, an
+    // unreachable control plane and a refusal all arrive here, and a page that
+    // swallowed them would leave a person pressing a button that does nothing.
+    failed.value = error instanceof Error ? error.message : "it did not go through";
+  } finally {
+    busy.value = false;
+  }
+}
+</script>
+
+<template>
+  <button
+    v-if="!disabled"
+    type="button"
+    class="chip mono"
+    :class="[tone, { busy, failed, asked }]"
+    :title="failed ?? (asked ? 'asked - conduct applies this within a minute' : title)"
+    :disabled="busy"
+    @click="press"
+  >
+    {{ failed ? "failed" : asked ? "asked" : label }}
+  </button>
+
+  <span v-else class="chip mono disabled" :title="disabled" aria-disabled="true">
+    {{ label }}
+  </span>
+</template>
+
+<style scoped>
+/* THE SAME BOX AS ChipLink, deliberately: a button's own display, padding,
+   border and font would shift the column it shares with one. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  font: var(--t-mono-xs);
+  color: var(--fg-4);
+  background: var(--surface-chip);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs);
+  white-space: nowrap;
+}
+
+button.chip {
+  cursor: pointer;
+  appearance: none;
+}
+
+button.chip:hover:not(:disabled) {
+  color: var(--fg);
+  background: var(--fill-hover);
+  border-color: var(--line-strong);
+}
+
+button.chip.busy {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+button.chip.asked {
+  color: var(--ok);
+  border-color: var(--ok-edge);
+}
+
+button.chip.failed {
+  color: var(--fail);
+  border-color: var(--fail-edge);
+}
+
+.disabled {
+  color: var(--fg-dim);
+  border-color: var(--line-faint);
+  cursor: not-allowed;
+}
+</style>

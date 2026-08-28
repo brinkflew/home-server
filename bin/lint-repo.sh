@@ -324,6 +324,15 @@ if [ -f "$paths" ] && [ -f "$topo" ] && command -v python3 >/dev/null 2>&1; then
 		    problems.append("topology.ts parsed to ZERO nodes - every check below would pass vacuously")
 
 		pseudo = set(re.findall(r'^\s*(\w+): "[^"]*(?:inbound|outbound)[^"]*",\s*$', paths, re.M))
+		# The list paths.ts declares rather than one this file keeps its own copy
+		# of - a second copy of a security property is one that can drift out of
+		# agreement with the thing it protects.
+		never_to = set(re.findall(r'"([^"]+)"',
+		                          (re.search(r"NEVER_A_DESTINATION = \[([^\]]*)\]",
+		                                     paths, re.S) or type("m", (), {"group": lambda *_: ""})()).group(1)))
+		if not never_to:
+		    problems.append("paths.ts declares no NEVER_A_DESTINATION - the "
+		                    "outbound-only invariant is unenforced")
 		if not pseudo:
 		    problems.append("paths.ts declares no PSEUDO_NODES - a terminal edge would read as a broken one")
 
@@ -375,6 +384,25 @@ if [ -f "$paths" ] && [ -f "$topo" ] && command -v python3 >/dev/null 2>&1; then
 		    for end in (frm, to):
 		        if end not in nodes and end not in pseudo:
 		            problems.append(f"edge {frm} -> {to}: {end} is in neither topology.ts NODES nor PSEUDO_NODES")
+		    # NOTHING HELD THE ONE INVARIANT THAT IS A SECURITY PROPERTY. conduct
+		    # and the phase runners are host-side and initiate every connection
+		    # they have - which is why the control plane needs no route to the
+		    # host and ucore.bu needed no firewalld change. paths.ts says so in a
+		    # comment and calls it exactly that; this loop then `continue`d past
+		    # every pseudo-node edge before any check ran, so an inbound one
+		    # would have drawn an arrow into conduct in silence.
+		    #
+		    # THE LIST IS DECLARED IN paths.ts AND NOT INFERRED HERE. The
+		    # descriptions cannot carry it: `internet` is "outbound only" meaning
+		    # it is where outbound traffic GOES, and `conduct` is "outbound only"
+		    # meaning it is what STARTS the connection - the same two words, the
+		    # opposite ends of an edge. A first draft read them mechanically and
+		    # failed six correct edges.
+		    if to in never_to:
+		        problems.append(
+		            f"edge {frm} -> {to}: paths.ts declares {to} may never be a `to`. "
+		            f"For conduct that is not modelling - a route INTO the host is "
+		            f"what five files in this repository refuse")
 		    if frm in pseudo or to in pseudo:
 		        terminals += 1
 		        continue

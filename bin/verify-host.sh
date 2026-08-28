@@ -2058,6 +2058,57 @@ if [ -z "$GREENBOOT" ]; then
 		ok agents.rounds_open "${open_rounds:-0} review round(s) open, none older than 6h"
 	fi
 
+	# A HOLD SOMEBODY SET AND HAS NOT COME BACK TO, and the two ways that goes
+	# wrong point in opposite directions.
+	#
+	# A DELIBERATE PAUSE MUST NOT READ AS A FAULT. That lesson is already
+	# expensive here: turning intake off left a stamp ageing past agents.intake's
+	# hour, and AgentCheckWarning paged the phone every thirty minutes for a
+	# state somebody had asked for. So a fresh hold is a `note`, and the message
+	# names the switch rather than implying a problem.
+	#
+	# AND A HOLD IS BOUNDED BY SOMETHING IT DOES NOT CONTROL, which is the
+	# inverse and is why this cannot simply stay quiet. conduct does not answer a
+	# held step, and the step's own suspend timeout is 24h - so a hold left over
+	# the weekend does not pause a round, it FAILS one, and the only signal
+	# before that is this line. The warn lands with hours to spare rather than at
+	# the cliff.
+	held_rows=""
+	if [ -f "$chain_db" ]; then
+		held_rows=$(python3 - "$chain_db" <<-'PY' 2>/dev/null || true
+		import sqlite3, sys, time, calendar
+		conn = sqlite3.connect("file:%s?mode=ro" % sys.argv[1], uri=True)
+		try:
+		    rows = conn.execute(
+		        "SELECT name, at FROM control"
+		        " WHERE value = 'on' AND name LIKE 'hold:%'").fetchall()
+		except sqlite3.Error:
+		    rows = []          # conduct has not migrated yet; absent, not zero
+		for name, at in rows:
+		    try:
+		        age = int(time.time() - calendar.timegm(
+		            time.strptime(at, "%Y-%m-%dT%H:%M:%SZ")))
+		    except (TypeError, ValueError):
+		        continue
+		    print("%s %d" % (name.split(":", 1)[1], age))
+		PY
+		)
+	fi
+	held_n=$(printf '%s' "$held_rows" | grep -c . || true)
+	held_oldest=$(printf '%s\n' "$held_rows" | awk '{print $2}' | sort -rn | head -1)
+	case "$held_oldest" in ''|*[!0-9]*) held_oldest=0 ;; esac
+	fact agents_holds_open "$held_n" num
+	fact agents_hold_age "$held_oldest" num
+	# 20h OF THE 24h CONDUCT_TIMEOUT. Four hours is enough to act on a morning
+	# alert about something set the previous afternoon.
+	if [ "$held_n" -eq 0 ]; then
+		ok agents.control_holds "no round is held - dispatch is running for every worktree"
+	elif [ "$held_oldest" -gt 72000 ]; then
+		warn agents.control_holds "$held_n round(s) held, the oldest for $((held_oldest / 3600))h - conduct does not answer a held step and the step's own suspend timeout is 24h, so this stops being a pause and fails the flow. Release it or let it go"
+	else
+		note agents.control_holds "$held_n round(s) held by hand, the oldest for $((held_oldest / 3600))h - dispatch is stopped for those worktrees and running for every other, which is a state somebody asked for"
+	fi
+
 	# WHETHER THE FLEET CAN READ ITS OWN WORK, and this is a configuration check
 	# rather than a live one on purpose. It asks whether the credential is there,
 	# the same thing agents.model_credential asks and for the same reason: an

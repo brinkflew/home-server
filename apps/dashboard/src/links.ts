@@ -9,6 +9,12 @@
 // that opens the owning application, which is read-only, keeps the design's
 // layout slot, and is what its own fallback chip ("Open") already did.
 //
+// THE AGENTS PAGE HAS THREE CHIPS THAT ACT, AND NONE OF THEM IS HERE. They ask
+// the control plane conduct polls rather than reaching anything themselves -
+// see src/control.ts. Nothing on THIS list has changed or is going to: every
+// target below is an application with its own UI, and a chip that half-operated
+// one from here would be a worse version of opening it.
+//
 // NO BUILD-TIME VARIABLE AND NO .env ENTRY. Every target already has its own
 // Caddy site block as `<name>.{$DOMAIN}`, and this page is served from
 // `home.{$DOMAIN}` - so the sibling hostname is the current one with its first

@@ -76,6 +76,17 @@ export interface FetchOptions {
   timeoutMs?: number;
   method?: "GET" | "POST";
   body?: URLSearchParams;
+  /**
+   * A JSON body, for the one route on this origin that takes one.
+   *
+   * THE CONTROL ROUTE IS PROXIED STRAIGHT TO WINDMILL, whose run endpoint takes
+   * a JSON object and nothing else - Caddy can add a header but it cannot
+   * transform a body, which is what settles the encoding here rather than in
+   * the Caddyfile. `body` above stays for form-encoded callers; there are none
+   * today and removing it would be a second change in a file whose whole point
+   * is that every request goes through one place.
+   */
+  json?: unknown;
 }
 
 export async function fetchJson<T>(url: string, options: FetchOptions = {}): Promise<T> {
@@ -92,8 +103,10 @@ export async function fetchJson<T>(url: string, options: FetchOptions = {}): Pro
     headers: {
       Accept: "application/json",
       ...(options.body ? { "Content-Type": "application/x-www-form-urlencoded" } : {}),
+      ...(options.json !== undefined ? { "Content-Type": "application/json" } : {}),
     },
     ...(options.body ? { body: options.body } : {}),
+    ...(options.json !== undefined ? { body: JSON.stringify(options.json) } : {}),
   });
 
   if (looksLikeSignIn(res)) {

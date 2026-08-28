@@ -1120,6 +1120,16 @@ signal read green.
   read "not published" permanently, so `unknown` outranks that claim.
 - Two panels called "Runs" counted rounds and phase executions; `runs_today = 6` could be one round.
 
+### The dashboard can act now, on the path work already takes
+- A command is a SUSPENDED FLOW STEP, so nothing new reaches the host: the browser POSTs to Caddy,
+  Caddy rewrites to one literal Windmill path with a server-side token, conduct polls and answers.
+- `rewrite` beats an allowlist - the client's path is DISCARDED. Proved with requests; `caddy
+  validate` passes a guard that protects nothing, and a bare `/api/control` does not match.
+- `config.py` is read at import and a restart REAPS A LIVE PHASE, so the switch is a row read every
+  cycle. Absent is not `off`, an unknown action is refused, and a hold dies at CONDUCT_TIMEOUT.
+- A restart cancels BEFORE it starts, or it is two rounds on one worktree.
+- `conduct` is never a `to` was prose and is now `NEVER_A_DESTINATION`, asserted and proved to fire.
+
 ### The gate rewrites the tree it is measuring, and the loop for that was unreachable
 - `make check` runs `format` and `lint` BEFORE everything that reads, so the tested tree is the
   dirty one and committing it satisfies the assertion. A protected path and 2 MB are still refusals.
@@ -1202,10 +1212,13 @@ Remaining, in order:
 
    **All four pages were built as of 2026-08-17.** Home and Library needed Jellyfin sessions,
    Jellyseerr requests, poster images and the \*arr queues, none of which was collected - so they
-   are a collector change first and two pages second. **It is read-only, structurally**: no container
-   can reach the podman socket, so restart and pull would need a privileged host-side surface
-   reachable from a browser - the next deliberate decision here, not an oversight in this one. Every
-   action chip is a deep link into the owning application instead.
+   are a collector change first and two pages second. **It reads, and asks the fleet for three
+   things**: no container can reach the podman socket, so restart and pull are still impossible and
+   every media chip is still a deep link. The three that act - arm intake, hold a round, restart one
+   - took the decision this line used to call "the next deliberate one" and took it the way the
+   repository already trusts: the browser POSTs to Caddy, Caddy rewrites to one literal Windmill
+   path with a server-side token, and conduct answers the suspended step on its next poll. No
+   listener, no firewalld hole, `conduct` still never a `to`.
 
    **Do NOT build either on `journalctl -p err`.** Jellyfin alone emits 2,644 priority-3 lines a day
    of ffmpeg chatter and there is no lever to stop it - see Known state. Unit state and container

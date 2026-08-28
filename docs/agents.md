@@ -2328,3 +2328,86 @@ table conduct has.
 
 **Null means "not recorded", never "nothing went wrong"** - an inspect-level refusal returns before
 `start_run`, so there is no row at all to carry one.
+
+### A command is a suspended step, which is the same mechanism work already uses
+
+**The fleet had no controls at all.** Arming it meant editing `conduct/config.py` and restarting a
+unit; there was no `pause`, no `stop`, no `cancel`, no `kill` and no `restart` verb anywhere. The
+last deploy ended with the repair path unproven for exactly that reason - nothing could arm intake
+from anywhere but a text editor.
+
+**What was refused is an inbound RPC to the host**, and it stays refused. Five files carry the same
+sentence: a listener needs either a unix socket - the `container_t -> unconfined_t :
+unix_stream_socket connectto` denial that stops any container reaching the podman socket - or a TCP
+port plus a firewalld hole, and both spend real containment to give an internet-facing container an
+RPC that spawns `claude`.
+
+**So a command travels the way work travels.** `f/agents/control` carries an action and a target;
+conduct sees the suspended step on its next poll and answers it like any other `conduct_` module.
+The dashboard starts that flow through one Caddy route on `home.{$DOMAIN}` which **rewrites** to a
+single literal path and injects a token server-side. Nothing new reaches the host, `paths.ts` still
+carries `conduct` as outbound-only, and the `caddy -> windmill-server` edge the route uses was
+already drawn for `agents.{$DOMAIN}`.
+
+**`rewrite` is a stronger guard than an allowlist**, and that is why the route has one rather than a
+path matcher. Whatever the client asked for is discarded, so there is no traversal to find and no
+second endpoint to reach. Measured with requests rather than `caddy validate`, which cannot see this
+class of mistake: `GET` answers 405; `POST /api/control/api/v1/admin/tsdb/snapshot` reaches the
+control flow with the path thrown away; a client-supplied `Authorization` is replaced rather than
+forwarded; and the token appears on no other upstream. A bare `/api/control` with no trailing
+segment falls through to the bundle, which is why the client posts to `/api/control/run`.
+
+**The record is the Windmill job** - its arguments, its timestamp, its result, kept for thirty days
+by `JOB_RETENTION_SECS` - plus a `control` row carrying `at` and a note. That is the argument, the
+duration and the record the Alertmanager silence refusal asks for. **What it cannot say is which
+person**: the route injects one token, so every command arrives under the same identity. That is the
+limit the approval record already has, and it is not papered over anywhere.
+
+### The switch moved out of a restart, and a hold is bounded by something else
+
+**`config.py` is read at import**, so moving `"intake"` used to mean `systemctl --user restart
+home-server-conduct` - and `reconcile` keys a lease on **conduct's own pid** with no grace period, so
+a restart on top of a live phase reaps its network, its datastores and its worktree while the
+container is still running. A button that could do that is not a button worth having. So a `control`
+row overrides the descriptor and is read every cycle, on `quota.refusal`'s precedent of a decision
+driven by a row rather than by a constant.
+
+**The descriptor is still the default and still where the argument lives** - forty lines about what a
+pause is and is not. `poll.intake_armed` is the tri-state read, `serve._intake_keys` asks the same
+question so the marker cannot report a disarmed fleet that is busy choosing work, and `conduct
+status` prints which source is in force.
+
+**Absent is not `off`, in three places.** A missing row means "nobody has said", which is what keeps
+the descriptor the default rather than a value the table duplicates at install time; a value that is
+neither `on` nor `off` defers rather than guessing; and an **action conduct does not recognise is
+refused rather than ignored**, because a command that silently does nothing sends the person away
+believing the fleet is held.
+
+**A hold stops dispatch for one worktree and nothing else.** It is a `continue` and not a `return` -
+the quota and the busy host are conditions of the whole machine, a hold is one round's - and it is
+the one refusal `--force` does not override, because force means "I know, go anyway" and a hold is
+somebody having already said the opposite.
+
+**And it is bounded by something the person setting it does not control.** conduct does not answer a
+held step, and `CONDUCT_TIMEOUT` is 86400 - so a hold left over a weekend does not pause a round, it
+**fails** one. The row says so with a countdown, and `agents.control_holds` grades it: a `note` while
+it is young, because a deliberate pause must not read as a fault, and a `warn` past 20 hours, because
+the inverse is a hold that expires in silence.
+
+### A restart cancels first, and the ordering is the only thing that is not interchangeable
+
+Closing the chain stops conduct's bookkeeping and leaves the Windmill job exactly where it was -
+suspended, for its full 24 hours, still visible to the dispatch loop. Starting a second flow on the
+same worktree then puts two rounds on one tree, and the next `prepare_worktree` deletes the first
+one's commits. That is the failure `_intake_idle` exists to prevent, arriving from the other
+direction. **So the cancel goes first, and if it will not go, nothing is started.**
+
+`windmill.cancel` wraps `POST jobs_u/queue/cancel/{id}`, measured against the deployed OpenAPI on
+1.792.2 rather than assumed: `reason` is a required body field, and the `_u` means no **session** is
+required, not no credential. Not `force_cancel`, which is the sibling one line down in that document
+- reaching for it first would mean never learning that the ordinary one works.
+
+**`CONTROL_RESTART_MIN_SEC` is correctness before it is economy.** A double click is two flows on one
+worktree, which is the hazard above. The spend needs no gate of its own: a restarted round dispatches
+through the same loop, so `quota.refusal` and `REVIEW_CAP` both still apply, and a ceiling denominated
+in dollars is refused here on principle.

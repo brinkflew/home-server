@@ -15,15 +15,26 @@ npm ci && npm run dev            # fixtures back every endpoint; no server neede
 npm run build                    # vue-tsc then vite. This is the only test there is.
 ```
 
-## It is read-only, and that is structural rather than a decision to revisit casually
+## It reads, and it can ask the fleet for exactly three things
 
 The design has action buttons - restart, pull, approve, terminate - and **no container here can
 have them.** `container_t -> unconfined_t : unix_stream_socket connectto` is DENY, `systemd --user`
-for uid 1000 runs as `unconfined_t`, and that is not fixable by relabelling. Actions would need a
-privileged host-side surface reachable from a browser, which is a decision to take on its own
-merits rather than a checkbox to add behind a dashboard.
+for uid 1000 runs as `unconfined_t`, and that is not fixable by relabelling. Nothing on this page
+restarts a unit, pulls an image or terminates a stream, and that has not changed.
 
-**So every one of those chips is a link instead**, opening the owning application in a new tab -
+**What changed on 2026-08-28 is three chips on the Agents page**, and they do not breach the rule
+above - they route around it. `POST /api/control/*` reaches Caddy, which rewrites it to one literal
+Windmill path and adds a token this bundle never sees; the command lands as a suspended flow step
+and conduct, which polls, answers it within a minute. So the browser writes to a **container**, the
+host **polls**, and no listener exists anywhere - the same shape a human approving in Windmill has
+always had. `src/control.ts` decides what to offer, `src/api/control.ts` sends it, and
+`ChipButton.vue` is where it shows up. The three are arm/disarm intake, hold/release a round, and
+restart one.
+
+**The container still reaches nothing and still holds no credential.** The token is Caddy's, not
+this image's, which is what keeps the sentence below true.
+
+**Every other one of those chips is a link**, opening the owning application in a new tab -
 `src/links.ts` is the only place that mapping exists, and `ChipLink.vue` is the only place the
 decision shows up in the UI. The design's layout slots and column widths are unchanged; its own
 fallback chip already said "Open". One label changed rather than lying: the design's `Terminate`
@@ -32,7 +43,7 @@ and a chip that lands somewhere it cannot act is worse than one that says less.
 
 **The container reaches nothing.** It joins `net-dashboard`, whose only other member is Caddy, and
 it holds no credential of any kind. Every byte it displays arrives at the *browser*, same-origin,
-through Caddy.
+through Caddy - and so does the one thing it sends.
 
 ## Where the data comes from
 
@@ -42,6 +53,7 @@ browser ---> caddy (home.avanserv.com, import protected)
                +-- /              -> dashboard:8080     the bundle, and /data/status.json
                +-- /api/prom/*    -> prometheus:9090    every number, every range query
                +-- /api/alerts/*  -> alertmanager:9093  active alerts, GET and HEAD only
+               +-- /api/control/* -> windmill-server:8000  POST only, rewritten to one path
 ```
 
 | Source | Carries | Why not one of the others |
