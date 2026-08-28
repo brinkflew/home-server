@@ -747,15 +747,35 @@ and its own approval. So the guard lives in `poll._resume`, where it is a proper
 rather than of one call site. `self_approval_disabled` is deliberately absent: the workspace has one
 seat, so it would deadlock every run a person starts by hand.
 
-**This paragraph used to add that `user_auth_required: true` does not stop conduct "because it
-resumes with a workspace-owner token, which satisfies it perfectly". That was measured wrong and is
-retracted.** The owner resume endpoint fails against it as *"Approvals for logged in users is an
-enterprise only feature"* - so there is a second lock, and conduct was already unable to answer the
-human gate by a mechanism nobody had found. See *Who answers which step* below, which has carried
-the correct measurement since it was taken; `docs/known-state.md` and `CLAUDE.md` both had it right
-and this file disagreed with itself for five days. Nothing was ever broken - the missing prefix is
-the enforcement either way - but a reader deciding how much the prefix carries was being told it
-carries everything. The identical stale claim in `conduct/flows/ship.py` moved with this.
+**There was a second lock, and on 2026-08-29 it was deliberately removed.** `user_auth_required:
+true` on `await_human` made the owner resume endpoint fail as *"Approvals for logged in users is an
+enterprise only feature"* - measured 2026-08-27, correcting an earlier draft of this paragraph that
+claimed an owner token "satisfies it perfectly" - so conduct was unable to answer the human gate by
+a mechanism underneath the prefix guard entirely.
+
+**It also blocked the only mechanism by which the DASHBOARD could answer**, and reading the card
+somewhere it cannot be answered is half a feature. The board now renders the full card and posts to
+`/api/approve/*`, which starts `f/agents/approve`. So the prefix refusal in `poll._resume` is now
+**the only thing keeping conduct off its own gate** - which is what `conduct/flows/ship.py` said to
+rely on all along: *"The lock above is Windmill's and could change under an edition; that one is
+ours and is asserted in tests."* Those tests are consequently run inverted before they are trusted:
+break the guard and exactly two go red, `test_resuming_a_module_conduct_does_not_own_raises` and the
+negative control `test_the_retry_loop_cannot_deliver_a_human_gate_answer`.
+
+**The new flow carries the mirror of that refusal, and without it this would be a hole.**
+`f/agents/approve` reads the target job and refuses unless the step waiting on it is `HUMAN_MODULE`.
+conduct answers `conduct_*` and nothing else; the dashboard answers `publish_pr` and nothing else;
+both read the name from `conduct/flows/common.py` so they cannot drift into being able to do each
+other's job. Without that clause the route would be a way for a browser to forge a verification
+result - a hazard this design did not previously have - and `tests/test_approve.py` proves the point
+by removing the clause and watching a `conduct_verify` job get answered.
+
+**What was given up, stated rather than implied.** A signed resume URL that escaped would now be
+sufficient where before it still needed a session. Nothing in either repository mints one, three
+layers refuse to carry one and three tests assert it - but that is now the whole of the defence
+rather than the outer of two. And the approval record still cannot name a person: the route injects
+one token server-side and the owner endpoint records `resume_id: 0`, which is the same limit
+`control.py` already carries for every command the dashboard sends.
 
 **A REPORT IS A VALUE, NOT A STATUS**, and this shipped wrong in the polling round. `conduct_phase`'s
 body was `def main(report: dict): return report`, so a payload saying `{"ok": false, "exit_code": 1}`
@@ -1541,11 +1561,13 @@ static argument.
 upskald's auto-merge arms on a label or a `/merge` comment that this flow applies neither of. Nothing
 on this path can reach `main`.
 
-**And there was already a second lock nobody knew about.** `user_auth_required: true` on
-`await_human` makes `jobs/flow/resume` fail with *"Approvals for logged in users is an enterprise
-only feature"*. The UI path works - a person approved through it on 2026-08-24 - but the owner
-endpoint cannot, so conduct was structurally unable to answer that step by a mechanism underneath the
-prefix guard entirely.
+**There was a second lock, and it was spent on purpose.** `user_auth_required: true` on
+`await_human` made `jobs/flow/resume` fail with *"Approvals for logged in users is an enterprise
+only feature"*, so conduct was structurally unable to answer that step by a mechanism underneath the
+prefix guard entirely. It was removed on 2026-08-29 because it also blocked the dashboard, which now
+shows the card and answers it. **The prefix guard is the only lock now**, the approve flow carries
+its mirror, and the UI path is unchanged - a person approved through it on 2026-08-24 and still can.
+The full argument is above, under *Who answers which step*.
 
 ## The round: a change goes back to the plan until a reviewer has nothing left to say
 

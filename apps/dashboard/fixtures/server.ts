@@ -14,6 +14,7 @@ import type { Plugin } from "vite";
 import { alerts, statusDocument } from "./model";
 import { activityDocument, libraryDocument } from "./media";
 import { fleetDocument, fleetUnreadable } from "./fleet";
+import { MISSING_ROUNDS, roundDocument } from "./round";
 import { MISSING_POSTERS, posterSvg } from "./images";
 import { instant, range, uncovered } from "./prometheus";
 
@@ -63,6 +64,24 @@ export function fixtureServer(): Plugin {
         // two are the same bytes.
         if (path === "/data/fleet.json") {
           send(res, process.env.HS_FIX_BROKEN === "conduct_db" ? fleetUnreadable() : fleetDocument());
+          return;
+        }
+
+        // THE FIRST PARAMETERISED ROUTE HERE, because a round document is one
+        // file per round rather than a fixed name. Caddy needs no equivalent -
+        // `/data/*` is already a glob and `file_server` resolves the rest.
+        //
+        // 404 FOR MISSING_ROUNDS ON PURPOSE: that is the ordinary state for a
+        // round the collector has not rendered yet, and the panel has a
+        // designed answer for it that nothing would otherwise exercise.
+        if (path.startsWith("/data/round-") && path.endsWith(".json")) {
+          const key = path.slice("/data/round-".length, -".json".length);
+          if (MISSING_ROUNDS.includes(key)) {
+            res.statusCode = 404;
+            res.end("no such round");
+            return;
+          }
+          send(res, roundDocument(key));
           return;
         }
 

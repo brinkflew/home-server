@@ -502,6 +502,11 @@ export interface FleetControlEntry {
  */
 export interface FleetControl {
   available: boolean;
+  /** Whether `/api/approve/*` has a token. SEPARATE FROM `available`: the two
+   *  routes are scoped to one flow each, so one being minted says nothing about
+   *  the other, and inferring the approve chips from `available` would offer a
+   *  button that answers 401 at the moment it is most needed. */
+  approve_available: boolean;
   /** conduct's CONTROL_RESTART_MIN_SEC, so the board can disable a restart it
    *  knows will be refused rather than sending one. */
   restart_floor_sec: number;
@@ -578,6 +583,150 @@ export interface ControlDocument {
   schema: number;
   generated_at: string;
   control: FleetControl;
+  sources: Record<string, SourceHealth>;
+}
+
+/**
+ * One turn of a phase's conversation, as the host renders it.
+ *
+ * AN ALLOWLIST, NOT A TRANSFORM OF THE LOG. bin/collect-metrics.py keeps four
+ * shapes and drops everything else - in particular it drops tool RESULTS, which
+ * is where file contents and command output land. The phase log itself is 0600
+ * on the host and is never served; what arrives here has been through a
+ * redaction pass that replaces every .env value with `${ITS_NAME}`, and
+ * `agents.round_detail` measures that hourly on the real files rather than
+ * trusting the code.
+ */
+export interface RoundTurn {
+  /** `ask` the prompt, `say` an assistant turn, `tool` a call, `denied` a
+   *  refused permission, `note` the renderer speaking about its own limits. */
+  kind: "ask" | "say" | "tool" | "denied" | "note";
+  text?: string;
+  /** Present on `tool` only: the tool's name, and its input verbatim. */
+  name?: string;
+  input?: string;
+}
+
+/** The `result` event's scalars. Absent when the stream carried none. */
+export interface RoundResultEvent {
+  subtype: string | null;
+  is_error: boolean;
+  num_turns: number | null;
+  duration_ms: number | null;
+  total_cost_usd: number | null;
+  stop_reason: string | null;
+  usage: Record<string, unknown> | null;
+}
+
+/** A gate log's tail. `check` phases run no model, so they have no turns. */
+export interface RoundGate {
+  bytes: number;
+  truncated: boolean;
+  text: string;
+}
+
+export interface RoundPhase {
+  run_id: number;
+  phase: string | null;
+  worktree_id: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  result: string | null;
+  exit_code: number | null;
+  cost_usd: number | null;
+  tokens_in: number | null;
+  tokens_out: number | null;
+  /** The log's basename, or null when none could be identified. Never a path:
+   *  nothing in the browser can open it and offering one would be a lie. */
+  log: string | null;
+  turns: RoundTurn[];
+  result_event: RoundResultEvent | null;
+  gate: RoundGate | null;
+  /** FALSE IS "NOT YET", NOT "IT SAID NOTHING". The collector renders a few
+   *  logs per pass so a cold start converges instead of blowing its 25-second
+   *  timeout; a phase waiting its turn must not read as a silent one. */
+  rendered: boolean;
+  short?: string;
+  clipped?: boolean;
+}
+
+/** One entry in the round's timeline. `kind` is the key; never parse the rest. */
+export interface RoundEvent {
+  at: string | null;
+  kind: string;
+  phase?: string | null;
+  run_id?: number;
+  module?: string | null;
+  result?: string | null;
+  exit_code?: number | null;
+  error?: string | null;
+  notice?: string | null;
+  sends?: number | null;
+  summary?: string | null;
+  branch?: string | null;
+  pr_url?: string | null;
+  pr_number?: number | null;
+}
+
+/**
+ * The approval card and what it was built from.
+ *
+ * THIS IS THE TEXT A PERSON IS ACTUALLY BEING ASKED TO APPROVE, ~7.5 KB of it.
+ * `FleetNotice.summary` is a DIFFERENT thing and always was: the phone copy,
+ * rendered one phase earlier, hard-bounded at 3500 bytes and then truncated to
+ * 240 characters on its way into fleet.json.
+ */
+export interface RoundReport {
+  card: string;
+  verdict: string;
+  body: string;
+  title: string;
+  autopublish: boolean | null;
+  autopublish_why: string[];
+  notes: string[];
+  refused: string[];
+  gate_ok: boolean | null;
+  base_sha: string | null;
+  head_sha: string | null;
+  seconds: number | null;
+}
+
+export interface RoundSummary {
+  key: string;
+  worktree_id: string;
+  project: string | null;
+  odoo_task: number | null;
+  started_at: string | null;
+  ended_at: string | null;
+  closed_at: string | null;
+  closed_why: string | null;
+  attempts: number | null;
+  max_attempts: number | null;
+  branch: string | null;
+  phase: string | null;
+  waiting_on: FleetWaiting | null;
+  /** What `f/agents/approve` is handed. Null when no flow job could be named,
+   *  which is what makes Approve unofferable rather than merely unpressed. */
+  flow_job_id: string | null;
+  settled: boolean;
+}
+
+/**
+ * One round's own document, fetched when its row is opened and never polled.
+ *
+ * A 404 IS THE ORDINARY STATE, not a failure: the collector renders on its
+ * five-minute tier under a per-run budget, so a round can be on the board before
+ * its document exists. `fetchDocument` turns that into DocumentNeverWritten and
+ * the panel says "not yet".
+ */
+export interface RoundDocument {
+  schema: number;
+  generated_at: string;
+  round: RoundSummary;
+  events: RoundEvent[];
+  report: RoundReport | null;
+  phases: RoundPhase[];
+  clipped?: string;
   sources: Record<string, SourceHealth>;
 }
 

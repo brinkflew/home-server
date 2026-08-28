@@ -465,6 +465,19 @@ different acts. `home_server_agent_quota_status` is still the only currency. **I
 `home_server_agent_cost_*` series ever appears, this paragraph has been reversed by accident** and
 the argument above needs re-making rather than re-discovering.
 
+**The round browser is graded by TWO checks in two sections, and the split is this charter's
+doing.** `agents.round_detail` answers "is the render happening" and is PASS-or-NOTE, because
+absent-for-a-minute after a deploy and absent-for-ever because the source is failing must not read
+alike. `secrets.rendered_documents` answers "does anything it published contain a credential" and
+can FAIL - which it could not do in this section, and a leaked secret in a file already being served
+is not a thing to grade WARN. It greps every rendered document for every `.env` value of twelve
+characters or more and **names the variable, never the value**: `status.json` is itself served to
+the dashboard, so a check quoting what it found would publish it a second time while reporting the
+first. It was proved to fail before being trusted by planting a real token in a scratch document.
+The collector's side is `home_server_agent_round_documents`, `_bytes`, `_pending` and `_redacted` -
+the last being 0 when `.env` could not be read and NOTHING was rendered, because a redactor built
+from an empty environment looks exactly like one that found nothing to redact.
+
 **Not one of the agents alerts can ride on `CheckFailing`.** Every check in the section is WARN or
 NOTE by charter - `bin/reboot-host.sh` refuses to act on a host this battery calls unhealthy, and
 nothing an agent fleet does wrong is fixed by a reboot - so none can ever emit FAIL. The `agents`

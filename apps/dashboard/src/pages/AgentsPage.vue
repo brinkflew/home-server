@@ -36,6 +36,7 @@ import ActivityBars from "@/components/ActivityBars.vue";
 import FindingsPanel from "@/components/FindingsPanel.vue";
 import StaleNote from "@/components/StaleNote.vue";
 import WindowPicker from "@/components/WindowPicker.vue";
+import RoundDetail from "@/components/RoundDetail.vue";
 
 import { usePoll } from "@/composables/usePoll";
 import { useMetricsStale } from "@/composables/useStaleness";
@@ -429,7 +430,19 @@ function elapsedLabel(r: FleetRound): string {
 function phaseClock(r: FleetRound): string | null {
   if (r.closed_at !== null) return null;
   const name = r.phase;
-  const started = fmt.isoToUnix(fleet.doc?.runs?.find((run) => run.ended_at === null)?.started_at);
+  // THIS ROW'S RUN, NOT THE FIRST RUNNING ONE IN THE DOCUMENT. `.find()` with
+  // no worktree test gave every row the same clock the moment two rounds were
+  // in flight - and this fleet runs one at a time, so it read correctly for as
+  // long as nothing could contradict it. The verification claims its own
+  // worktree, `<id>-verify`, so that has to be folded back here exactly as the
+  // collector folds it.
+  const mine = fleet.doc?.runs?.find(
+    (run) =>
+      run.ended_at === null &&
+      (run.worktree_id === r.worktree_id ||
+        run.worktree_id === `${r.worktree_id}-verify`),
+  );
+  const started = fmt.isoToUnix(mine?.started_at);
   if (!name || !Number.isFinite(started)) return null;
   const elapsed = fmt.coarse(host.now - started);
   const stat = fleet.phaseStats[name];
@@ -683,14 +696,17 @@ const costTip = computed(() => ({
                behind it. A round that ended well has no error and no sentence,
                so it gets no affordance at all rather than an expander that
                opens onto nothing - which is what would put one on every row. -->
-          <component
-            :is="row.error.length ? 'button' : 'span'"
-            class="cell state"
-            :class="{ expander: row.error.length }"
-            :type="row.error.length ? 'button' : undefined"
-            :aria-expanded="row.error.length ? opened === row.r.worktree_id : undefined"
-            :title="row.error.length ? 'why this round stopped' : undefined"
-            @click="row.error.length && toggle(row.r.worktree_id)"
+          <!-- EVERY ROW OPENS NOW. The gate used to be "does this round carry a
+               failure sentence", which was right while the panel held nothing
+               else; it now holds the approval card, the events and the phase
+               transcripts, and a round that went well is exactly the one whose
+               work somebody wants to read before approving it. -->
+          <button
+            class="cell state expander"
+            type="button"
+            :aria-expanded="opened === row.r.worktree_id"
+            :title="row.error.length ? 'why this round stopped, and what it did' : 'what this round did'"
+            @click="toggle(row.r.worktree_id)"
           >
             <StatusDot
               :tone="row.tone"
@@ -698,10 +714,10 @@ const costTip = computed(() => ({
               :size="7"
             />
             <StatePill :label="row.state" :tone="row.tone" size="sm" />
-            <span v-if="row.error.length" class="caret" aria-hidden="true">{{
+            <span class="caret" aria-hidden="true">{{
               opened === row.r.worktree_id ? "-" : "+"
             }}</span>
-          </component>
+          </button>
 
           <!-- The tracker task this round is carrying. A disabled chip when
                ODOO_URL is unset, which is also the `npm run dev` case. -->
@@ -833,8 +849,12 @@ const costTip = computed(() => ({
              host, outside anything this container can serve, so a link would be
              an offer the page cannot keep. -->
         <div v-if="opened === row.r.worktree_id" class="row detail" :class="row.tone">
-          <div class="why mono">
-            <p v-for="(line, i) in row.error" :key="i">{{ line }}</p>
+          <div class="why">
+            <p v-for="(line, i) in row.error" :key="i" class="mono reason">{{ line }}</p>
+            <RoundDetail
+              :round="row.r"
+              :can-act="controlState.approve_available"
+            />
           </div>
         </div>
         </template>
@@ -1256,19 +1276,22 @@ const costTip = computed(() => ({
 }
 
 .why {
-  font: var(--t-mono-xs);
   color: var(--fg-4);
-  /* Wraps rather than scrolls: these are conduct's sentences, sometimes with a
-     list of file names in them, and a reader needs all of it. */
   overflow-wrap: anywhere;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-sm);
+  /* THE PANEL BELOW SCROLLS SECTION BY SECTION, so this stays unbounded: a
+     height here would put a scrollbar inside a scrollbar. */
+  padding-bottom: 6px;
 }
 
-.why p {
-  margin: 0 0 3px;
-}
-
-.why p:last-child {
-  margin-bottom: 0;
+/* conduct's own sentences keep the wrap they had - sometimes with a list of
+   file names in them, and a reader needs all of it. The transcripts underneath
+   scroll instead, because one is three lines and the other is a thousand. */
+.why .reason {
+  font: var(--t-mono-xs);
+  margin: 0;
 }
 
 .cell.phase .sub,

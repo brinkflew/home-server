@@ -589,6 +589,7 @@ export function fleetDocument(): FleetDocument {
     ],
     control: {
       available: true,
+      approve_available: true,
       restart_floor_sec: 600,
       // ARMED BY A ROW WHILE conduct's DESCRIPTOR SAYS OTHERWISE, which is the
       // case the board has to render honestly: the switch is on and the reason
@@ -646,7 +647,10 @@ export function fleetUnreadable(): FleetDocument {
     // controls are absent rather than false-and-confident: `available` is what
     // decides whether a button renders at all, and an unreadable document must
     // not offer one.
-    control: { available: false, restart_floor_sec: 600, intake: [], holds: [] },
+    control: {
+      available: false, approve_available: false, restart_floor_sec: 600,
+      intake: [], holds: [],
+    },
     phase_stats: {},
     totals: {
       runs_today: null,

@@ -87,6 +87,12 @@ Environment=GANDI_BEARER_TOKEN=${GANDI_BEARER_TOKEN}
 # controls, which is the rollout rather than a fault. See .env.sample.
 Environment=WINDMILL_WORKSPACE=${WINDMILL_WORKSPACE}
 Environment=WINDMILL_DASHBOARD_TOKEN=${WINDMILL_DASHBOARD_TOKEN}
+# THE SECOND ONE ANSWERS THE HUMAN GATE, on /api/approve/*. A separate token
+# because each is scoped to starting exactly one flow, so neither route reaches
+# the other's - and this is the one that can end in a pull request. Empty
+# disables Approve and Decline on the board and leaves Windmill's own run page,
+# which is how every approval was answered before this existed.
+Environment=WINDMILL_APPROVE_TOKEN=${WINDMILL_APPROVE_TOKEN}
 # Upstream ports for the services whose listening port is itself set from the
 # environment, so the Caddyfile cannot drift from the service config.
 Environment=PORT_TDARR_WEB=${PORT_TDARR_WEB}
