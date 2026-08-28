@@ -1146,6 +1146,20 @@ signal read green.
 - `attempts !== null` does not catch `undefined`, and the collector and the bundle deploy
   separately. `--ink*`/`--t-micro` are in no stylesheet, so those declarations did nothing.
 
+### One SIGTERM, three defects, and five rounds that produced nothing
+- conduct's phase wait read no stop flag, so systemd's default 90s stop timeout expired while a
+  phase ran and **core-dumped conduct mid-phase**. The fix is an interruptible wait, never a longer
+  timeout - that would hang every deploy for up to ninety minutes.
+- **A reaped worktree left its round claiming the work still existed**, and `_failed_flow`'s three
+  guards never ask whether the tree exists - so a resume skipped the plan and failed in zero seconds
+  twice. Closing the round is the fix, not clearing `done`; every outbound call the reconciler makes
+  is wrapped on its own, or a Windmill outage abandons the rest of the sweep.
+- **$15.00 was binding on the upper half of its own distribution** - four dev runs at $4.88, $10.93,
+  $14.63 and $15.11. Running out is now repairable and breaking is not, keyed on the result event's
+  SUBTYPE and never on the sentence; the log is parsed once for both answers.
+- An `EmptyTree` cannot tell its two causes apart and must not assert either. A failed round parks
+  its task where intake cannot reach it, by design, and only a person can move it back.
+
 
 ## Target architecture
 
