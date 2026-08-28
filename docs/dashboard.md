@@ -100,7 +100,12 @@ so the one round this fleet has actually merged, `avanserv/upskald#249`, read **
 is a confident lie that no later run would have corrected. `pr_state` is therefore `unknown` for a
 publication row this code could not have read a url off at all, and `unknown` outranks the
 "not published" claim: **a null only means "opened none" when a url would have been visible had there
-been one.**
+been one.** The guard covers **two** cases, and the
+second was only found by running the deployed collector against the live database: a row this code
+could not read the column off at all, **and a row that closed before conduct started writing it**.
+Both existing publication rows on this host predate the columns and one of them is `#249`, so
+without the cutover in `FLEET_PR_RECORDED_FROM` the fleet's only merged pull request read
+"not published" permanently.
 
 **HIDING A MERGED ROUND REQUIRES POSITIVE EVIDENCE, AND THE GITHUB LEG FAILS OPEN.** The board drops
 a round once its pull request is merged and offers the rest behind a toggle that prints its own

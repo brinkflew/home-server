@@ -2999,6 +2999,26 @@ FLEET_PR_MAX = 10
 FLEET_GITHUB_API = "https://api.github.com"
 FLEET_GITHUB_TIMEOUT = 8
 
+# WHEN publication.pr_url STARTED BEING WRITTEN ON THIS HOST - the moment
+# conduct was restarted onto the migration, measured rather than assumed.
+#
+# A DATE IN CODE, AND THE ALTERNATIVE WAS A LIE. A migration is a moment in
+# time: every publication row closed before it holds NULL whether or not it
+# opened a pull request, and this host had two - one of which is
+# avanserv/upskald#249, which demonstrably did. Without this cutover both read
+# "not published" for ever, which is the confident, permanent, never-corrected
+# mis-statement this whole repository is organised against.
+#
+# So a NULL means "the flow opened none" only ON THE FAR SIDE OF THIS STAMP.
+# Before it the answer is "unknown", which the board renders as "published" -
+# a true statement about a publication row that closed, and no claim at all
+# about a pull request.
+#
+# It expires by itself: the board carries FLEET_ROUNDS rounds and these two age
+# out of that window, after which this constant stops matching anything. Do not
+# "tidy" it away before then - it is doing work until it isn't.
+FLEET_PR_RECORDED_FROM = "2026-08-28T14:00:00Z"
+
 
 def _fleet_link(raw):
     """conduct's own link, or nothing. Never a resume URL, never constructed."""
@@ -3419,7 +3439,12 @@ def source_fleet(m, doc):
             # have seen a url had there been one.
             if row["pr_url"]:
                 row["pr_state"] = "unknown"
-            elif row["published"] and not has_pr:
+            elif row["published"] and (
+                    not has_pr
+                    or (published.get("closed_at") or "") < FLEET_PR_RECORDED_FROM):
+                # Either this collector could not read the column at all, or the
+                # row closed before conduct started writing it. Both mean the
+                # same thing: a NULL here is not evidence of anything.
                 row["pr_state"] = "unknown"
             else:
                 row["pr_state"] = None

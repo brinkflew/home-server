@@ -3349,6 +3349,13 @@ three of them are the same mistake in different clothes.
   has actually merged read **"not published"** - permanently, with no later run correcting it.
   `pr_state` is `unknown` when the column could not be read at all, and `unknown` outranks the claim:
   a null means "opened none" only when a url would have been visible had there been one.
+- **The first version of that fix covered only half of it, and the live host proved it.** Guarding on
+  "the column is absent" fixes the deployment window and does nothing for the permanent case: once
+  conduct HAS migrated, a row that closed before it still holds NULL. Both publication rows on this
+  host predate the columns and one is `#249`, so the fleet's only merged pull request would have read
+  "not published" for ever with every test green. `FLEET_PR_RECORDED_FROM` is the cutover - a dated
+  constant, deliberately, because the alternative was a lie - and it expires by itself as those rows
+  age out of the board's window.
 
 ### Hiding a row needs positive evidence, and the leg that supplies it fails open
 - **A merged round is hidden and an UNKNOWN one is not.** `pr_state` is `unknown` whenever GitHub
