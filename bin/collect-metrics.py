@@ -3182,12 +3182,18 @@ def _fleet_derive_rounds(conn):
     """
     rounds = []
     open_group = {}
+    # EVERY COLUMN conduct HAS ADDED SINCE THIS SHIPPED IS OPTIONAL HERE. The
+    # two halves deploy separately - the collector arrives with `git pull` and
+    # the column with a conduct restart - so a SELECT naming one before the
+    # other side has migrated reads as an unreadable database and BLANKS THE
+    # WHOLE BOARD. That is not hypothetical; it happened on 2026-08-28.
+    optional = [name for name in ("odoo_task", "error", "branch")
+                if _fleet_has(conn, "run", name)]
     rows = _fleet_rows(conn, """
         SELECT id, project, phase, worktree_id, started_at, ended_at, result,
                exit_code, cost_usd, tokens_in, tokens_out, task%s
           FROM run ORDER BY id DESC LIMIT ?
-    """ % (", odoo_task" if _fleet_has(conn, "run", "odoo_task") else ""),
-        (FLEET_RUN_WINDOW,))
+    """ % ("".join(", " + name for name in optional)), (FLEET_RUN_WINDOW,))
 
     for row in reversed(rows):
         if row["phase"] not in FLEET_PHASES:
@@ -3202,12 +3208,22 @@ def _fleet_derive_rounds(conn):
             group = {
                 "worktree_id": worktree,
                 "project": row["project"],
+                # BOTH, AND THEY ARE NOT THE SAME QUESTION. `started_at` is when
+                # the round's first phase began; `opened_at` is what the board
+                # renders as "opened N ago" and what byUrgency breaks ties on.
+                # They coincide for a derived round and the key has to be here
+                # anyway - it used to come from chain.opened_at, and deleting
+                # that query without replacing it left every row reading
+                # "opened never".
+                "opened_at": row["started_at"],
                 "started_at": row["started_at"],
                 "ended_at": row["ended_at"],
                 "done": [],
                 "phase": row["phase"],
                 "odoo_task": row.get("odoo_task"),
                 "task": row["task"],
+                "branch": row.get("branch"),
+                "error": None,
                 "cost_usd": 0.0,
                 "tokens_in": 0,
                 "tokens_out": 0,
@@ -3234,6 +3250,17 @@ def _fleet_derive_rounds(conn):
             group["odoo_task"] = row.get("odoo_task")
         if group["task"] is None:
             group["task"] = row["task"]
+        # THE LAST RUN THAT FAILED IS THE ONE THAT STOPPED THE ROUND, so a later
+        # reason replaces an earlier one rather than the other way round - a
+        # repair's second dev failure is what a reader is looking at, not the
+        # first one it already worked past.
+        if row.get("error"):
+            group["error"] = row["error"]
+        # AND ANY RUN THAT PUSHED ONE NAMES THE BRANCH. dev pushes it now and
+        # verify pushes it again, so the newest is the one that is on the
+        # remote; a round where neither ran keeps None and the row says so.
+        if row.get("branch"):
+            group["branch"] = row["branch"]
         # conduct's own predicate, and the one an earlier version of this file
         # got backwards: a NULL result is a run still going, not a failure.
         group["running"] = row["result"] is None
@@ -3315,7 +3342,48 @@ def _fleet_odoo_url(env, odoo_task):
         return None
     if not (base.startswith("https://") or base.startswith("http://")):
         return None
-    return "%s/web#id=%s&model=project.task" % (base, int(odoo_task))
+    # `/odoo/<model>/<id>`, WHICH IS THE ONLY FORM THIS INSTANCE ANSWERS. The
+    # legacy `/web#id=N&model=project.task` hash was what shipped here first and
+    # it puts the record behind a client-side route Odoo 17 dropped. conduct
+    # talks to this instance over POST /json/2/<model>/<method>, which is the
+    # Odoo 19 API - so the version is not in doubt.
+    return "%s/odoo/project.task/%s" % (base, int(odoo_task))
+
+
+def _fleet_branch_url(env, branch, pr_url):
+    """The branch's own page on GitHub, or None.
+
+    BUILT HERE FOR THE REASON _fleet_odoo_url IS: src/links.ts derives every
+    sibling application from window.location.hostname and refuses a build-time
+    variable, and github.com is nobody's sibling.
+
+    THE SLUG IS CONFIGURATION THIS PROCESS CANNOT READ. It lives in conduct's
+    config.py, which is a Python module in another repository on the same host -
+    so it is named again in .env, and a second copy of a fact is drift waiting
+    to happen. CLOSED BY MEASUREMENT RATHER THAN BY A COMMENT: whenever the same
+    round also carries a pull request, that URL contains the real slug, so the
+    two can be compared. A disagreement WITHHOLDS THE LINK rather than following
+    it, which surfaces as a branch name that is not clickable - and says so on
+    stderr, where the collector's journal keeps it.
+
+    NOT A `sources` ENTRY. That vocabulary means "this upstream did not answer,
+    so its rows are absent rather than zero", and the store prints exactly that
+    sentence. Nothing here failed to answer; one string in .env is wrong.
+    """
+    slug = str(env.get("AGENTS_REPO_SLUG") or "").strip().strip("/")
+    if not branch or not slug or slug.count("/") != 1:
+        return None
+    if pr_url:
+        parsed = urlparse(str(pr_url))
+        parts = [p for p in parsed.path.split("/") if p]
+        if parsed.netloc == "github.com" and len(parts) >= 2:
+            actual = "%s/%s" % (parts[0], parts[1])
+            if actual != slug:
+                print("fleet: AGENTS_REPO_SLUG is %s but this fleet's pull "
+                      "requests are on %s - withholding branch links"
+                      % (slug, actual), file=sys.stderr)
+                return None
+    return _fleet_link("https://github.com/%s/tree/%s" % (slug, branch))
 
 
 def _fleet_pr_api(pr_url):
@@ -3482,15 +3550,23 @@ def source_fleet(m, doc):
         rounds = _fleet_derive_rounds(conn)
         stats = _fleet_phase_stats(conn)
 
-        # `chain` IS STILL READ, FOR THE ONE THING IT IS ACCURATE ABOUT: the
-        # round in flight. It is where waiting_on, the approval link and the
-        # tracker id for the current round live, and none of that is in the run
-        # log. It cannot speak for any round that has finished.
+        # `chain` IS STILL READ, FOR THE TWO THINGS IT IS ACCURATE ABOUT: the
+        # round in flight, and the sentence conduct wrote when the newest round
+        # ended. waiting_on, the approval link and the tracker id for the round
+        # in flight are all here and nowhere in the run log. It cannot speak for
+        # any round before the newest one on its worktree.
+        #
+        # AND `closed_at IS NULL` WAS THE WRONG FILTER. It made the whole row
+        # absent the moment a round ended, so `closed_why` - the one field whose
+        # entire purpose is saying why something stopped - was null on every
+        # round that had stopped and populated only on rounds that had not. The
+        # row is read whatever its state now; `is_open` below is what decides
+        # which of its fields may be believed.
         live = {}
         for row in _fleet_rows(conn, """
             SELECT worktree_id, project, odoo_task, ref, phase, opened_at,
                    attempts, flow_job_id, closed_at, closed_why
-              FROM chain WHERE closed_at IS NULL
+              FROM chain
         """):
             live[row["worktree_id"]] = row
 
@@ -3535,7 +3611,12 @@ def source_fleet(m, doc):
 
         for index, row in enumerate(rounds):
             chain = live.get(row["worktree_id"])
-            is_open = chain is not None and latest[row["worktree_id"]] == index
+            newest = latest[row["worktree_id"]] == index
+            # OPEN MEANS BOTH: the chain row says nobody closed it, AND this is
+            # the round it describes. Either alone draws a finished round as
+            # though somebody were still waiting on it.
+            is_open = (chain is not None and newest
+                       and chain["closed_at"] is None)
 
             row["max_attempts"] = FLEET_MAX_ATTEMPTS
             row["phases"] = list(FLEET_PHASES)
@@ -3543,8 +3624,14 @@ def source_fleet(m, doc):
             row["flow_job_id"] = chain["flow_job_id"] if chain and is_open else None
             row["head"] = None
             row["resumed_at"] = None
+            # `chain` SPEAKS FOR ONE ROUND, AND THIS IS THE ONE IT SPEAKS FOR.
+            # It holds a single row per worktree, so its sentence belongs to the
+            # LATEST round on that worktree - open or closed. Reading it only
+            # while the row was open made it null on every closed round, which
+            # is the only place a stop reason is worth having; and reading it on
+            # every round would put the newest round's reason on all ten.
             row["closed_why"] = _fleet_text(
-                chain["closed_why"], 200) if chain and is_open else None
+                chain["closed_why"], 200) if chain and newest else None
 
             if chain and is_open:
                 # The chain knows the task even when the run rows predate
@@ -3585,7 +3672,14 @@ def source_fleet(m, doc):
             row["odoo_url"] = _fleet_odoo_url(env, row["odoo_task"])
 
             published = row.pop("publication", None) or {}
-            row["branch"] = published.get("branch")
+            # THE RUN LOG FIRST, AND publication.branch AS THE FALLBACK. That
+            # row opens when the pull request does, so it is the only source for
+            # rounds that predate run.branch and the wrong one for every round
+            # since: dev pushes the branch now, minutes before the gate, so a
+            # round that was refused has one and no publication at all.
+            row["branch"] = row.get("branch") or published.get("branch")
+            row["branch_url"] = _fleet_branch_url(env, row["branch"],
+                                                  published.get("pr_url"))
             row["pr_url"] = _fleet_link(published.get("pr_url"))
             row["pr_number"] = published.get("pr_number")
             # PUBLISHED AT ALL, which is a different question from "merged". A

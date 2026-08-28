@@ -360,3 +360,49 @@ as "steady" when it means "absent". Lines are built as a `path` with a fresh `M`
 **Fonts are vendored, not fetched.** `@fontsource/*` self-hosts Geist and Azeret Mono in the bundle,
 for the reason `apps/jellyfin/custom.css` records at length about the sixteen `@import` URLs it used
 to carry.
+
+**The board says why a round stopped, and only when one did.** A failed row's state cell is a
+button; opening it draws a full-width sibling row - not a child, because `.row` IS the grid and
+anything inside it becomes an eighth cell and shifts the seven beside it. One at a time, which is
+`useTooltip`'s rule and for its reason. It carries `run.error` and `chain.closed_why`, both
+**displayed and never parsed**, and it names the gate log rather than linking it: the log is ten
+megabytes on the host, outside anything this container can serve, so a link would be an offer the
+page cannot keep.
+
+**The trigger is the outcome, not the presence of a sentence.** conduct writes `closed_why` on every
+round it closes, "reached the publish path" included - so keying the expander on that field would
+put one on every finished row, most of them opening onto a reason nothing had gone wrong.
+`roundState(r).tone` is the structural answer, already derived, and asking it is how this avoids
+reading the words. The two sources also overlap: `closed_why` is built as `"the flow failed: <the
+refusal>"`, so on a refused round they say the same thing twice and `roundError` prints it once.
+
+**The pull-request column holds the branch until there is a pull request.** conduct pushes it at the
+end of dev, minutes into a round that then spends fifteen to thirty in `make check`, so for most of
+a round's life that column would otherwise be empty at exactly the moment somebody wants to look.
+The `agents/` prefix is dropped for display - `publish.branch_name` refuses a name outside it, which
+is the whole boundary keeping a phase off `main`, so it is on every branch and distinguishes none of
+them.
+
+**The branch is deliberately not also an action.** The action column answers "what is owed to a
+person" and the pull-request column answers "where is the code"; the same destination twice on one
+row is the row saying it does not know which of them matters. A merged round is never sent to its
+branch either - the history is on `main` now.
+
+**`AGENTS_REPO_SLUG` is a second copy of a fact conduct already has**, because the collector cannot
+import a Python module from another repository. **The drift is closed by measurement**: whenever a
+round also carries a pull request, that URL contains the real slug, and a disagreement withholds
+every branch link rather than following it. The symptom is then a branch name that will not click,
+and the collector names both slugs on stderr where the journal keeps it. It is not a `sources` entry
+- that vocabulary means "this upstream did not answer, so its rows are absent rather than zero", and
+nothing failed to answer; one string in `.env` is wrong.
+
+**The attempt line renders only above one.** "attempt 1 of 3" is on every round that went through
+once, which is a line on every row saying nothing. The guard is `typeof === "number" && > 1`, and
+the type check is not decoration: `!== null` was what shipped, the collector and the bundle deploy
+separately, and `undefined !== null` is true - so a document written by an older collector rendered
+literally `attempt  of 3`.
+
+**Four custom properties this page used did not exist.** `--ink`, `--ink-dim`, `--ink-faint` and
+`--t-micro` are in no stylesheet, so every declaration naming one was invalid-at-computed-value-time
+and the sub-lines silently inherited the row's font and colour. The scale is `--fg` through
+`--fg-dim` and `--t-mono-xs`. Nothing failed and nothing warned; the page just quietly looked wrong.

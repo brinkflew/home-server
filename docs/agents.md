@@ -2210,3 +2210,121 @@ turns the resulting silence into a warning after seven days, which is a detector
 answers.** An hourly POST to a third party would put that party's uptime in the path of this
 battery, which is the same reason `routes.ntfy` sits behind `--routes`. A revoked API key therefore
 shows up as a line on an approval card and not as a check going amber.
+
+### The gate's own formatting closed the round, and the loop that should have caught it could not
+
+**Three rounds died on 2026-08-28, all on the same sentence**, from the journal:
+
+```
+chain upskald-ship: closed, the flow failed at conduct_verify:
+  ['after the gate ran, the tree is not clean: web/bun.lock - the committed tree is not what was tested']
+```
+
+`make install && make check` regenerates `web/bun.lock`, and `format` rewrites whatever prettier
+disagrees with - one of the three also carried `IntakeForm.vue` and two spec files. So the tree
+conduct committed stopped matching the tree the gate tested, and `dispatch.py`'s second clean check
+refused. **That refusal is terminal**: `_conduct_broke` is false for a payload carrying `refused`,
+so `_failed_flow` closes the chain and tells a person.
+
+**Committing the gate's output is sound because of the ORDER, and the order was measured:**
+
+```
+check-gate: version-check format lint deadcode deps type-check unit-test verify-site e2e-test
+```
+
+`format` and `lint` are prerequisites of every target that reads, `bun.lock` is written by `install`
+before `check` starts, and make runs prerequisites left to right. **Every test ran against the
+mutated tree.** The commit conduct makes therefore IS what was tested - it satisfies the assertion
+rather than weakening it. `verify.gate_output` captures the diff with `add -A` (so a file the gate
+CREATED is carried too, and .gitignore keeps `playwright-report/` and `test-results/` out of it) and
+`verify.apply_gate_output` commits it in the PHASE worktree, not the verification tree, because that
+is the tree the next phase continues. `staging.take` runs again afterwards: `head_sha`, `tree_sha`
+and the card's two numbers all have to describe the new commit or the round publishes the one before
+it.
+
+**Two things are still refused, and one of them is not hypothetical.** `format` runs over the whole
+tree and `Makefile` is in it, so a diff touching a `REFUSE_DEFAULT` path is refused rather than
+committed - a gate that rewrites what verifies it is exactly where "the gate wrote it" stops being
+an argument. The other is size: `GATE_DIFF_MAX` is 2 MB, sized from this repository's own lockfiles
+(`api/uv.lock` 353 KB, `web/bun.lock` 181 KB, `e2e/bun.lock` 71 KB, so about 1.2 MB if every one is
+rewritten whole). **A first draft set it to 512 KB**, which would have refused the exact case the
+repair exists for while reading as a sensible number.
+
+**And the retry loop was unreachable.** `_review_step` has carried `again = rounds_left and not
+base_red` since it was written, with the sentence *"the gate failed and the base passes it, so the
+change is what broke it"*. That sentence could never print. `judge_base` refuses **precisely when
+the base passes the target the head fails** - the one case a dev phase can fix - so a red gate that
+was the change's fault returned `ok: false` and never reached the review step at all. The only red
+gate that ever got there was one the base already failed, where `base_red` is true and `again` is
+false. The verification now sets `report["retryable"]` off `measured is not None`, which is its own
+measurement rather than the wording of a reason, and `_failed_flow` starts a repair.
+
+### A repair is not a round, and the difference is the planning phase
+
+| | round | repair |
+|---|---|---|
+| what earns it | the review's blocking findings | a red gate, or a refusal the change can fix |
+| runs | plan, dev, verify, review | dev, verify, review |
+| the tree | continues (`chain_restart` clears `done`) | continues, and `plan` survives in `done` |
+| counted by | `chain_open`, inside the planning phase | `state.chain_repair`, before the flow starts |
+
+**A review's findings are a judgement that may invalidate the plan**, which is why a round re-plans
+and why `chain_restart`'s comment says so. **A red gate is mechanical** - `make check` named the
+target it died on - so re-planning buys a second planning phase to be told what the gate already
+said. That is the same argument `_review_step` makes for skipping the review on a red gate, one step
+earlier.
+
+**`resume: True` is the whole mechanism, and it is the only thing `_may_skip` reads.** Nothing else
+in the flow or the handlers looks at that argument.
+
+**The count has to move with it.** `chain_open` counts a round from inside the planning phase,
+deliberately, so that a resume is not counted - and a repair skips that phase for the same reason a
+resume does. Without `chain_repair` counting, the bound would stop existing and a gate that stayed
+red would loop for as long as the model kept exiting zero. It is put back if `windmill.run_flow`
+raises: otherwise an outage spends a change's whole allowance in three cycles and closes it as "the
+rounds are used up", which names the wrong thing entirely.
+
+**`MAX_ATTEMPTS` is 3.** Two was one attempt and one remediation pass, which was the whole loop
+while a refusal ENDED the run. Leaving it at two would have converted the fix above into a cut in
+what a review is allowed to ask for. **One counter, still**: a second allowance for repairs was
+considered and refused, because two bounds are two things to reason about at the moment somebody is
+asking why a change stopped.
+
+### The branch is pushed after dev, and a refused round now leaves one behind
+
+The gate takes fifteen to thirty minutes and the change is finished before it starts, so a person
+who wanted to read the code had been waiting half an hour for a branch that was ready at the
+beginning. `dispatch.push_after_dev` runs at the end of `_dev_step`, behind `verify.inspect` - which
+needs no container, answers in about a second, and is where "the phase committed nothing", "the head
+does not descend from its base" and "the change touches what verifies it" already live. Those are
+the refusals where pushing would be **wrong** rather than merely early, and skipping here costs a
+person nothing because the verification makes the same ones a minute later with the full card.
+
+**The lease needed no change.** The verification already reads `expect =
+last_report["pushed_sha"]`, so it leases on what dev pushed instead of creating the branch itself.
+
+**What is genuinely different is the posture.** Until now nothing left the host until the gate had
+spoken. conduct never deletes a ref - `-` is deliberately absent from `publish._FLAGS` - so `agents/`
+now accumulates branches for rounds that were never published. That is the price of being able to
+read the code, and it was asked for.
+
+**A transport failure here is not a failure of the dev step.** The change is committed on the
+worktree and the verification pushes again in a minute; losing a finished phase to `ssh: connection
+reset` would be the most expensive way to be tidy.
+
+### `run.error` and `run.branch`, because neither `report` nor `chain` is a log
+
+Both tables are keyed on `worktree_id`, and the worktree is REUSED - so each holds exactly one row
+and answers about the newest round whichever round is asked about. That is the same premise that
+drew one row on the run board where there should have been eleven. `run` is the only append-only
+table conduct has.
+
+- **`error`** is written by `state.finish_run(detail=)` and is null on success. A list of refusals is
+  joined to prose on the way in, because a bare `str()` of one is a Python repr - which is what
+  `chain.closed_why` stores and what a reader has to unpick by eye. `COALESCE`, so `abandon_runs`
+  closing a row later cannot blank a reason an earlier close recorded.
+- **`branch`** is written by both pushes. `publication.branch` opens with the pull request, so a
+  round that was refused or is still in flight had a branch nowhere.
+
+**Null means "not recorded", never "nothing went wrong"** - an inspect-level refusal returns before
+`start_run`, so there is no row at all to carry one.
