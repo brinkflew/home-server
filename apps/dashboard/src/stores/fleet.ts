@@ -46,6 +46,7 @@ const CONTROL_POLL_MS = 30_000;
  *  a button that fails. */
 const CONTROL_ABSENT: FleetControl = {
   available: false,
+  approve_available: false,
   restart_floor_sec: 600,
   intake: [],
   holds: [],

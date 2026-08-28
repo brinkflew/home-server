@@ -65,6 +65,7 @@ import calendar
 import glob
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -3359,6 +3360,12 @@ def _fleet_control(conn, env):
     """
     block = {
         "available": bool(str(env.get("WINDMILL_DASHBOARD_TOKEN") or "").strip()),
+        # A SECOND TOKEN AND SO A SECOND FLAG. The two routes are scoped to one
+        # flow each, so one being minted says nothing about the other - and a
+        # board that inferred the approve chips from `available` would offer a
+        # button that answers 401 the first time a person needs it most.
+        "approve_available":
+            bool(str(env.get("WINDMILL_APPROVE_TOKEN") or "").strip()),
         "restart_floor_sec": FLEET_RESTART_FLOOR_SEC,
         "intake": [],
         "holds": [],
@@ -3944,6 +3951,798 @@ def source_fleet(m, doc):
 
 
 # ------------------------------------------------------------------------------
+# What a round actually did: one document each, rendered host-side
+# ------------------------------------------------------------------------------
+# WHY THIS IS NOT A LINK TO THE LOG. apps/dashboard refused to link a phase log
+# at all and the refusal was right: a gate log is ten megabytes, it is 0600 on
+# the host because "if a run ever prints its environment, the runner's token
+# lands here durably", and no redaction pass existed anywhere. The container
+# that serves the board can reach none of it, and should not.
+#
+# So the host renders instead, and what it renders is an ALLOWLIST of shapes.
+# Anything the parser does not recognise is dropped rather than passed through,
+# which is what makes the output safe to serve even though its input is not.
+#
+# MEASURED BEFORE IT WAS DESIGNED, on 73 logs and 374 MB: the conversation
+# surface of the WHOLE history is 450 KB, a gate log carries 197,160 lines and
+# 38 JSON events - none of them a conversation - and `thinking` blocks are all
+# zero-length, so there is nothing there to render. Dropping tool RESULTS is
+# what makes the redaction affordable: DOCKER_VOLUME_CACHE appears 3,920 times
+# in the raw logs and 17 times in what survives.
+#
+# A FILE FAMILY RATHER THAN A DOCUMENT. _DOC_PATHS is one key to one file and
+# main() writes one path per key, so this source manages its own writes - and,
+# uniquely here, its own SWEEP. Nothing else in this file deletes anything; a
+# directory whose contract is "rewritten whole, nothing accumulates" needs one
+# once the filenames stop being fixed.
+ROUND_PREFIX = "round-"
+
+# The board draws FLEET_ROUNDS, so rendering more would be work nothing can ask
+# for. Kept equal deliberately: two caps that can differ is a round that is on
+# the board with no document behind it.
+ROUND_KEEP = FLEET_ROUNDS
+
+# Per-run ceilings, because a cold start faces 374 MB inside a unit with
+# TimeoutStartSec=25s and MemoryHigh=256M. Oldest-missing first, so it converges
+# over several passes rather than failing every one of them.
+ROUND_LOG_FILES_PER_RUN = 6
+ROUND_LOG_BYTES_PER_RUN = 48 * 1024 * 1024
+
+# The most of one model log that is ever parsed, and the tail kept from a gate
+# log. The gate tail is SEEKED, never read forward: the largest on this host is
+# 10.9 MB and the interesting end of it is the last few pages.
+ROUND_LOG_MAX_BYTES = 12 * 1024 * 1024
+ROUND_GATE_TAIL_BYTES = 64 * 1024
+
+# A whole document's ceiling. ~400 KB is what a real round measures; this is
+# headroom, not a target, and a document that hits it says so rather than
+# silently ending mid-conversation.
+ROUND_DOC_MAX_BYTES = 3 * 1024 * 1024
+
+# Shorter than this and a value is not a secret, it is a coincidence: `022` and
+# `on` would otherwise redact half the English in the file.
+ROUND_REDACT_MIN = 12
+
+# conduct's log directory, derived the way conduct/config.py derives it.
+CONDUCT_LOGS = os.environ.get(
+    "CONDUCT_FLEET_ROOT", os.path.join(CACHE, "conduct"))
+CONDUCT_LOGS = os.path.join(CONDUCT_LOGS, "logs")
+
+# The phase name that appears in a verification's FILENAME. Its run row says
+# `verify` on worktree `<id>-verify`, but phase.start was called with "check" -
+# so the file is `<id>-verify-check-<stamp>.log` and a naive match finds nothing.
+ROUND_FILENAME_PHASE = {"verify": "check"}
+
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-_]")
+
+
+def _round_redaction(env):
+    """(value, placeholder) pairs, longest value first - or None.
+
+    NONE MEANS "DO NOT RENDER", AND THAT IS THE POINT. load_env() degrades to {}
+    during bin/render-env.sh's write window, and a redactor built from an empty
+    env redacts nothing while looking exactly like one that found nothing to
+    redact. Failing closed costs one skipped pass every few weeks; failing open
+    writes an unredacted transcript into a directory a browser can read.
+
+    THE PLACEHOLDER NAMES THE VARIABLE rather than saying [redacted], because
+    every one of these names is already public in .env.sample and `${DOMAIN}`
+    tells a reader what they are looking at where a row of asterisks does not.
+
+    LONGEST FIRST so a short value that is a substring of a longer one cannot
+    corrupt it - replacing DOMAIN before ODOO_URL would leave a mangled tail
+    that no later pass can recognise.
+    """
+    if not env:
+        return None
+    pairs = []
+    for name, value in env.items():
+        text = str(value or "")
+        if len(text) >= ROUND_REDACT_MIN:
+            pairs.append((text, "${%s}" % name))
+    pairs.sort(key=lambda pair: len(pair[0]), reverse=True)
+    return pairs
+
+
+def _round_clean(text, pairs, limit=None):
+    """One string, ANSI stripped, redacted, and optionally clipped."""
+    if not text:
+        return ""
+    out = _ANSI.sub("", str(text))
+    for value, placeholder in pairs:
+        if value in out:
+            out = out.replace(value, placeholder)
+    if limit and len(out) > limit:
+        out = out[:limit] + "\n... clipped at %d characters" % limit
+    return out
+
+
+def _round_log_index():
+    """Every phase log on disk, as {(worktree, phase): [(stamp, path, size)]}.
+
+    PARSED FROM THE RIGHT, because a worktree id contains hyphens of its own -
+    `upskald-ship-verify-check-20260828T221500Z.log` is worktree
+    `upskald-ship-verify`, phase `check`. Splitting from the left gets every
+    round on this host wrong.
+    """
+    index = {}
+    try:
+        names = os.listdir(CONDUCT_LOGS)
+    except OSError:
+        return index
+    for name in names:
+        if not name.endswith(".log"):
+            continue
+        stem = name[:-4]
+        parts = stem.rsplit("-", 2)
+        if len(parts) != 3:
+            continue
+        worktree, phase, stamp = parts
+        path = os.path.join(CONDUCT_LOGS, name)
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            continue
+        index.setdefault((worktree, phase), []).append((stamp, path, size))
+    for entries in index.values():
+        entries.sort()
+    return index
+
+
+def _round_stamp(iso_text):
+    """An ISO timestamp in the shape phase.start puts in a filename."""
+    return str(iso_text or "").replace("-", "").replace(":", "")
+
+
+def _round_log_for(run, index, spoken_for, claimed, ceiling):
+    """The log a run wrote, from its own column or by matching the filename.
+
+    THE COLUMN IS conduct's ANSWER AND IT ONLY COVERS RUNS FROM ITS DEPLOY. Logs
+    are kept thirty days and the board draws forty rounds, so without a fallback
+    the browser would show nothing at all for weeks. The fallback is the one that
+    has to be careful, and the first draft of it was wrong in two ways that both
+    showed a reader SOMEBODY ELSE'S TRANSCRIPT - which is worse than showing
+    none, because it is confidently wrong:
+
+    - THE MATCH NEEDS A CEILING, not just a floor. A run whose own log has aged
+      out of LOG_RETAIN_SEC otherwise matches the next log on that worktree,
+      which belongs to a later round. `ceiling` is the next run's start, because
+      phase.start for run N+1 cannot precede the log of run N.
+    - A LOG CAN ONLY BE CLAIMED ONCE. Without `claimed`, three dev runs in one
+      round all matched the same file - observed on the live host, 2026-08-29.
+
+    Two older traps that the first draft did get right: the stamp is at or AFTER
+    started_at and never equal to it, because prepare_worktree sits between
+    state.start_run and phase.start; and the phase in the name is not always the
+    phase on the row, because the verification's row says `verify` while
+    phase.start was called with "check". `spoken_for` carries base_gate.log, so
+    a red round's TWO `-verify-check-` logs against ONE run row are separated by
+    identity rather than by guessing which timestamp meant which.
+    """
+    recorded = (run.get("log") or "").strip()
+    if recorded:
+        return recorded
+    worktree = str(run.get("worktree_id") or "")
+    phase = str(run.get("phase") or "")
+    entries = index.get((worktree, ROUND_FILENAME_PHASE.get(phase, phase)))
+    if not entries:
+        return None
+    floor = _round_stamp(run.get("started_at"))
+    for stamp, path, _size in entries:
+        if stamp < floor or path in spoken_for or path in claimed:
+            continue
+        if ceiling is not None and stamp >= ceiling:
+            break
+        return path
+    return None
+
+
+def _round_conversation(path, pairs):
+    """One model phase's transcript, as an allowlist of shapes.
+
+    THE FILE IS NOT JSONL. It is the raw stdout of the container, so setup and
+    build output is interleaved with the stream - 203 of 947 lines in a measured
+    dev run, all at the head. `jq` over the whole file yields nothing, and the
+    only workable rule is the one conduct's own quota.scan uses: a line that does
+    not start with `{` is not an event.
+
+    WHAT IS KEPT: the prompt, assistant text, tool CALLS with their input, the
+    permission denials, and the result event's scalars. WHAT IS DROPPED: tool
+    RESULTS, which is where file contents and command output land, and every
+    shape not named here.
+    """
+    turns = []
+    result = None
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return None, None
+    read = 0
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                read += len(line)
+                if read > ROUND_LOG_MAX_BYTES:
+                    turns.append({"kind": "note", "text":
+                                  "log truncated at %d bytes of %d"
+                                  % (ROUND_LOG_MAX_BYTES, size)})
+                    break
+                if not line.startswith("{"):
+                    continue
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                kind = event.get("type")
+                if kind == "assistant":
+                    for block in _round_blocks(event):
+                        if block.get("type") == "text":
+                            turns.append({"kind": "say", "text": _round_clean(
+                                block.get("text"), pairs, 20000)})
+                        elif block.get("type") == "tool_use":
+                            turns.append({
+                                "kind": "tool",
+                                "name": str(block.get("name") or "?"),
+                                "input": _round_clean(
+                                    json.dumps(block.get("input"),
+                                               sort_keys=True, default=str),
+                                    pairs, 20000),
+                            })
+                elif kind == "user":
+                    for block in _round_blocks(event):
+                        # THE ONE text BLOCK IS THE PROMPT. The other 139 in a
+                        # measured dev run are tool_result, which is exactly
+                        # what must not be here.
+                        if block.get("type") == "text":
+                            turns.append({"kind": "ask", "text": _round_clean(
+                                block.get("text"), pairs, 40000)})
+                elif kind == "system" and event.get("subtype") == "permission_denied":
+                    turns.append({"kind": "denied", "text": _round_clean(
+                        json.dumps(event, sort_keys=True, default=str),
+                        pairs, 2000)})
+                elif kind == "result":
+                    usage = event.get("usage")
+                    result = {
+                        "subtype": event.get("subtype"),
+                        "is_error": bool(event.get("is_error")),
+                        "num_turns": event.get("num_turns"),
+                        "duration_ms": event.get("duration_ms"),
+                        "total_cost_usd": event.get("total_cost_usd"),
+                        "stop_reason": event.get("stop_reason"),
+                        "usage": usage if isinstance(usage, dict) else None,
+                    }
+    except OSError:
+        return None, None
+    return turns, result
+
+
+def _round_blocks(event):
+    """The content blocks of a message event, defensively."""
+    message = event.get("message")
+    content = (message or {}).get("content") if isinstance(message, dict) else None
+    if not isinstance(content, list):
+        return []
+    return [block for block in content if isinstance(block, dict)]
+
+
+def _round_gate_tail(path, pairs):
+    """The last pages of a gate log, ANSI stripped and redacted.
+
+    SEEKED, NOT READ FORWARD. The largest of these on this host is 10.9 MB and
+    the unit's MemoryHigh is 256M, so reading one to keep 64 KB of it would be a
+    ceiling breach for nothing. A gate log carries no conversation at all - 38
+    JSON events in 197,160 lines, and those are the application's structlog - so
+    the tail is the whole of what is worth showing.
+    """
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as handle:
+            if size > ROUND_GATE_TAIL_BYTES:
+                handle.seek(size - ROUND_GATE_TAIL_BYTES)
+                handle.readline()  # discard the partial line the seek landed in
+            raw = handle.read().decode("utf-8", "replace")
+    except OSError:
+        return None
+    return {"bytes": size, "truncated": size > ROUND_GATE_TAIL_BYTES,
+            "text": _round_clean(raw, pairs)}
+
+
+def _round_key(row):
+    """worktree + start, which is already the board's own answer.
+
+    THERE IS NO ROUND ID ANYWHERE. `chain` cannot supply one - its worktree_id
+    is a PRIMARY KEY under INSERT OR REPLACE, so it holds one row against 72
+    runs - and the worktree is REUSED between changes. _fleet_derive_rounds
+    groups the run log on `plan` and the publication join keys on started_at, so
+    the pair is what every other consumer already treats as identifying.
+    """
+    stamp = str(row.get("started_at") or "").replace("-", "").replace(":", "")
+    return "%s-%s" % (row.get("worktree_id") or "unknown", stamp)
+
+
+def _round_path(key):
+    return os.path.join(DOC_DIR, "%s%s.json" % (ROUND_PREFIX, key))
+
+
+# --print IS A DRY RUN AND HAS TO REACH THIS SOURCE. Every other source here is
+# read-only by nature, so `--print` costing nothing was a property rather than a
+# decision; this one writes AND deletes, and a person running --print to see
+# what a round renders must not have the directory swept underneath them.
+_ROUND_DRY_RUN = ["--print" in sys.argv]
+
+
+def _round_windows(rounds):
+    """{key: (worktree, start, end_exclusive)} - each round's slice of the log.
+
+    A ROUND ENDS WHERE THE NEXT ONE ON THE SAME WORKTREE BEGINS, not at its own
+    ended_at: a phase that outlived the round's last recorded end still belongs
+    to it, and the alternative - a gap - would silently drop rows.
+    """
+    by_tree = {}
+    for row in rounds:
+        by_tree.setdefault(row["worktree_id"], []).append(row)
+    windows = {}
+    for worktree, group in by_tree.items():
+        group = sorted(group, key=lambda r: str(r.get("started_at") or ""))
+        for index, row in enumerate(group):
+            nxt = group[index + 1] if index + 1 < len(group) else None
+            windows[_round_key(row)] = (
+                worktree, str(row.get("started_at") or ""),
+                str(nxt.get("started_at")) if nxt else None)
+    return windows
+
+
+def _round_within(started_at, window):
+    _worktree, start, end = window
+    text = str(started_at or "")
+    if text < start:
+        return False
+    return end is None or text < end
+
+
+def _round_settled(row):
+    """Is there anything left that could still change this round's record?
+
+    An open round obviously changes. So does a closed one whose publication is
+    still open - pr_url and closed_at land later, and a document rendered before
+    they did would say "not published" for ever, which is the exact claim
+    docs/known-state.md records as having to be outranked by `unknown`.
+    """
+    return bool(row.get("closed_at")) and row.get("waiting_on") != "person"
+
+
+def source_round_detail(m):
+    """One document per round: what it did, and what it said while doing it.
+
+    IT WRITES ITS OWN FILES. main() maps one document key to one path, so a
+    family has no representation there - and this is also the only source that
+    DELETES, which a directory contracted to "nothing accumulates" needs once
+    the filenames stop being fixed.
+
+    IT MUST NEVER RAISE for the reason source_fleet gives: the fleet page is one
+    of six, and an unreadable conduct.db must cost this source and nothing else.
+    """
+    m.add("home_server_agent_round_documents", 0, None,
+          "Round documents on disk after this run. Each is one round's events, "
+          "its approval card and its rendered phase conversations.")
+    m.add("home_server_agent_round_bytes", 0, None,
+          "Total size of those documents.")
+    m.add("home_server_agent_round_pending", 0, None,
+          "Rounds whose logs have not been rendered yet. Non-zero is ordinary "
+          "on a cold start - the per-run budget makes it converge over several "
+          "passes rather than blow the unit's 25-second timeout.")
+    m.add("home_server_agent_round_redacted", 0, None,
+          "1 when the redaction pass was built from .env and the render ran. 0 "
+          "means .env could not be read and NOTHING was rendered - the pass "
+          "fails closed, because a redactor built from an empty environment "
+          "looks exactly like one that found nothing to redact.")
+
+    if not os.path.exists(CONDUCT_DB):
+        return
+
+    pairs = _round_redaction(load_env())
+    if pairs is None:
+        # FAIL CLOSED. See _round_redaction: this is the render-env.sh window,
+        # and writing an unredacted transcript is not a recoverable mistake.
+        print("collect-metrics: round detail skipped - .env unreadable, so no "
+              "redaction pass could be built", file=sys.stderr)
+        return
+    m.add("home_server_agent_round_redacted", 1, None, None)
+
+    conn = None
+    written = {}
+    pending = 0
+    try:
+        conn = sqlite3.connect("file:%s?mode=ro" % CONDUCT_DB, uri=True,
+                               timeout=2.0)
+        conn.execute("PRAGMA busy_timeout = 2000")
+        rounds = _fleet_derive_rounds(conn)[:ROUND_KEEP]
+        windows = _round_windows(rounds)
+        index = _round_log_index()
+        spoken_for = {row["log"] for row in _fleet_rows(
+            conn, "SELECT log FROM base_gate WHERE log IS NOT NULL")
+            if row.get("log")}
+        budget = {"files": ROUND_LOG_FILES_PER_RUN,
+                  "bytes": ROUND_LOG_BYTES_PER_RUN}
+        for row in rounds:
+            key = _round_key(row)
+            path = _round_path(key)
+            written[key] = path
+            body, short = _round_document(conn, row, windows[key], index,
+                                          spoken_for, pairs, budget)
+            pending += short
+            if body is None:
+                continue
+            if _ROUND_DRY_RUN[0]:
+                sys.stdout.write("# %s\n%s" % (os.path.basename(path), body))
+            else:
+                write_document(path, body)
+    except (sqlite3.Error, OSError, IndexError, ValueError) as exc:
+        print("collect-metrics: round detail: %s" % exc, file=sys.stderr)
+    finally:
+        if conn is not None:
+            conn.close()
+
+    kept, total = _round_sweep(set(written))
+    m.add("home_server_agent_round_documents", kept, None, None)
+    m.add("home_server_agent_round_bytes", total, None, None)
+    m.add("home_server_agent_round_pending", pending, None, None)
+
+
+def _round_sweep(keep):
+    """Delete round documents for rounds that have aged off the board.
+
+    THE FIRST RECONCILIATION THIS FILE PERFORMS, and it is what keeps the
+    directory's own contract - "rewritten whole on every run, nothing
+    accumulates, and there is no history to mine" - true now that the filenames
+    are derived from data rather than fixed.
+
+    THE .tmp FILES GO TOO. write_document stages beside its target so the file
+    inherits container_file_t, and Caddy's `/data/*` is a glob - so a crash
+    between write and rename leaves something served. verify-host.sh already
+    does exactly this for status.json.tmp.
+    """
+    kept = 0
+    total = 0
+    try:
+        names = os.listdir(DOC_DIR)
+    except OSError:
+        return 0, 0
+    if _ROUND_DRY_RUN[0]:
+        # Count what is there; delete nothing.
+        for name in names:
+            if name.startswith(ROUND_PREFIX) and not name.endswith(".tmp"):
+                try:
+                    total += os.path.getsize(os.path.join(DOC_DIR, name))
+                    kept += 1
+                except OSError:
+                    pass
+        return kept, total
+    for name in names:
+        if not name.startswith(ROUND_PREFIX):
+            continue
+        path = os.path.join(DOC_DIR, name)
+        if name.endswith(".tmp") or path not in keep:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            continue
+        try:
+            total += os.path.getsize(path)
+            kept += 1
+        except OSError:
+            pass
+    return kept, total
+
+
+def _round_document(conn, row, window, index, spoken_for, pairs, budget):
+    """(rendered body, rounds still short of their logs) for one round.
+
+    TWO PASSES, AND THE SPLIT IS LOAD-BEARING. Everything from the database -
+    the events, the approval card, the verdict - is rendered on EVERY run,
+    because a round waiting on a person must never wait on a 10 MB log read to
+    show the card they are being asked to approve. The logs are rendered under a
+    per-run budget, and a round that did not get its turn says so rather than
+    rendering a conversation with holes in it.
+    """
+    key = _round_key(row)
+    path = _round_path(key)
+    runs = [r for r in _fleet_rows(conn, """
+        SELECT %s FROM run WHERE worktree_id IN (?, ?) ORDER BY id
+    """ % _round_run_columns(conn), (window[0], window[0] + FLEET_VERIFY_SUFFIX))
+        if _round_within(r.get("started_at"), window)]
+
+    logs = {}
+    claimed = set()
+    for position, run in enumerate(runs):
+        # THE CEILING IS THE NEXT RUN ON THE SAME WORKTREE, or the round's own
+        # end. Runs on `<id>-verify` interleave with runs on `<id>`, and their
+        # logs live under different keys, so the sequence has to be per tree.
+        ceiling = None
+        for later in runs[position + 1:]:
+            if later.get("worktree_id") == run.get("worktree_id"):
+                ceiling = _round_stamp(later.get("started_at"))
+                break
+        if ceiling is None and window[2] is not None:
+            ceiling = _round_stamp(window[2])
+        found = _round_log_for(run, index, spoken_for, claimed, ceiling)
+        if found:
+            logs[run["id"]] = found
+            claimed.add(found)
+
+    if _ROUND_DRY_RUN[0] or not _round_fresh(path, logs.values(),
+                                             _round_settled(row)):
+        phases, short = _round_phases(runs, logs, pairs, budget)
+        doc = Document()
+        doc.set("round", _round_summary(conn, row, window))
+        doc.set("events", _round_events(conn, row, window, runs))
+        doc.set("report", _round_report(conn, row, window, pairs))
+        doc.set("phases", phases)
+        doc.note("conduct_db", True)
+        body = doc.render(now())
+        if len(body) > ROUND_DOC_MAX_BYTES:
+            doc.set("phases", [dict(p, turns=[], clipped=True) for p in phases])
+            doc.set("clipped", "the conversation was dropped: %d bytes over the "
+                               "%d-byte ceiling" % (len(body), ROUND_DOC_MAX_BYTES))
+            body = doc.render(now())
+        return body, short
+    return None, 0
+
+
+def _round_run_columns(conn):
+    """The run columns to select, skipping any conduct has not migrated yet.
+
+    THE TWO HALVES DEPLOY SEPARATELY - the collector arrives with `git pull` and
+    a column with a conduct restart - and a SELECT naming one too early reads as
+    an unreadable database. _fleet_derive_rounds learned this on 2026-08-28.
+    """
+    always = ["id", "project", "phase", "worktree_id", "started_at", "ended_at",
+              "result", "exit_code", "cost_usd", "tokens_in", "tokens_out"]
+    optional = [name for name in ("odoo_task", "error", "branch", "verdict",
+                                  "task", "base_sha", "log", "quota_status")
+                if _fleet_has(conn, "run", name)]
+    return ", ".join(always + optional)
+
+
+def _round_fresh(path, log_paths, settled):
+    """Is the document on disk already current for this round?
+
+    A SETTLED ROUND RENDERS ONCE. An unsettled one renders every pass, because
+    its rows are still moving - and there is at most one or two of those. Beyond
+    that the only thing that can change a finished round is a log arriving late,
+    so the document's own mtime against its inputs answers it with no index to
+    keep in step.
+    """
+    if not settled:
+        return False
+    try:
+        stamp = os.path.getmtime(path)
+    except OSError:
+        return False
+    for log_path in log_paths:
+        try:
+            if os.path.getmtime(log_path) > stamp:
+                return False
+        except OSError:
+            continue
+    return True
+
+
+def _round_phases(runs, logs, pairs, budget):
+    """One entry per run, with its conversation if the budget reached it."""
+    phases = []
+    short = 0
+    for run in runs:
+        entry = {
+            "run_id": run["id"],
+            "phase": run.get("phase"),
+            "worktree_id": run.get("worktree_id"),
+            "started_at": run.get("started_at"),
+            "ended_at": run.get("ended_at"),
+            "result": run.get("result"),
+            "exit_code": run.get("exit_code"),
+            "cost_usd": run.get("cost_usd"),
+            "tokens_in": run.get("tokens_in"),
+            "tokens_out": run.get("tokens_out"),
+            "log": os.path.basename(logs[run["id"]]) if run["id"] in logs else None,
+            "turns": [],
+            "result_event": None,
+            "gate": None,
+            "rendered": False,
+        }
+        path = logs.get(run["id"])
+        if path:
+            size = 0
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                pass
+            if budget["files"] <= 0 or size > budget["bytes"]:
+                # NOT AN ERROR AND NOT AN EMPTY CONVERSATION. `rendered` false
+                # is what lets the browser say "not yet" instead of drawing a
+                # phase that said nothing.
+                entry["short"] = "not rendered yet - this run's budget was spent"
+                short += 1
+            else:
+                budget["files"] -= 1
+                budget["bytes"] -= size
+                if run.get("phase") == "verify":
+                    entry["gate"] = _round_gate_tail(path, pairs)
+                else:
+                    turns, result_event = _round_conversation(path, pairs)
+                    entry["turns"] = turns or []
+                    entry["result_event"] = result_event
+                entry["rendered"] = True
+        phases.append(entry)
+    return phases, short
+
+
+def _round_summary(conn, row, window):
+    """Who this round is, so the panel need not be handed a fleet row too."""
+    return {
+        "key": _round_key(row),
+        "worktree_id": row.get("worktree_id"),
+        "project": row.get("project"),
+        "odoo_task": row.get("odoo_task"),
+        "started_at": row.get("started_at"),
+        "ended_at": row.get("ended_at"),
+        "closed_at": row.get("closed_at"),
+        "closed_why": row.get("closed_why"),
+        "attempts": row.get("attempts"),
+        "max_attempts": row.get("max_attempts"),
+        "branch": row.get("branch"),
+        "phase": row.get("phase"),
+        "waiting_on": row.get("waiting_on"),
+        "flow_job_id": _round_job(conn, window),
+        "settled": _round_settled(row),
+    }
+
+
+def _round_job(conn, window):
+    """The flow job this round ran under, from its own dispatch rows.
+
+    `chain.flow_job_id` ONLY ANSWERS FOR THE ROUND IN FLIGHT - one row per
+    worktree, overwritten - and `publication` only exists once a round reaches
+    the publish path. `dispatch` carries worktree_id, flow_job_id AND
+    started_at, so it is the one table that can name the job of a round that is
+    finished, refused, or still running.
+    """
+    for row in _fleet_rows(conn, """
+        SELECT flow_job_id, started_at FROM dispatch
+         WHERE worktree_id = ? ORDER BY started_at
+    """, (window[0],)):
+        if _round_within(row.get("started_at"), window):
+            return row.get("flow_job_id")
+    return None
+
+
+def _round_events(conn, row, window, runs):
+    """The round as a timeline, from the three append-only tables.
+
+    RETRIES ARE VISIBLE AND NOT LABELLED. Nothing in conduct's schema records
+    that an attempt was a repair rather than a fresh round - only
+    chain.attempts, a counter on a row the next round overwrites - so the
+    timeline shows the phases that ran and does not claim to know which kind of
+    attempt produced them. Saying less is the only honest option available.
+    """
+    events = []
+    for run in runs:
+        events.append({"at": run.get("started_at"), "kind": "phase_started",
+                       "phase": run.get("phase"), "run_id": run["id"]})
+        if run.get("ended_at"):
+            events.append({
+                "at": run.get("ended_at"), "kind": "phase_ended",
+                "phase": run.get("phase"), "run_id": run["id"],
+                "result": run.get("result"), "exit_code": run.get("exit_code"),
+                "error": _fleet_text(run.get("error"), 400),
+            })
+    for step in _fleet_rows(conn, """
+        SELECT module_id, worktree_id, started_at, resumed_at%s
+          FROM dispatch WHERE worktree_id = ? ORDER BY started_at
+    """ % (", undeliverable_at"
+           if _fleet_has(conn, "dispatch", "undeliverable_at") else ""),
+            (window[0],)):
+        if not _round_within(step.get("started_at"), window):
+            continue
+        events.append({"at": step.get("started_at"), "kind": "step_dispatched",
+                       "module": step.get("module_id")})
+        if step.get("resumed_at"):
+            events.append({"at": step.get("resumed_at"), "kind": "step_answered",
+                           "module": step.get("module_id")})
+        if step.get("undeliverable_at"):
+            events.append({"at": step.get("undeliverable_at"),
+                           "kind": "step_undeliverable",
+                           "module": step.get("module_id")})
+
+    job_id = _round_job(conn, window)
+    if job_id:
+        for notice in _fleet_rows(conn, """
+            SELECT kind, summary, first_at, last_at, sends, closed_at
+              FROM notice WHERE flow_job_id = ? ORDER BY first_at
+        """, (job_id,)):
+            events.append({"at": notice.get("first_at"), "kind": "notified",
+                           "notice": notice.get("kind"),
+                           "sends": notice.get("sends"),
+                           "summary": _fleet_text(notice.get("summary"), 400)})
+            if notice.get("closed_at"):
+                events.append({"at": notice.get("closed_at"),
+                               "kind": "notice_closed",
+                               "notice": notice.get("kind")})
+        pub_columns = ("opened_at, closed_at, branch, pr_url, pr_number"
+                       if _fleet_has(conn, "publication", "pr_url")
+                       else "opened_at, closed_at, branch")
+        for pub in _fleet_rows(conn, "SELECT %s FROM publication"
+                                     " WHERE job_id = ?" % pub_columns, (job_id,)):
+            events.append({"at": pub.get("opened_at"), "kind": "publication_opened",
+                           "branch": pub.get("branch")})
+            if pub.get("closed_at"):
+                events.append({
+                    "at": pub.get("closed_at"), "kind": "publication_closed",
+                    # A CLOSED PUBLICATION WITH NO PULL REQUEST IS A THIRD
+                    # STATE, not either neighbour: it is a decline or a timeout.
+                    "pr_url": _fleet_link(pub.get("pr_url")),
+                    "pr_number": pub.get("pr_number")})
+    events.sort(key=lambda event: (str(event.get("at") or ""), event["kind"]))
+    return events
+
+
+def _round_report(conn, row, window, pairs):
+    """The approval card and what it was built from.
+
+    THE CARD IS ALREADY IN THE DATABASE, TWICE, and neither copy is the one the
+    board has been showing. `notice.summary` is the PHONE copy - rendered at the
+    verify stage, hard-bounded at 3500 bytes and then truncated to 240
+    characters on its way here - while the card a person actually approves is
+    the ship-stage rendering, ~7.5 KB, and it lives in `report.body["card"]` and
+    in `dispatch.payload` for conduct_ship.
+
+    THE dispatch COPY IS PREFERRED because it is keyed per FLOW JOB, so it
+    survives the next round on the same worktree overwriting `report` - which is
+    keyed on worktree_id alone and holds exactly one row.
+    """
+    payload = None
+    job_id = _round_job(conn, window)
+    if job_id:
+        rows = _fleet_rows(conn, "SELECT payload FROM dispatch WHERE"
+                                 " flow_job_id = ? AND module_id = ?",
+                           (job_id, "conduct_ship"))
+        if rows and rows[0].get("payload"):
+            try:
+                payload = json.loads(rows[0]["payload"])
+            except ValueError:
+                payload = None
+    if payload is None and not _round_settled(row):
+        rows = _fleet_rows(conn, "SELECT body FROM report WHERE worktree_id = ?",
+                           (window[0],))
+        if rows and rows[0].get("body"):
+            try:
+                payload = json.loads(rows[0]["body"])
+            except ValueError:
+                payload = None
+    if not isinstance(payload, dict):
+        return None
+    return {
+        "card": _round_clean(payload.get("card"), pairs, 40000),
+        "verdict": _round_clean(payload.get("verdict"), pairs, 40000),
+        "body": _round_clean(payload.get("body"), pairs, 20000),
+        "title": _round_clean(payload.get("title"), pairs, 400),
+        "autopublish": payload.get("autopublish"),
+        "autopublish_why": [_round_clean(x, pairs, 400)
+                            for x in (payload.get("autopublish_why") or [])],
+        "notes": [_round_clean(x, pairs, 400)
+                  for x in (payload.get("notes") or [])],
+        "refused": [_round_clean(x, pairs, 400)
+                    for x in (payload.get("refused") or [])],
+        "gate_ok": payload.get("gate_ok"),
+        "base_sha": payload.get("base_sha"),
+        "head_sha": payload.get("head_sha"),
+        "seconds": payload.get("seconds"),
+    }
+
+# ------------------------------------------------------------------------------
 # The collector's own record
 # ------------------------------------------------------------------------------
 # There is deliberately no home_server_collector_up 1. A sample asserting
@@ -4004,6 +4803,10 @@ SOURCES = (
     # sent is the one thing on the Agents page whose staleness they can
     # measure against their own hand.
     ("control", source_control, False, "control"),
+    # SLOW, AND IT WRITES A FAMILY RATHER THAN A DOCUMENT. The fourth field is
+    # None because _DOC_PATHS is one key to one path and this source writes one
+    # file per round - see source_round_detail, which also owns the sweep.
+    ("round_detail", source_round_detail, True, None),
 )
 
 

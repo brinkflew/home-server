@@ -421,20 +421,67 @@ as "steady" when it means "absent". Lines are built as a `path` with a fresh `M`
 for the reason `apps/jellyfin/custom.css` records at length about the sixteen `@import` URLs it used
 to carry.
 
-**The board says why a round stopped, and only when one did.** A failed row's state cell is a
+**Every row opens now, and what it opens onto is a document of its own.** The state cell is a
 button; opening it draws a full-width sibling row - not a child, because `.row` IS the grid and
 anything inside it becomes an eighth cell and shifts the seven beside it. One at a time, which is
-`useTooltip`'s rule and for its reason. It carries `run.error` and `chain.closed_why`, both
-**displayed and never parsed**, and it names the gate log rather than linking it: the log is ten
-megabytes on the host, outside anything this container can serve, so a link would be an offer the
-page cannot keep.
+`useTooltip`'s rule and for its reason. It still carries `run.error` and `chain.closed_why`, both
+**displayed and never parsed**, and below them `RoundDetail.vue` draws the round's own document.
 
-**The trigger is the outcome, not the presence of a sentence.** conduct writes `closed_why` on every
-round it closes, "reached the publish path" included - so keying the expander on that field would
-put one on every finished row, most of them opening onto a reason nothing had gone wrong.
-`roundState(r).tone` is the structural answer, already derived, and asking it is how this avoids
-reading the words. The two sources also overlap: `closed_why` is built as `"the flow failed: <the
-refusal>"`, so on a refused round they say the same thing twice and `roundError` prints it once.
+**The refusal this replaced was right when it was written, and is amended rather than contradicted.**
+It read: *"it names the gate log rather than linking it: the log is ten megabytes on the host,
+outside anything this container can serve, so a link would be an offer the page cannot keep."* All
+three clauses are still true - a gate log measured 10.9 MB and 197,160 lines on 2026-08-29, the
+container reaches none of it, and it is 0600 precisely because *"if a run ever prints its
+environment, the runner's token lands here durably"*. **So nothing links a log. The host renders,
+and what it renders is an allowlist**: the prompt, assistant turns, tool calls with their input, the
+permission denials and the `result` event's scalars, plus the last 64 KB of a gate log. **Tool
+results are dropped**, which is where file contents and command output land - and dropping them is
+what makes the redaction affordable, `DOCKER_VOLUME_CACHE` appearing 3,920 times in the raw logs and
+17 times in what survives. Every `.env` value of twelve characters or more is then replaced by
+`${ITS_NAME}`, and `agents.round_detail` measures that hourly against the files actually written,
+because reading the code is not evidence. **An unreadable `.env` skips the render entirely**: a
+redactor built from an empty environment looks exactly like one that found nothing to redact.
+
+**The gate used to be "did this round fail", and lifting it was the point.** Keying the expander on
+`roundState(r).tone` was right while the panel held only a failure sentence - conduct writes
+`closed_why` on every round it closes, "reached the publish path" included, so keying on that field
+would have put an expander on every finished row opening onto a reason nothing had gone wrong. The
+panel now holds the approval card, the events and the transcripts, and **a round that went well is
+exactly the one whose work somebody wants to read before approving it**. `roundError` still keys on
+the tone, so the sentences appear only where there are sentences; the two sources also overlap -
+`closed_why` is built as `"the flow failed: <the refusal>"` - and `roundError` prints it once.
+
+**A round's document is fetched when its row is opened, and it is the only non-polled read here.**
+~400 KB each and forty on the board: polling would be sixteen megabytes a tick to render a panel
+that is usually closed, and `usePoll` could not do it anyway - it fires on construction, so a handle
+per row would fetch every round the moment the board rendered. **A 404 is the ordinary state**, not
+a failure: the collector writes these on its five-minute tier under a per-run log budget, so a round
+can be on the board minutes before its document exists and a round past the sweep's horizon has had
+its removed on purpose. `DocumentNeverWritten` already distinguishes it and the panel says "not
+yet". The same rule governs a phase inside a document: `rendered: false` carries a reason, because a
+phase waiting its turn must not read as a phase that said nothing.
+
+**The key is built twice and the two halves have to agree.** `roundKey()` here and `_round_key()` in
+`bin/collect-metrics.py` name the same file from `worktree_id` and `started_at`; a disagreement is a
+404 the panel reports as "not yet" for ever, which looks exactly like a collector that has stopped.
+`fixtures/smoke.mjs` asserts the shape both produce.
+
+**The approval card is a different text from the one the board has always shown.** `notice.summary`
+is the *phone* copy - rendered a phase earlier, hard-bounded at 3500 bytes and then cut to 240
+characters on its way into `fleet.json`. The card a person is actually being asked to approve is the
+ship-stage rendering, ~7.5 KB, and it was in `conduct.db` the whole time: `report.body["card"]`, and
+`dispatch.payload` for `conduct_ship`. **The dispatch copy is preferred** because it is keyed per
+flow job, so it survives the next round on the same worktree overwriting `report`, which is keyed on
+`worktree_id` alone and holds exactly one row.
+
+**And the card can be answered where it is read.** Approve and Decline post to `/api/approve/*`,
+which is the control route's shape for the control route's reason: Caddy discards the client's path
+and substitutes one literal, so **the job id travels in the body** - putting it in the URL would be
+that guard given away for a convenience. `smoke.mjs` asserts the id never appears in the URL. The
+chips key on `control.approve_available`, a **separate** flag from `control.available`: the two
+routes are scoped to one flow each, so one token being minted says nothing about the other, and
+inferring these chips from the control token would offer a button that answers 401 at the moment it
+is most needed. See `docs/agents.md` for the lock that had to be removed to make any of it possible.
 
 **The pull-request column holds the branch until there is a pull request.** conduct pushes it at the
 end of dev, minutes into a round that then spends fifteen to thirty in `make check`, so for most of

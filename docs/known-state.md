@@ -2264,7 +2264,8 @@ otherwise, and three of them were nearly shipped as assumptions.
 - **`user_auth_required: true` makes `jobs/flow/resume` fail** with "Approvals for logged in users
   is an enterprise only feature". The UI path works and the owner endpoint does not - so conduct was
   ALREADY unable to answer the human gate, by a second mechanism underneath the `conduct_` prefix
-  guard that nobody had found.
+  guard that nobody had found. **REMOVED DELIBERATELY 2026-08-29** so the dashboard could answer the
+  card it now shows; see "The card was in the database all along" below for what that cost.
 
 ## The round, and four ways a phase reads a tree that is not the one it was sent to
 
@@ -3600,3 +3601,80 @@ three of them are the same mistake in different clothes.
   and the store treats the fast one as a PRECEDENCE - and only when its own `conduct_db` source
   answered, or a locked database would flip the tile to "as shipped" and claim nobody had ever set
   the switch.
+
+
+## The card was in the database all along, and the lock that had to go
+
+- **The board was showing the wrong text and had been from the start.** `notice.summary` is the
+  PHONE copy - rendered at the verify stage, hard-bounded at 3500 bytes, then cut to 240 characters
+  by `_fleet_text` on its way into `fleet.json`. The card a person actually approves is the
+  ship-stage rendering, measured at **7,568 bytes**, and it was already in `conduct.db` twice:
+  `report.body["card"]` and `dispatch.payload` for `conduct_ship`. **Reading it needed no conduct
+  change at all**, which an investigation concluded the opposite of - it reported the card "exists
+  only as the `await_human` module result inside Windmill", and the live database contradicted that.
+- **The `dispatch` copy is the one to read.** `report` is keyed on `worktree_id` alone and holds one
+  row, so the next round on the same worktree overwrites it; `dispatch` is keyed per flow job and
+  survives. Same family as `chain` not being a log.
+- **`user_auth_required` was spent, not lost.** It was a second lock against conduct answering its
+  own gate, and it also blocked the only mechanism by which anything server-side could answer - so
+  showing the card without it is half a feature. **The `conduct_` prefix refusal in `poll._resume`
+  is now the only lock**, which `ship.py` had already named as the one to rely on. It was proved to
+  fail before being trusted: invert it and exactly two tests go red, including the negative control
+  that reproduces the original hole.
+- **The new route needed the MIRROR of that refusal or it would have been one.** `f/agents/approve`
+  reads the target job and answers only `HUMAN_MODULE`; without that clause a browser could forge a
+  verification result, which this design did not previously permit. Both guards read one constant in
+  `flows/common.py`. `tests/test_approve.py` removes the clause and watches a `conduct_verify` job
+  get answered, so the assertion measures the guard rather than an accident of the code path.
+- **Two tokens, not one.** Each is scoped to starting exactly one flow, so neither route reaches the
+  other's and a leak is bounded by what that flow does - and `control.approve_available` is a
+  SEPARATE flag, because inferring the approve chips from the control token would offer a button
+  that answers 401 at the moment it is most needed.
+- **What was given up is stated:** a signed resume URL that escaped is now sufficient where it
+  previously still needed a session, and the approval record still cannot name a person -
+  `resume_id: 0`, the same limit the control route already had.
+
+## A transcript that can be served, and the drop that makes the redaction affordable
+
+- **Measured before it was designed**, on 73 logs and 374 MB: the conversation surface of the WHOLE
+  history is 450 KB; a gate log is 197,160 lines of which 38 are JSON and none is a conversation;
+  and `thinking` blocks are all zero-length, so there was nothing there to decide about. A rendered
+  round with full tool inputs is ~400 KB, forty of them ~15 MB.
+- **DROP FIRST, REDACT SECOND, and that ordering is the whole economy.** `DOCKER_VOLUME_CACHE`
+  appears **3,920 times** in the raw logs and **17 times** in what survives dropping tool results -
+  so the strict policy of replacing every `.env` value costs nothing, where over the raw logs it
+  would have mangled the output into uselessness.
+- **No credential was in any log**, measured across all 73: the only `.env` values present were
+  `DOMAIN`, a cache path, a URL, a repo slug and two addresses. So the pass is not repairing a live
+  leak; it is what holds the day a phase prints its environment, which is the day nobody is looking.
+- **It fails closed.** `load_env()` degrades to `{}` during `render-env.sh`'s write window, and a
+  redactor built from an empty environment looks EXACTLY like one that found nothing to redact - so
+  an empty env skips the render entirely rather than writing an unredacted transcript.
+- **The placeholder names the variable** (`${DOMAIN}`, not `[redacted]`), because every name is
+  already public in `.env.sample` and it tells a reader what they are looking at. Longest value
+  first, or a short value that is a substring of a longer one corrupts it.
+- **`agents.round_detail` measures the output, not the code.** It greps every rendered document for
+  every `.env` value and FAILS on a hit, naming the VARIABLE and never the value - `status.json` is
+  itself readable by the dashboard, so a check quoting what it found would publish it a second time
+  while reporting the first. Proved to fail by planting a real token: it named
+  `GITHUB_PR_READ_TOKEN`, and was clean the moment the plant was removed.
+- **A log file must not be claimed twice, and the match needs a CEILING.** The first draft had
+  neither and both showed a reader SOMEBODY ELSE'S TRANSCRIPT - three dev runs in one round all
+  matched the same file, and a run whose own log had aged out of `LOG_RETAIN_SEC` matched the next
+  log on that worktree, which belongs to a later round. Confidently wrong is worse than absent.
+- **`run.log` is what makes the join possible at all.** The path was in `dispatch.payload`,
+  `report.body` and `base_gate.log`, none of them keyed to a run row, and rebuilding the filename
+  fails three ways: `start_run` and `phase.start` are MINUTES apart on a cold worktree, the
+  verification's row says `verify` while its log says `check`, and a red round writes TWO
+  `-verify-check-` logs against ONE run row. `base_gate.log` separates that last pair by identity.
+- **`run_ship` took `odoo_task` and never passed it on**, so the last phase of every tracked round
+  wrote a row with a null task id while every other phase in the same round had one.
+- **The collector now deletes, which nothing in it did before.** A directory contracted as
+  "rewritten whole, nothing accumulates" needs a sweep once its filenames come from data rather than
+  being fixed - and the `.tmp` files go with it, because `/data/*` is a glob and would serve one
+  caught mid-rename.
+- **`--print` had to be taught to this source.** Every other source is read-only by nature, so a dry
+  run costing nothing was a property rather than a decision; this one writes AND deletes.
+- **`phaseClock` read the first globally-running run in the document**, not the row's own, so with
+  two rounds in flight every row would have shown one clock. It read correctly only because this
+  fleet runs one round at a time - a claim nothing could contradict.

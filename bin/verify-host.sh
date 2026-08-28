@@ -1602,6 +1602,57 @@ if [ -z "$GREENBOOT" ]; then
 		bad secrets.env_current "secrets/env.sops.env is NEWER than .env - a secrets change was pulled and never rendered; run ./bin/render-env.sh then restart the affected units"
 	fi
 
+	# WHAT THE ROUND BROWSER PUBLISHES, MEASURED RATHER THAN TRUSTED.
+	#
+	# bin/collect-metrics.py renders one document per round into the directory
+	# the dashboard bind-mounts read-only: the events, the approval card, and
+	# the phase transcripts. Its INPUT is 0600 on this host precisely because
+	# "if a run ever prints its environment, the runner's token lands here
+	# durably" - so the output being readable rests entirely on a redaction
+	# pass, and reading that pass's source is not evidence that it ran.
+	#
+	# IT NAMES THE VARIABLE AND NEVER THE VALUE. status.json is itself served to
+	# the dashboard, so a check quoting the secret it found would publish it a
+	# second time while reporting the first.
+	#
+	# NO CREDENTIAL WAS IN THE CORPUS WHEN THIS SHIPPED - measured over all 73
+	# phase logs, the only .env values appearing anywhere were DOMAIN, a cache
+	# path, a URL and a repo slug. So this is not repairing a live leak; it is
+	# what fires the day a phase prints its environment, which is the day nobody
+	# is looking. Proved to fail first by planting a real token into a scratch
+	# document: it named GITHUB_PR_READ_TOKEN, and went quiet when the plant was
+	# removed.
+	#
+	# A FAIL RATHER THAN A WARN, and here rather than in Agents, where the
+	# charter is WARN-or-NOTE. The file is already being served; there is no
+	# version of this worth deferring.
+	rdoc_dir="${DOCKER_VOLUME_CACHE:-/var/home-server/cache}/dashboard"
+	rdoc_n=$(find "$rdoc_dir" -maxdepth 1 -name 'round-*.json' -type f 2>/dev/null | wc -l)
+	if [ ! -f "$repo/.env" ]; then
+		note secrets.rendered_documents "no .env, so what the render should have hidden cannot be known"
+	elif [ "${rdoc_n:-0}" -eq 0 ]; then
+		note secrets.rendered_documents "no rendered round documents to check"
+	else
+		rdoc_leaked=$(awk -F= '/^[A-Za-z_][A-Za-z0-9_]*=/ {
+				k = substr($0, 1, index($0, "=") - 1)
+				v = substr($0, index($0, "=") + 1)
+				gsub(/^"|"$/, "", v)
+				if (length(v) >= 12) print k "\t" v
+			}' "$repo/.env" 2>/dev/null |
+			while IFS="$(printf '\t')" read -r rdoc_k rdoc_v; do
+				[ -n "$rdoc_v" ] || continue
+				if grep -R -F -q -- "$rdoc_v" "$rdoc_dir"/round-*.json 2>/dev/null; then
+					printf '%s ' "$rdoc_k"
+				fi
+			done)
+		rdoc_leaked=${rdoc_leaked% }
+		if [ -n "$rdoc_leaked" ]; then
+			bad secrets.rendered_documents "a rendered round document contains the value of: $rdoc_leaked - these files are served to the browser, so the redaction pass in bin/collect-metrics.py is not covering what reaches it. Names only here on purpose: status.json is itself readable by the dashboard"
+		else
+			ok secrets.rendered_documents "$rdoc_n round document(s) served, and no .env value survives into any of them"
+		fi
+	fi
+
 	say containers "Containers"
 
 	userfailed=$(systemctl --user list-units --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | paste -sd' ' -)
@@ -2568,6 +2619,29 @@ if [ -z "$GREENBOOT" ]; then
 				ok agents.control_lag "$cl_n command(s) waiting on conduct, oldest ${cl_age}s - inside the pass it answers them on"
 			fi
 		fi
+	fi
+
+	# IS THE ROUND BROWSER BEING FED AT ALL? Whether it says anything it should
+	# not is a DIFFERENT question with a different answer, and it lives in the
+	# Secrets section - see secrets.rendered_documents. Splitting them is not
+	# tidiness: every check in this section is WARN or NOTE by charter, because
+	# bin/reboot-host.sh refuses to act on a host this battery calls unhealthy
+	# and nothing an agent fleet does wrong is fixed by a reboot. A leaked
+	# credential in a served file IS worth a FAIL, so it cannot be graded here.
+	rd_dir="${DOCKER_VOLUME_CACHE:-/var/home-server/cache}/dashboard"
+	rd_n=$(find "$rd_dir" -maxdepth 1 -name 'round-*.json' -type f 2>/dev/null | wc -l)
+	rd_bytes=$(find "$rd_dir" -maxdepth 1 -name 'round-*.json' -type f \
+		-printf '%s\n' 2>/dev/null | awk '{s += $1} END {print s + 0}')
+	fact agents_round_documents "${rd_n:-0}" num
+	fact agents_round_bytes "${rd_bytes:-0}" num
+	if [ "${rd_n:-0}" -eq 0 ]; then
+		# ABSENT IS NOT HEALTHY AND IS NOT A FAULT EITHER. It is the ordinary
+		# state for a few minutes after a deploy and the permanent state if the
+		# source is failing, and those must not read alike - so this says which
+		# one it cannot tell rather than passing at zero.
+		note agents.round_detail "no round documents yet - ordinary for a few minutes after a deploy, and what a silently failing render also looks like; see home_server_collector_source_up{source=\"round_detail\"}"
+	else
+		ok agents.round_detail "$rd_n round document(s), $((rd_bytes / 1024))KB - the board can show what those rounds did"
 	fi
 
 	# 2048MB IS ABOUT A HUNDRED TIMES TODAY'S 18MB, and the slack is the point:

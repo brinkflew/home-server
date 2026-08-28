@@ -538,7 +538,8 @@ signal read green.
   does not prevent the wait. A `branchone` hides the suspend in a sub-job where `current_module()`
   reads `None`. `stop_after_if` is what works, and needs no change to conduct at all.
 - **`user_auth_required: true` makes the owner resume endpoint fail as enterprise-only**, so conduct
-  was already unable to answer the human gate by a mechanism nobody had found.
+  was already unable to answer the human gate by a mechanism nobody had found. **Removed
+  deliberately 2026-08-29** so the dashboard could answer the card it now shows.
 
 ### The publish path, and two ways a killed phase never came back
 - **A report is a value, not a status**: a flow module returning `{"ok": false}` succeeds, so a
@@ -1187,6 +1188,24 @@ signal read green.
 - **A remembered ask is cleared by derivation, never a timer**, and `control.json` is a cadence fix
   rather than a content one: the fast document is a PRECEDENCE over `fleet.json`, and only when its
   own source answered.
+
+### The card was in the database all along, and the lock that had to go
+- The board showed the PHONE copy cut to 240 characters; the card a person approves is 7,568 bytes
+  and was already in `report.body` and `dispatch.payload`. Reading it needed no conduct change.
+- `user_auth_required` was spent so the dashboard could answer, so the `conduct_` prefix is now the
+  ONLY lock - proved to fail before being trusted. The approve flow carries its mirror, answering
+  `publish_pr` and nothing else, or a browser could forge a verification result.
+
+### A transcript that can be served, and the drop that makes the redaction affordable
+- **Drop tool results first, redact second**: `DOCKER_VOLUME_CACHE` is 3,920 hits raw and 17 in what
+  survives, so the strict pass costs nothing. No credential was in any of the 73 logs.
+- An unreadable `.env` SKIPS the render: a redactor built from an empty environment looks exactly
+  like one that found nothing to redact. `agents.round_detail` greps the output, names the variable
+  and never the value, and was proved to fail on a planted token.
+- **A log must not be claimed twice and the match needs a ceiling**, or a reader is shown somebody
+  else's transcript. `run.log` is what makes the join possible; the filename fails three ways.
+- The collector deletes for the first time, `--print` had to be taught to a source that writes, and
+  `phaseClock` read the first running run in the document rather than the row's own.
 
 
 ## Target architecture

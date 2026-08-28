@@ -670,7 +670,97 @@ answers("<!doctype html><title>sign in</title>", 200, "text/html; charset=utf-8"
 const signedOut = await attempt();
 check("a sign-in page is never mistaken for a job id", signedOut.error?.name, "SignedOutError");
 
+// --- the approve route, and the round key both halves have to agree on -------
+console.log("\n-- answering the human gate --");
+
+const { approve } = await load("/src/api/approve.ts");
+const { roundKey } = await load("/src/api/round.ts");
+
+// THE KEY IS BUILT IN TWO PLACES and they are a pair that can disagree: this
+// one, and `_round_key` in bin/collect-metrics.py, which names the file. The
+// board asking for a name the collector never wrote is a 404 the panel reports
+// as "not yet" for ever, which looks exactly like a collector that has stopped.
+check("a round key is the worktree and its start, punctuation stripped",
+  roundKey("upskald-ship", "2026-08-28T21:10:34Z"),
+  "upskald-ship-20260828T211034Z");
+check("a round with no start has no key rather than a malformed one",
+  [roundKey("upskald-ship", null), roundKey("", "2026-08-28T21:10:34Z")], [null, null]);
+
+const askApprove = async (decision) => {
+  try {
+    return { got: await approve(JOB_ID, decision, "looks right") };
+  } catch (error) {
+    return { got: `threw ${error.name}: ${error.message}`, error };
+  }
+};
+
+answers(JOB_ID, 201, "text/plain; charset=utf-8");
+const approved = await askApprove("approve");
+check("an approval receipt is a job id, not a parse error", approved.got, JOB_ID);
+check("it posts to its own fixed path, with the job id in the BODY",
+  [sent.url, sent.options.method, JSON.parse(sent.options.body)],
+  ["/api/approve/run", "POST",
+    { job_id: JOB_ID, decision: "approve", note: "looks right" }]);
+// THE URL CARRIES NO JOB ID, and that is the whole reason the id is in the
+// body: Caddy's guard is that the client's path is DISCARDED, and a path with
+// an id in it is that guard given away for a convenience.
+check("the job id never appears in the url", sent.url.includes(JOB_ID), false);
+check("the browser sends no credential of its own here either",
+  Object.keys(sent.options.headers).filter((h) => /^(authorization|cookie)$/i.test(h)),
+  []);
+
+answers(JOB_ID, 201, "text/plain; charset=utf-8");
+await askApprove("decline");
+check("a decline is the same route with a different decision",
+  JSON.parse(sent.options.body).decision, "decline");
+
+// AN UNSET TOKEN IS A ROLLOUT, NOT A FAULT - Caddy answers 401 and the board
+// disables the chips. It must arrive as a status, never as a job id.
+answers("unauthorized", 401, "text/plain; charset=utf-8");
+const noApproveToken = await askApprove("approve");
+check("a missing approve token is a status, not a receipt",
+  [noApproveToken.error?.name, noApproveToken.error?.status], ["HttpError", 401]);
+
 globalThis.fetch = realFetch;
+
+// --- the round document a fixture serves ------------------------------------
+console.log("\n-- what a round document promises --");
+
+const { roundDocument, MISSING_ROUNDS } = await load("/fixtures/round.ts");
+const round = roundDocument("upskald-ship-20260828T211034Z");
+
+// `rendered: false` IS "NOT YET", NOT "IT SAID NOTHING". The collector renders
+// a few logs per pass so a cold start converges instead of blowing its
+// 25-second timeout, and a phase waiting its turn must carry a reason rather
+// than an empty transcript that reads as a silent phase.
+const deferred = round.phases.filter((p) => !p.rendered);
+check("a deferred phase says why rather than showing an empty transcript",
+  deferred.map((p) => [p.turns.length, Boolean(p.short)]), [[0, true]]);
+
+// A GATE PHASE RUNS NO MODEL. 197,160 lines on the live host, 38 of them JSON
+// and none of them a conversation - so a tail, never turns.
+const gate = round.phases.find((p) => p.gate);
+check("the gate phase carries a tail and no conversation",
+  [gate.phase, gate.turns.length, gate.gate.truncated], ["verify", 0, true]);
+
+// THE CARD IS THE PANEL'S REASON TO EXIST, and it is a different text from the
+// notice summary the board has always shown - that one is the phone copy,
+// rendered a phase earlier and cut to 240 characters on its way into
+// fleet.json.
+check("the card is present and is not the phone summary",
+  [round.report.card.length > 240, round.report.card.startsWith("## upskald")],
+  [true, true]);
+
+// NO RESUME URL, ANYWHERE, EVER. Windmill's jobs_u/resume carries an HMAC in
+// the path and needs no session, so anything holding one can approve an agent's
+// merge. Asserted over the whole document rather than over a field, because the
+// next field to carry one has not been written yet.
+const asText = JSON.stringify(round);
+check("no round document can carry a resume url",
+  [asText.includes("/resume/"), asText.includes("resume_id")], [false, false]);
+
+check("a round the collector has not written yet is offered as absent",
+  MISSING_ROUNDS.length > 0, true);
 
 await server.close();
 console.log(`\n${failures === 0 ? "all checks passed" : `${failures} FAILED`}`);

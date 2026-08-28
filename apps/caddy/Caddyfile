@@ -373,6 +373,32 @@ home.{$DOMAIN} {
 		}
 	}
 
+	# ANSWERING THE ONE STEP CONDUCT MUST NOT, and the shape is the control
+	# route's for the control route's reason: the client's path is DISCARDED
+	# and one literal substituted, so the job id travels in the BODY. Putting
+	# it in the URL would mean rewriting to a path the client partly chose,
+	# which is the property above given away for a convenience.
+	#
+	# A SECOND TOKEN RATHER THAN THE CONTROL ONE. WINDMILL_DASHBOARD_TOKEN is
+	# scoped `run:flow/f/agents/control` and this one to
+	# `run:flow/f/agents/approve`, so neither route can start the other's flow
+	# and a leak of either is bounded by what that flow can do.
+	#
+	# WHAT STOPS THIS ANSWERING A GATE OF CONDUCT'S OWN is inside the flow, not
+	# here: f/agents/approve reads the target job and refuses unless the step
+	# waiting on it is `publish_pr`. Without that clause this route could forge
+	# a verification result, and a matcher in Caddy could not tell the two
+	# apart - only the control plane knows which module a job is waiting at.
+	handle_path /api/approve/* {
+		@notpost not method POST
+		respond @notpost "post only" 405
+
+		rewrite * /api/w/{$WINDMILL_WORKSPACE}/jobs/run/f/f/agents/approve
+		reverse_proxy windmill-server:8000 {
+			header_up Authorization "Bearer {$WINDMILL_APPROVE_TOKEN}"
+		}
+	}
+
 	handle_path /api/alerts/* {
 		# Alertmanager has had no route at all until now, and it is not getting
 		# a writable one. POST /api/v2/silences is how an alert is muted, and
