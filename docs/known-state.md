@@ -3169,6 +3169,18 @@ and WebKit to be the hard one and offered to leave WebKit hosted. Both halves we
   is the fault. Same shape as the mirror whose fetch stopped, where `FETCH_HEAD`'s mtime dates the
   attempt rather than the change. Holding is `ok` with the reason in the message; the two are told
   apart by the AGE and never by the string.
+- **And turning that switch back off made the detector fire on the switch.** The `intake` table
+  outlives the flag: a project armed once keeps `intake_last_at` at the moment of its last look for
+  ever, so disarming it left a stamp ageing past `agents.intake`'s hour and `AgentCheckWarning` -
+  the catch-all over the whole section at 30m - paged the phone every half hour, saying the pass had
+  stopped and the fleet would sit idle. Which was true, and was asked for. `serve._intake_keys`
+  already promised the right behaviour in its own docstring - *"an absent stamp is 'this fleet does
+  not choose its own work', which is what a project with `intake` off should report"* - and never
+  implemented it, because absence held by construction while nobody had ever armed one. **A comment
+  describing a property the code gets for free is not a test of it**, and the first pause is the
+  first moment the two can differ. The keys are dropped with the switch now, which puts a deliberate
+  pause on the silent `note` branch, and that branch's message names the switch rather than the
+  history because it cannot tell a fleet that never chose from one that was stopped.
 - **The milestone ladder is ordered by the M-number in the NAME and by nothing else.** `deadline` is
   unset on every milestone and `is_reached` is false on every milestone, so neither can order it -
   and the id is the one that looks like it would work and does not: `M0b Scaleway estate` has the

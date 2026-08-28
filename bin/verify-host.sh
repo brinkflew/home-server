@@ -2268,9 +2268,18 @@ if [ -z "$GREENBOOT" ]; then
 	# FETCH_HEAD's mtime dates the attempt rather than the change.
 	#
 	# ABSENT IS A note AND NOT A warn, on agents.tracker_configured's precedent.
-	# No stamp at all means no project has `intake` armed, which is the shipped
-	# default and a configuration rather than a fault - the fleet then behaves
-	# exactly as it did before this existed and a person types the task id.
+	# No stamp at all means no project has `intake` armed, which is a
+	# configuration rather than a fault - the fleet then behaves exactly as it did
+	# before this existed and a person types the task id.
+	#
+	# AND ABSENT COVERS A PAUSE, NOT ONLY A FLEET THAT NEVER CHOSE. The intake
+	# table outlives the switch, so a project armed once and turned off again
+	# keeps its last stamp for ever - which would age straight into the warn
+	# below and page the phone every half hour through AgentCheckWarning for a
+	# state somebody asked for. conduct's `_intake_keys` skips a disarmed project
+	# for that reason, so the key goes away with the switch and lands here. What
+	# this branch cannot do is tell the two apart, and it does not try: the
+	# message names the switch, which is the thing that is true either way.
 	#
 	# THE STALENESS BOUND IS FOUR CADENCES rather than one. conduct looks every
 	# INTAKE_SEC (900s), but a look is SKIPPED while anything is in flight - and a
@@ -2283,7 +2292,7 @@ if [ -z "$GREENBOOT" ]; then
 	intake_why=$(cget intake_last_why)
 	fact agents_intake_age "${intake_age:-}"
 	if [ -z "$intake_at" ]; then
-		note agents.intake "conduct has never recorded an intake look - no project has \`intake\` armed, so the fleet takes the work it is given and chooses none; that is the shipped default"
+		note agents.intake "no project has \`intake\` armed - conduct records no look at all in that state, whether it has never chosen work or was paused deliberately - so the fleet takes the work it is given and chooses none"
 	elif [ -n "$intake_age" ] && [ "$intake_age" -gt 3600 ]; then
 		warn agents.intake "conduct last looked for work ${intake_age}s ago and the cadence is 900s - either a round has been running for over an hour, or the intake pass has stopped and the fleet will now sit idle looking exactly as it would with an empty backlog${intake_why:+ (last reason: $intake_why)}"
 	elif [ -n "$intake_why" ]; then

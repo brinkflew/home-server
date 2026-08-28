@@ -978,6 +978,10 @@ signal read green.
 - **An intake that has stopped looks exactly like an empty backlog**, so `agents.intake` grades the
   LOOK and not the run. Holding is `ok` with the reason in the message; the two are told apart by
   the AGE, never by the string.
+- **Turning that switch back off made the detector fire on the switch**: the `intake` row outlives
+  the flag, so a paused fleet aged into a warn and paged every half hour for a state somebody asked
+  for. The keys are dropped with the switch now - a docstring had promised that and never
+  implemented it, because absence held by construction until the first pause.
 - **The milestone ladder is ordered by the M-number in the name and by nothing else** - `deadline`
   and `is_reached` are unset on every rung, the id runs backwards, priority is not a milestone
   signal, and a string sort puts `M10` between `M1` and `M2`. A dependency is clear only when
