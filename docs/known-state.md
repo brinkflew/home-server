@@ -3227,8 +3227,8 @@ and WebKit to be the hard one and offered to leave WebKit hosted. Both halves we
 
 ### The lane that held its work and stopped saying so
 - **The hold loop napped without writing the marker, so a healthy held lane went stale.**
-  `bin/github-runner.sh` holds every lane above the first while a conduct phase is in flight, and
-  the loop that does it was `log` + `nap 60` and nothing else. `nap()` samples the scope every two
+  `bin/github-runner.sh` held every lane above the first while a conduct phase was in flight, and
+  the loop that did it was `log` + `nap 60` and nothing else. `nap()` samples the scope every two
   seconds and writes no marker, so the heartbeat moved once per HOLD rather than once per poll:
   measured on 2026-08-28 at **710s on lane 3 and 258s on lane 2**, both units `active/running`,
   `NRestarts=0`, `Result=success`, both registrations online, six jobs each that day. `ci.heartbeat`
@@ -3255,3 +3255,23 @@ and WebKit to be the hard one and offered to leave WebKit hosted. Both halves we
   36-38%**. That is one window on one busy morning and **not** a replacement measurement - which is
   the whole reason no figure is asserted in its place. The behaviour is unchanged and under
   observation; the recorded 2026-08-26 measurements stay where they are as history.
+
+- **The hold was then removed outright, hours later on the same day, so the loop this was fixed in
+  no longer exists.** Recorded because the fix above is otherwise unfindable in the file, and
+  because the LESSON outlived the code: two places in one loop could sit still, only one had been
+  found, and the check that caught neither graded the normal case. The predicate, its 600s
+  freshness rule and the now-dead `CONDUCT_STATE` reader all went with it; `HOME_SERVER_CONDUCT_STATE`
+  survives in `bin/reboot-when-staged.sh` alone, which is a different gate and was not touched.
+- **What that trade actually is, stated as a trade.** The hold was a SCHEDULING guarantee that
+  `app-ci.slice` and `app-agents.slice` could not peak together; removing it leaves the cgroup
+  ceilings as the only bound, and they sum to **14,592M of a 15,828M host** (9,984M + 4,608M) with
+  nothing sequencing them. It is survivable because neither slice has ever approached its ceiling -
+  a lane's measured peak is 2,817M of a 3,584M scope limit, the fleet's 30-day median is 957M
+  against p90 1,455M, so three lanes and a phase at observed peaks is about **9.9 GB, not 14.6**.
+  "The peaks do not coincide" has gone from a thing arranged to an observation being relied upon.
+- **The signals that would say it was wrong are named in `host/systemd/app-ci.slice`**: that slice's
+  `memory.events` `max` going non-zero, `oom_kill` non-zero anywhere, or host swap growing rather
+  than sitting flat. **Throttling at `MemoryHigh` is NOT one of them** - it is the design working,
+  and the slice's own 30-day maximum being exactly `MemoryHigh` is the paragraph above it saying so.
+  If the hold returns it should return narrower - holding only the lanes above the second - and on
+  a measurement rather than on an argument.

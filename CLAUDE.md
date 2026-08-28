@@ -1066,8 +1066,14 @@ signal read green.
   lane has neither.
 - **The hold's "costs almost nothing" rested on a 6.9% duty cycle measured at two lanes holding
   one**, and the third lane joined the held set by the predicate saying nothing. A 2026-08-28 spot
-  reading put the held lanes near 36-38% of a busy morning. The number is deleted rather than
-  restated, the behaviour is unchanged, and it is being re-measured in normal use.
+  reading put the held lanes near 36-38% of a busy morning - CI running at roughly one lane so that
+  an overlap could not happen.
+- **So the hold was removed outright the same day, and the loop that defect lived in is gone.** It
+  was a SCHEDULING guarantee that the two slices could not peak together; the cgroup ceilings are
+  now the only bound and they sum to **14,592M of a 15,828M host**. Survivable only because neither
+  slice has ever neared its ceiling - three lanes plus a phase at observed peaks is ~9.9 GB, not
+  14.6 - so "the peaks do not coincide" is now an observation relied upon, not a thing arranged.
+  `app-ci.slice` names what would say otherwise; throttling at `MemoryHigh` is NOT it.
 
 ### A lane at 45% of its cores was not waiting on the network
 - 45% mean, 71% p90, 76% max across a lane's two pinned cores with 0.8% iowait reads as "give it
