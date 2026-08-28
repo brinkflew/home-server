@@ -3633,6 +3633,14 @@ three of them are the same mistake in different clothes.
 - **What was given up is stated:** a signed resume URL that escaped is now sufficient where it
   previously still needed a session, and the approval record still cannot name a person -
   `resume_id: 0`, the same limit the control route already had.
+- **A SUSPENDED JOB FROZE THE OLD SUSPEND CONFIG, so the change does not reach the round already
+  waiting.** Measured immediately after the redeploy: `f/agents/ship` in git no longer carries
+  `user_auth_required`, `serve` had rewritten the deployed flow, and the job suspended at
+  `publish_pr` since 22:30 the previous night STILL contained it. A flow definition governs the runs
+  that START under it; an in-flight job carries the copy it was created with. So the first round
+  after a flow change is the first one the change applies to, and the round in flight has to be
+  answered the old way - which for this one means Windmill's own page. The board offering a button
+  that would answer "enterprise only feature" is the failure this measurement exists to prevent.
 
 ## A transcript that can be served, and the drop that makes the redaction affordable
 

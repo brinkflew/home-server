@@ -1195,6 +1195,8 @@ signal read green.
 - `user_auth_required` was spent so the dashboard could answer, so the `conduct_` prefix is now the
   ONLY lock - proved to fail before being trusted. The approve flow carries its mirror, answering
   `publish_pr` and nothing else, or a browser could forge a verification result.
+- **A suspended job FROZE the old suspend config**, so a flow change reaches the next round and not
+  the one already waiting - measured on the redeploy itself.
 
 ### A transcript that can be served, and the drop that makes the redaction affordable
 - **Drop tool results first, redact second**: `DOCKER_VOLUME_CACHE` is 3,920 hits raw and 17 in what
