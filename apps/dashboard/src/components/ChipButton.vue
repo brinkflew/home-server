@@ -19,7 +19,7 @@
  * that lands somewhere it cannot act is worse than one that says less, so the
  * caller passes a sentence rather than a boolean.
  */
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import type { Tone } from "@/types";
 
 const props = withDefaults(
@@ -31,13 +31,27 @@ const props = withDefaults(
     tone?: Tone;
     /** Asks the fleet. Rejecting is expected and is rendered, not thrown. */
     act: () => Promise<unknown>;
+    /**
+     * An outstanding ask the CALLER knows about, which outlives this component.
+     *
+     * `asked` below is set by a press and dies with the mount, so a reload used
+     * to drop it and offer the command again as though it had never been sent.
+     * The caller remembers it and, crucially, works out whether it still stands
+     * by comparing it with what the chip would send now - see `askAge`. Passing
+     * a boolean in rather than storing it here keeps that derivation in the one
+     * module fixtures/smoke.mjs can exercise.
+     */
+    pending?: boolean;
   }>(),
-  { title: "", tone: "off", disabled: null },
+  { title: "", tone: "off", disabled: null, pending: false },
 );
 
 const busy = ref(false);
 const failed = ref<string | null>(null);
-const asked = ref(false);
+const pressed = ref(false);
+
+/** Asked in this mount, or asked in a previous one and still outstanding. */
+const asked = computed(() => pressed.value || props.pending);
 
 // WHAT THIS CHIP KNOWS EXPIRES, AND THE LABEL IS WHAT SAYS SO. `asked` used to
 // be set once and never cleared, so a chip that had worked read `asked` for the
@@ -53,10 +67,27 @@ const asked = ref(false);
 watch(
   () => props.label,
   () => {
-    asked.value = false;
+    pressed.value = false;
     failed.value = null;
   },
 );
+
+/**
+ * WHAT IT SAYS WHILE WAITING, AND WHY IT NO LONGER PROMISES A MINUTE.
+ *
+ * Sixty seconds is `POLL_SEC`, the sleep BETWEEN conduct's cycles - not the
+ * length of one. A cycle that dispatches a phase blocks for as long as the
+ * phase, which is a median of 26 minutes for dev and a 90-minute ceiling. This
+ * chip told people a minute; a disarm on 2026-08-28 took 33m 47s.
+ *
+ * conduct now answers intake and holds from inside the phase wait, so the
+ * ordinary case really is seconds. `restart` is the one that still waits for a
+ * phase boundary, deliberately, and it is the one this sentence must not
+ * over-promise for.
+ */
+const askedTitle =
+  "asked - conduct answers intake and holds within about fifteen seconds. A restart waits " +
+  "for the phase in flight to end, because it cancels a flow";
 
 async function press(): Promise<void> {
   if (busy.value || props.disabled) return;
@@ -64,7 +95,7 @@ async function press(): Promise<void> {
   failed.value = null;
   try {
     await props.act();
-    asked.value = true;
+    pressed.value = true;
   } catch (error) {
     // SHOWN ON THE CHIP RATHER THAN THROWN. An unauthorised route, an
     // unreachable control plane and a refusal all arrive here, and a page that
@@ -82,7 +113,7 @@ async function press(): Promise<void> {
     type="button"
     class="chip mono"
     :class="[tone, { busy, failed, asked }]"
-    :title="failed ?? (asked ? 'asked - conduct applies this within a minute' : title)"
+    :title="failed ?? (asked ? askedTitle : title)"
     :disabled="busy"
     @click="press"
   >

@@ -21,15 +21,35 @@ import { defineStore } from "pinia";
 import { usePoll } from "@/composables/usePoll";
 import { DocumentNeverWritten } from "@/api/document";
 import { fetchFleet } from "@/api/fleet";
+import { fetchControl } from "@/api/control-doc";
 import { SignedOutError } from "@/api/http";
 import { freshness, type Freshness } from "@/freshness";
 import { coarse, isoToUnix } from "@/format";
 import { isSettled } from "@/fleet";
 import { useHostStore } from "@/stores/host";
-import type { FleetDocument, FleetNotice, FleetRound } from "@/types";
+import type {
+  ControlDocument,
+  FleetControl,
+  FleetDocument,
+  FleetNotice,
+  FleetRound,
+} from "@/types";
 
 /** The collector's slow tier. */
 const FLEET_POLL_MS = 300_000;
+
+/** The collector's fast tier, which control.json is written on. */
+const CONTROL_POLL_MS = 30_000;
+
+/** Nobody has said anything, and the route has no token until a document says
+ *  otherwise - absent renders every chip disabled WITH A REASON rather than as
+ *  a button that fails. */
+const CONTROL_ABSENT: FleetControl = {
+  available: false,
+  restart_floor_sec: 600,
+  intake: [],
+  holds: [],
+};
 
 /** Four missed writes, the same principle stores/media.ts derives its two
  *  thresholds from rather than guessing them. */
@@ -39,6 +59,7 @@ export const useFleetStore = defineStore("fleet", () => {
   const host = useHostStore();
 
   const poll = usePoll<FleetDocument>((signal) => fetchFleet(signal), FLEET_POLL_MS);
+  const controlPoll = usePoll<ControlDocument>((signal) => fetchControl(signal), CONTROL_POLL_MS);
 
   const doc = computed(() => poll.data.value);
   const signedOut = computed(() => poll.error.value instanceof SignedOutError);
@@ -88,6 +109,29 @@ export const useFleetStore = defineStore("fleet", () => {
   /** True when the document was written but conduct's database was unreadable -
    *  which must never render as an idle fleet. */
   const dbUnreadable = computed(() => doc.value !== null && !(doc.value.sources.conduct_db?.ok ?? false));
+
+  /**
+   * The switch, from whichever document can currently speak for it.
+   *
+   * A PRECEDENCE AND NOT A SECOND DRAWING - exactly one value leaves here, so
+   * `intakeSwitch()` still derives the state word, the tone, the chip's label
+   * and the command it sends off one branch. What the two documents differ in
+   * is age: control.json is thirty seconds old, fleet.json up to ten minutes.
+   *
+   * THE FAST ONE MUST HAVE ANSWERED, NOT MERELY ARRIVED. If its conduct_db
+   * source failed - a locked database, which is a live writer doing its job -
+   * its `control` is the empty default, and preferring that would flip the tile
+   * to `as shipped` for thirty seconds and tell a reader nobody had ever set
+   * the switch. Falling back to the older document is the honest answer.
+   *
+   * AND THE FALLBACK IS NOT HABIT. The collector and this bundle deploy
+   * separately, so control.json does not exist until the collector half lands.
+   */
+  const control = computed<FleetControl>(() => {
+    const fast = controlPoll.data.value;
+    if (fast && (fast.sources?.conduct_db?.ok ?? false)) return fast.control;
+    return doc.value?.control ?? CONTROL_ABSENT;
+  });
 
   const rounds = computed<FleetRound[]>(() => doc.value?.rounds ?? []);
 
@@ -148,6 +192,7 @@ export const useFleetStore = defineStore("fleet", () => {
     signedOut,
     sourceNotes,
     dbUnreadable,
+    control,
     rounds,
     openRounds,
     settledCount,
@@ -161,6 +206,12 @@ export const useFleetStore = defineStore("fleet", () => {
     waitingOnPerson,
     orphanNotices,
     pending,
-    refresh: poll.refresh,
+    refresh: async () => {
+      // BOTH, AND THE FAST ONE IS THE POINT. This is called straight after a
+      // control command, which is precisely the document that has just changed
+      // - refreshing only the slow one would re-read a file that cannot have
+      // moved yet.
+      await Promise.all([poll.refresh(), controlPoll.refresh()]);
+    },
   };
 });

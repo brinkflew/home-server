@@ -568,6 +568,19 @@ export interface FleetTotals {
   publications_pending: number | null;
 }
 
+/**
+ * `control.json`, the fast-tier document carrying the switch and nothing else.
+ *
+ * The same `control` object `FleetDocument` carries, written every 30s instead
+ * of every 5 minutes - see src/api/control-doc.ts for why there are two.
+ */
+export interface ControlDocument {
+  schema: number;
+  generated_at: string;
+  control: FleetControl;
+  sources: Record<string, SourceHealth>;
+}
+
 export interface FleetDocument {
   schema: number;
   generated_at: string;

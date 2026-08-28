@@ -3559,3 +3559,44 @@ three of them are the same mistake in different clothes.
   once the next `fleet.json` flipped its label from `arm` to `disarm` the button read `asked` over a
   command that would now do the opposite. It clears on a label change, which is the moment the fleet
   has been observed doing the thing; a timer would expire while the answer was still unknown.
+
+### The loop was inside a phase, and every signal said it was fine
+- **conduct's poll loop is single-threaded and a phase blocks it.** `poll.cycle` takes ONE snapshot
+  of suspended jobs and then iterates it, and the dispatch handler blocks in `_await_phase` - a 15s
+  `time.sleep` loop that checked exactly one boolean. A disarm posted at 21:26:20 on 2026-08-28 was
+  created **eight minutes after that snapshot**, so it was not in the list conduct was holding at
+  all. It landed at 22:00:07: **33m 47s**, against a 5400s ceiling.
+- **Nothing escaped, and that is the reason this was latency rather than loss.** conduct cannot take
+  new work mid-phase - `poll.py:1991` returns before `_intake` is reached, `_intake_idle` refuses on
+  `actions`, on `suspended` and on `chains_open`, and `INTAKE_SEC` paces the look anyway.
+- **The heartbeat could not have shown it**: `_await_phase` calls `serve.refresh(ok=True)` every 15s
+  while the loop is fully blocked, so `last_ok_at` read two seconds old after nineteen minutes of
+  not polling. `agents.conduct_fresh` is structurally unable to fire on this, and did not.
+- **A control step could also be starved indefinitely**, because it was answered INSIDE the dispatch
+  loop and both of that loop's `return actions` cut it short. Which of the two the loop reached
+  first depended on the order `jobs/queue/list` happened to return, which conduct does not sort.
+  **The argument against that was already in the file, one function above** - `_sweep_notices` was
+  hoisted out for exactly it - and control was left behind.
+- **60 seconds is `POLL_SEC`, the sleep BETWEEN cycles, not the length of one.** Six places in the
+  dashboard promised "within a minute", including the chip's own tooltip, while `docs/agents.md`
+  already said "twenty minutes already spent, and rediscovering the same suspended step next cycle".
+- **`agents.approvals_pending` says the SQL cannot separate conduct's steps from a person's, and for
+  the control flow that is false.** `v2_job.runnable_path` names the flow and `v2_job.args` carries
+  the action, so `agents.control_lag` separates them outright - and excludes `restart`, whose wait
+  IS deliberate. Measured before the fix at 1976s while `approvals_pending` beside it read PASS,
+  "oldest 0h".
+- **ruff caught what the tests could not.** The deferred `poll` import went one function above the
+  one that uses it, where it read as used; `_answer_control` had never executed in any test, because
+  every test that reaches `_await_phase` stubs `run_phase` out. Its own suite exists now, including
+  an assertion that the call site is still there - a function that works and is never called is the
+  same as no function.
+- **A remembered ask must be cleared by derivation, never by a timer.** The chip compares what was
+  asked with what it would send NOW: while they match the command has not taken effect, and the
+  moment the fleet moves they differ and the memory retires itself. A ceiling is only the backstop
+  for a flow that timed out unanswered and so will never move the state at all.
+- **`control.json` exists because cadence, not content, was the problem.** `fleet.json` is the
+  collector's 5-minute slow tier and the browser polls it every 5 minutes, so the board could be ten
+  minutes behind a click that conduct now answers in fifteen seconds. Both documents carry `control`
+  and the store treats the fast one as a PRECEDENCE - and only when its own `conduct_db` source
+  answered, or a locked database would flip the tile to "as shipped" and claim nobody had ever set
+  the switch.

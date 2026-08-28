@@ -2368,6 +2368,23 @@ control flow with the path thrown away; a client-supplied `Authorization` is rep
 forwarded; and the token appears on no other upstream. A bare `/api/control` with no trailing
 segment falls through to the bundle, which is why the client posts to `/api/control/run`.
 
+**A COMMAND IS ANSWERED FROM INSIDE THE PHASE WAIT, WHICH IS WHERE THE LOOP SPENDS ITS TIME.**
+conduct is single-threaded: `poll.cycle` takes one snapshot of suspended jobs and then blocks in the
+dispatch, so a command created after that snapshot cannot be seen until the phase exits. Measured on
+2026-08-28, a disarm waited **33m 47s** - with `last_ok_at` two seconds old throughout, because
+`_await_phase` refreshes the heartbeat every 15s whether or not the loop is looking at anything. So
+`_sweep_control` is hoisted beside `_sweep_notices`, on that function's own argument, and
+`_await_phase` calls it on the 15s tick it already had. **No thread.**
+
+**`restart` is excluded by an allowlist rather than by a comment.** It cancels a flow and starts
+another, which from inside the phase wait is conduct cancelling the flow whose phase it is running;
+the other four only write a row. A sixth action added to `flows/control.py` is deferred by default,
+which is the failure direction worth having. **A command outside the allowlist is left suspended and
+untouched - "not yet", never "no"** - while a refusal is answered whatever the allowlist says,
+because an action conduct cannot read has no boundary to wait for. And every failure inside that
+wait is swallowed, which is the opposite of `cycle`'s rule and deliberate: the caller is holding a
+phase twenty minutes in, and a control-plane blip must cost the tick and nothing else.
+
 **The record is the Windmill job** - its arguments, its timestamp, its result, kept for thirty days
 by `JOB_RETENTION_SECS` - plus a `control` row carrying `at` and a note. That is the argument, the
 duration and the record the Alertmanager silence refusal asks for. **What it cannot say is which

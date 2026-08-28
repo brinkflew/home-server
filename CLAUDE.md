@@ -1172,6 +1172,23 @@ signal read green.
 - A chip that never clears `asked` stops naming its own action once the label flips under it.
 
 
+### The loop was inside a phase, and every signal said it was fine
+- **conduct's poll loop is single-threaded**: `cycle` takes ONE snapshot of suspended jobs and then
+  blocks in the dispatch, so a disarm posted eight minutes into a dev phase was not in the list at
+  all and landed **33m 47s** later. Nothing escaped - conduct cannot take new work mid-phase - so it
+  was latency, not loss.
+- **`_await_phase` refreshes the heartbeat every 15s while the loop is fully blocked**, so
+  `last_ok_at` read two seconds old after nineteen minutes of not polling. No check could fire.
+  `agents.control_lag` is the one that can, and `v2_job.runnable_path` is what makes it possible -
+  `approvals_pending`'s "the SQL cannot separate them" is false for the control flow.
+- **60s is `POLL_SEC`, the sleep BETWEEN cycles, not the length of one** - six places said "within a
+  minute". A control step was also answered INSIDE the dispatch loop, behind both of its early
+  returns, so it could be starved on an ordering nothing sorted.
+- **A remembered ask is cleared by derivation, never a timer**, and `control.json` is a cadence fix
+  rather than a content one: the fast document is a PRECEDENCE over `fleet.json`, and only when its
+  own source answered.
+
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless
