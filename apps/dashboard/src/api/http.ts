@@ -12,8 +12,14 @@
 // then throws somewhere far away, and every panel silently shows nothing.
 //
 // So every call goes through here, and two signals are treated as "signed out":
-// a cross-origin redirect, and a non-JSON content type. The cure is a full page
-// load, because a passkey prompt cannot be completed inside an XHR.
+// a cross-origin redirect, and an HTML body. The cure is a full page load,
+// because a passkey prompt cannot be completed inside an XHR.
+//
+// "AN HTML BODY", AND NOT "A BODY THAT IS NOT JSON" - this paragraph said the
+// latter until 2026-08-28, and the gap between the two cost an evening. The
+// control route answers `text/plain`, which is neither JSON nor a sign-in page,
+// so it walked past this guard and into a `JSON.parse` that threw. `fetchText`
+// at the foot of this file is what reads that route now.
 //
 // THE RELOAD IS RATE-LIMITED, deliberately. If something OTHER than sign-on
 // starts returning HTML - a 502 page from a restarting upstream, say - an
@@ -89,7 +95,16 @@ export interface FetchOptions {
   json?: unknown;
 }
 
-export async function fetchJson<T>(url: string, options: FetchOptions = {}): Promise<T> {
+/**
+ * The request every caller shares, up to the point where the body is read.
+ *
+ * SPLIT OUT SO THAT READING THE BODY IS THE ONLY THING A CALLER CHOOSES. The
+ * timeout, the credentials, the redirect policy, the sign-in sniff and the
+ * error branch are the part that must not be written twice - one of them going
+ * missing from a second copy is precisely how an expired session becomes an
+ * empty page instead of a sign-in prompt.
+ */
+async function request(url: string, options: FetchOptions): Promise<Response> {
   const timeout = AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
 
@@ -127,5 +142,33 @@ export async function fetchJson<T>(url: string, options: FetchOptions = {}): Pro
     throw new HttpError(res.status, url, detail);
   }
 
+  return res;
+}
+
+/** The body as JSON. Every document, every metric, every alert. */
+export async function fetchJson<T>(url: string, options: FetchOptions = {}): Promise<T> {
+  const res = await request(url, options);
   return (await res.json()) as T;
+}
+
+/**
+ * The body as text, for the one route on this origin that does not answer JSON.
+ *
+ * WINDMILL'S RUN ENDPOINT REPLIES `201 text/plain` WITH A BARE 36-BYTE JOB ID -
+ * measured off Caddy's own access log, which records the upstream's headers. A
+ * bare UUID is not valid JSON, `res.ok` is true for a 201, and the sniff above
+ * knows only `text/html`, so `fetchJson` carried it all the way to `JSON.parse`
+ * and threw. Every other layer had said yes: the edge, the flow, conduct's
+ * journal, its database and a round that started. The only wrong thing in the
+ * system was the word printed on the button, and the word was `failed`.
+ *
+ * THE REQUEST IS UNCHANGED, `Accept: application/json` INCLUDED. That is the
+ * request the 201 was measured against, and this is the one call here that
+ * cannot be exercised without asking a fleet to do something - so tidying a
+ * header the endpoint demonstrably ignores would trade a measurement for a
+ * guess. What changed is the reading, and only the reading.
+ */
+export async function fetchText(url: string, options: FetchOptions = {}): Promise<string> {
+  const res = await request(url, options);
+  return (await res.text()).trim();
 }

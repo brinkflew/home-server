@@ -19,7 +19,7 @@
  * that lands somewhere it cannot act is worse than one that says less, so the
  * caller passes a sentence rather than a boolean.
  */
-import { ref } from "vue";
+import { ref, watch } from "vue";
 import type { Tone } from "@/types";
 
 const props = withDefaults(
@@ -38,6 +38,25 @@ const props = withDefaults(
 const busy = ref(false);
 const failed = ref<string | null>(null);
 const asked = ref(false);
+
+// WHAT THIS CHIP KNOWS EXPIRES, AND THE LABEL IS WHAT SAYS SO. `asked` used to
+// be set once and never cleared, so a chip that had worked read `asked` for the
+// rest of the page's life - including after the next `fleet.json` flipped its
+// label from `arm` to `disarm`, at which point the button no longer named what
+// pressing it would do. That is the defect `intakeSwitch()` exists to prevent,
+// reappearing one component further down.
+//
+// THE LABEL IS THE TRIGGER AND A TIMER WOULD BE THE WRONG ONE. The label changes
+// exactly when the fleet has been observed doing the thing, so `asked` stands
+// for precisely as long as it is the most that is known. If conduct refused, the
+// label never changes and the chip goes on saying `asked`, which is still true.
+watch(
+  () => props.label,
+  () => {
+    asked.value = false;
+    failed.value = null;
+  },
+);
 
 async function press(): Promise<void> {
   if (busy.value || props.disabled) return;

@@ -1161,6 +1161,17 @@ signal read green.
   its task where intake cannot reach it, by design, and only a person can move it back.
 
 
+### The command arrived, and the receipt could not be read
+- **Windmill's run endpoint answers `201 text/plain`**, 36 bytes of bare job id: `res.ok` is true for
+  a 201 and the sign-in sniff knows only `text/html`, so it walked past both guards into
+  `JSON.parse`. The comment naming the hazard was one line above the call that ignored it, and
+  conduct had already hit and handled the same thing.
+- **Proving a route with curl does not prove the client** - no fixture reached `src/api/`, so the
+  browser's read of the response had never run. Every other layer said yes and the button said
+  `failed`, which invites a second press of a command already carried out.
+- A chip that never clears `asked` stops naming its own action once the label flips under it.
+
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless
