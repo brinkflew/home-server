@@ -25,8 +25,15 @@ const {
   isSettled,
   byUrgency,
 } = await load("/src/fleet.ts");
-const { holdExpiresIn, intakeState, intakeSwitch, roundControls, HOLD_TIMEOUT_S } =
-  await load("/src/control.ts");
+const {
+  askAge,
+  holdExpiresIn,
+  intakeState,
+  intakeSwitch,
+  roundControls,
+  ASK_CEILING_S,
+  HOLD_TIMEOUT_S,
+} = await load("/src/control.ts");
 const fmt = await load("/src/format.ts");
 const { control } = await load("/src/api/control.ts");
 
@@ -562,6 +569,31 @@ check("nobody having said reads as shipped",
 check("the chip and the command never disagree",
   [armed, disarmed, shipped].every((sw) => (sw.label === "disarm") === (sw.action === "intake_off")),
   true);
+
+console.log("\n-- an ask this browser made, and when it stops standing --");
+
+// THE SECOND HALF OF 2026-08-28. conduct could not answer for 33 minutes, and
+// the board forgot the ask on every reload - so a person who refreshed saw the
+// command offered again as though they had never sent it.
+//
+// CLEARED BY DERIVATION AND NEVER BY A TIMER ALONE, which is the property that
+// makes remembering it safe: `offers` is what the chip would send NOW, so the
+// moment the fleet does the thing the two stop matching and the memory retires
+// itself. A memory that could outlive its own truth would be worse than none.
+const ASKED_AT = 1_700_000_000;
+const stands = { action: "intake_off", at: ASKED_AT };
+check("an ask nobody has acted on yet still stands",
+  askAge(stands, "intake_off", ASKED_AT + 180), 180);
+check("the fleet doing it retires the ask",
+  askAge(stands, "intake_on", ASKED_AT + 180), null);
+check("nothing remembered is not an outstanding ask", askAge(null, "intake_off", ASKED_AT), null);
+// THE BACKSTOP, NOT THE MECHANISM. A flow that timed out unanswered never moves
+// the state, so without a ceiling the chip would say `asked` for ever.
+check("an ask older than the flow's own timeout is dropped",
+  askAge(stands, "intake_off", ASKED_AT + ASK_CEILING_S + 1), null);
+// A CLOCK THAT WENT BACKWARDS is a browser waking from sleep, not an ask from
+// the future - and a negative age would render as "asked -3m ago".
+check("an ask from the future is dropped", askAge(stands, "intake_off", ASKED_AT - 60), null);
 
 console.log("\n-- the board puts what needs acting on at the top --");
 

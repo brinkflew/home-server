@@ -2524,6 +2524,52 @@ if [ -z "$GREENBOOT" ]; then
 		fi
 	fi
 
+	# THE CONTROL FLOW IS SEPARABLE, WHICH THE CHECK ABOVE SAYS IT IS NOT - and
+	# both statements are true. `suspend > 0` cannot tell a human gate from a
+	# conduct step INSIDE f/agents/ship, which is what that comment is about.
+	# But `v2_job.runnable_path` names the flow and `v2_job.args` carries the
+	# action, so a command posted from the dashboard separates outright. Measured
+	# against the live schema, not read off a doc page.
+	#
+	# WHAT THIS WATCHES IS A DEFECT THAT LOOKED EXACTLY LIKE HEALTH. conduct's
+	# poll loop is single-threaded and a phase blocks it - and `_await_phase`
+	# calls `serve.refresh(ok=True)` every 15s while blocked, so `last_ok_at`
+	# stayed two seconds old through nineteen minutes of not polling. On
+	# 2026-08-28 a disarm waited 32 minutes with every signal on this host green
+	# and nothing anywhere able to say so. conduct now answers control steps from
+	# inside the phase wait, so a command sitting here means that stopped working.
+	#
+	# `restart` IS EXCLUDED BECAUSE ITS WAIT IS DELIBERATE. It cancels a flow and
+	# starts another, which conduct must not do from inside the phase whose flow
+	# that is - so it is applied at the phase boundary by design, and alerting on
+	# it would be alerting on a decision. Excluded here rather than absorbed into
+	# a threshold big enough to hide the real thing.
+	if [ -z "$wm_up" ]; then
+		fact agents_control_lag_seconds ""
+		note agents.control_lag "windmill-db is not running, so a waiting command cannot be read"
+	else
+		cl_sql="select count(*), coalesce(max(extract(epoch from (now() - q.created_at)))::bigint, 0) from v2_job_queue q join v2_job j on j.id = q.id where q.suspend > 0 and j.runnable_path = 'f/agents/control' and coalesce(j.args->>'action', '') <> 'restart'"
+		cl_row=$(podman exec -e CL_SQL="$cl_sql" windmill-db \
+			sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "$CL_SQL"' 2>/dev/null)
+		cl_n=${cl_row%%|*}
+		cl_age=${cl_row##*|}
+		case "$cl_n" in ''|*[!0-9]*) cl_n="" ;; esac
+		case "$cl_age" in ''|*[!0-9]*) cl_age=0 ;; esac
+		if [ -z "$cl_n" ]; then
+			fact agents_control_lag_seconds ""
+			note agents.control_lag "the waiting-command age could not be read - not measured"
+		else
+			fact agents_control_lag_seconds "$cl_age" num
+			if [ "$cl_n" -eq 0 ]; then
+				ok agents.control_lag "no command is waiting on conduct"
+			elif [ "$cl_age" -gt 300 ]; then
+				warn agents.control_lag "$cl_n command(s) waiting on conduct, the oldest for $((cl_age / 60))m - conduct answers intake and holds from inside the phase wait, so at this age it has stopped polling. Its heartbeat cannot show this: the phase wait refreshes it every 15s whether or not the loop is looking at anything"
+			else
+				ok agents.control_lag "$cl_n command(s) waiting on conduct, oldest ${cl_age}s - inside the pass it answers them on"
+			fi
+		fi
+	fi
+
 	# 2048MB IS ABOUT A HUNDRED TIMES TODAY'S 18MB, and the slack is the point:
 	# what this catches is job logs and completed-job rows accumulating, which
 	# arrives in hundreds of megabytes rather than in dozens. It shares nvme0n1p4

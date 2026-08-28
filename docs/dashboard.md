@@ -54,6 +54,33 @@ so a chip reading `arm` cannot send `intake_off` - the same defect as the findin
 list disagreeing about a tone, with a far worse consequence than a colour. `fixtures/smoke.mjs`
 asserts the pairing across all three states, including the `as shipped` case no fixture carries.
 
+**THE SWITCH IS DRAWN FROM `control.json`, NOT `fleet.json`, AND THAT IS A CADENCE FIX.** The fleet
+document is on the collector's five-minute slow tier and the browser polls it every five minutes, so
+the board could be ten minutes behind a command conduct now applies in about fifteen seconds - a
+person presses disarm, watches the tile go on saying `armed`, and presses it again. `control.json`
+is one SELECT on the thirty-second fast tier. **`fleet.json` still carries `control` and the store
+treats the fast file as a PRECEDENCE rather than a second drawing**: exactly one value reaches
+`intakeSwitch()`. It is preferred only when its own `conduct_db` source answered - a locked database
+is a live writer doing its job, and preferring its empty default would flip the tile to `as shipped`
+and tell a reader nobody had ever set the switch. The fallback is not defensive habit either: the
+collector and the bundle deploy separately, so the file does not exist until the collector half
+lands.
+
+**AND THE CHIP REMEMBERS WHAT THIS BROWSER ASKED FOR, ACROSS A RELOAD.** `asked` was component state
+and died with the mount, so a refresh offered the command again as though it had never been sent.
+It is in `sessionStorage` - one person's own click, not a fact about the fleet, and nothing on the
+host records that a command was sent. **It is cleared by derivation and never by a timer**:
+`askAge()` compares what was asked with what the chip would send *now*, so the moment the fleet is
+seen doing the thing they differ and the memory retires itself. The ceiling only catches a flow that
+timed out unanswered and will therefore never move the state.
+
+**The run board's time column carries two clocks.** It held the ETA alone and so read `-` on most
+rows most of the time, because the collector withholds an estimate below five samples of any
+remaining phase - while a round had visibly been running half an hour. Elapsed leads, the phase in
+flight is under it against this host's own median for that phase, and a closed round says what it
+took. `opened N ago` under the progress bar stays: it answers *when*, this answers *how long*, and
+on a finished round they are different numbers.
+
 **And the Agents page no longer teleports `read only` into the toolbar**, because it is not: intake,
 hold, release and restart all act. It says `asks the fleet`, which is the weaker claim the chips
 themselves make - conduct applies a command on its next cycle, so the board asks and never does. The

@@ -117,6 +117,8 @@ DOC_LIBRARY = os.path.join(DOC_DIR, "library.json")
 # pacing signal, and a document reporting what a round cost cannot become a
 # second currency because it cannot be graphed over time.
 DOC_FLEET = os.path.join(DOC_DIR, "fleet.json")
+# The control switch alone, rewritten every 30s - see source_control.
+DOC_CONTROL = os.path.join(DOC_DIR, "control.json")
 DOC_SCHEMA = 1
 
 # conduct's own state, read-only. The default matches conduct/config.py's
@@ -3533,6 +3535,53 @@ def _fleet_waiting(module_id):
             else "person")
 
 
+def source_control(m, doc):
+    """The control switch alone, on the fast tier.
+
+    A SECOND DOCUMENT FOR ONE QUERY, AND THE CADENCE IS THE WHOLE REASON.
+    `source_fleet` is slow and rightly so - it walks git, derives rounds, takes
+    phase medians and makes a GitHub call - but the control block is one SELECT
+    against a table with a handful of rows, and putting it behind all of that
+    made the board up to ten minutes behind a click: five for the slow tier and
+    five more for the browser's poll of a document that size. A person pressed
+    disarm, watched nothing happen, and pressed it again.
+
+    conduct NOW APPLIES A COMMAND IN ABOUT FIFTEEN SECONDS, so the board being
+    the slow half would be the whole remaining delay.
+
+    `fleet.json` STILL CARRIES `control` AND THAT IS NOT A DUPLICATE DRAWING.
+    The collector and the bundle deploy separately, so a board reading this file
+    before the collector writes one would blank the control it exists to show -
+    the split-deploy failure docs/known-state.md already records for `pr_url`.
+    The store treats this as a PRECEDENCE: one value reaches the switch.
+
+    IT MUST NEVER RAISE, for the reason source_fleet gives at length.
+    """
+    doc.set("control", {"available": False,
+                        "restart_floor_sec": FLEET_RESTART_FLOOR_SEC,
+                        "intake": [], "holds": []})
+
+    if not os.path.exists(CONDUCT_DB):
+        doc.note("conduct_db", False, "conduct has never run here")
+        return
+
+    conn = None
+    try:
+        conn = sqlite3.connect("file:%s?mode=ro" % CONDUCT_DB, uri=True,
+                               timeout=2.0)
+        conn.execute("PRAGMA busy_timeout = 2000")
+        doc.set("control", _fleet_control(conn, load_env()))
+        doc.note("conduct_db", True)
+    except sqlite3.Error as exc:
+        doc.note("conduct_db", False, "conduct.db could not be read: %s" % exc)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
+
+
 def source_fleet(m, doc):
     """What the fleet is doing, for the Agents page.
 
@@ -3951,6 +4000,10 @@ SOURCES = (
     ("requests", source_requests, True, "library"),
     ("catalogue", source_catalogue, True, "library"),
     ("fleet", source_fleet, True, "fleet"),
+    # FAST, AND THE ONLY DOCUMENT SOURCE THAT IS. A command a person just
+    # sent is the one thing on the Agents page whose staleness they can
+    # measure against their own hand.
+    ("control", source_control, False, "control"),
 )
 
 
@@ -4068,7 +4121,7 @@ def write_marker(ok, started, duration, failed, series):
 # document would have silently been written to library.json - same bytes, same
 # permissions, no error anywhere, and the Library page rendering a fleet.
 _DOC_PATHS = {"activity": DOC_ACTIVITY, "library": DOC_LIBRARY,
-              "fleet": DOC_FLEET}
+              "fleet": DOC_FLEET, "control": DOC_CONTROL}
 
 
 def _doc_path(key):

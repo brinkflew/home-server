@@ -116,6 +116,49 @@ export function intakeSwitch(control: FleetControl, project: string): IntakeSwit
 }
 
 /**
+ * An ask a person made that the fleet has not yet been observed carrying out.
+ *
+ * WHY THIS EXISTS AT ALL: `ChipButton`'s `asked` is component state, so a
+ * reload drops it and the board goes back to offering the command as though it
+ * had never been sent. On 2026-08-28 that was the second half of the
+ * complaint - the first being that conduct could not answer for 33 minutes.
+ * conduct is fixed; this is the half where the page forgets.
+ *
+ * IT IS CLEARED BY DERIVATION AND NEVER BY A TIMER ALONE. `action` is what the
+ * chip would send NOW: while the remembered ask still matches it, the command
+ * has not taken effect and the ask stands. The moment the fleet moves, the
+ * chip's action flips to its opposite, they stop matching, and the memory is
+ * dropped. So this cannot go on claiming an outstanding ask after the thing has
+ * happened - which is the failure mode that would make it worse than nothing.
+ *
+ * THE CEILING IS A BACKSTOP, NOT THE MECHANISM. A flow that hit CONDUCT_TIMEOUT
+ * without being answered will never move the state, so without one the chip
+ * would say `asked` for ever.
+ */
+export const ASK_CEILING_S = HOLD_TIMEOUT_S;
+
+export interface RememberedAsk {
+  action: ControlAction;
+  /** Unix seconds, from the browser's clock - this is one person's own ask. */
+  at: number;
+}
+
+/** Seconds the ask has been outstanding, or null if it no longer stands. */
+export function askAge(
+  remembered: RememberedAsk | null,
+  offers: ControlAction,
+  nowUnix: number,
+): number | null {
+  if (!remembered) return null;
+  // THE FLEET MOVED. The chip now offers the opposite command, so what was
+  // asked for has been done and the memory has served its purpose.
+  if (remembered.action !== offers) return null;
+  const age = nowUnix - remembered.at;
+  if (!Number.isFinite(age) || age < 0 || age > ASK_CEILING_S) return null;
+  return age;
+}
+
+/**
  * The controls this round offers.
  *
  * NOTHING IS OFFERED ON A ROUND THAT IS OVER. Holding a finished round stops

@@ -47,7 +47,8 @@ import { instant, range, value } from "@/api/prometheus";
 import { AGENTS } from "@/queries";
 import { heartbeatTone, quotaTone } from "@/health";
 import { control } from "@/api/control";
-import { holdExpiresIn, intakeSwitch, roundControls } from "@/control";
+import { askAge, holdExpiresIn, intakeSwitch, roundControls } from "@/control";
+import type { RememberedAsk } from "@/control";
 import {
   byUrgency,
   roundAction,
@@ -252,10 +253,70 @@ function toggle(id: string): void {
  * rather than offering a button that 401s - absent and broken are different
  * findings, which is the rule the whole document is written around.
  */
-const controlState = computed(
-  () => fleet.doc?.control ?? { available: false, restart_floor_sec: 600, intake: [], holds: [] },
-);
+// ONE VALUE, FROM WHICHEVER DOCUMENT CAN SPEAK FOR IT. The store decides between
+// control.json (30s) and fleet.json (up to 10 minutes) and hands back a single
+// object, so nothing on this page has to know there are two.
+const controlState = computed(() => fleet.control);
 const intake = computed(() => intakeSwitch(controlState.value, "upskald"));
+
+/**
+ * What this browser last asked of the intake switch, across a reload.
+ *
+ * sessionStorage IS THE RIGHT SIZE FOR IT. It is one person's own click, not a
+ * fact about the fleet: nothing on the host records that a command was sent,
+ * and the collector deliberately does not grow a Windmill dependency to find
+ * out. The same store api/http.ts already uses for its reauth rate-limit, and
+ * every access is wrapped for the same reason - a private window or disabled
+ * storage must degrade to "no memory", never to a broken page.
+ */
+const ASK_KEY = "home-server.ask.intake:upskald";
+
+function readAsk(): RememberedAsk | null {
+  try {
+    const raw = sessionStorage.getItem(ASK_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<RememberedAsk>;
+    // SHAPE-CHECKED, because this outlives a deploy: a value written by an
+    // older bundle must read as no memory rather than throw here.
+    return typeof parsed?.at === "number" && typeof parsed?.action === "string"
+      ? { action: parsed.action, at: parsed.at }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+const remembered = ref<RememberedAsk | null>(readAsk());
+
+/** Seconds the ask has stood, or null once the fleet has been seen doing it. */
+const askedFor = computed(() => askAge(remembered.value, intake.value.action, host.now));
+
+// FORGET IT THE MOMENT IT STOPS STANDING, so a later mount does not re-read a
+// memory `askAge` has already retired. The derivation decides; this only
+// records what it decided.
+watch(askedFor, (age) => {
+  if (age !== null || remembered.value === null) return;
+  remembered.value = null;
+  try {
+    sessionStorage.removeItem(ASK_KEY);
+  } catch {
+    // Nothing to clear, which is the same outcome.
+  }
+});
+
+/** What the switch says under it: the ask if one is outstanding, else who set it. */
+const intakeSub = computed(() => {
+  if (askedFor.value !== null) {
+    const waiting =
+      phase.value.state === "in flight"
+        ? " - conduct is mid-phase, and answers this from inside it"
+        : "";
+    return `${intake.value.label} asked ${fmt.coarse(askedFor.value)} ago${waiting}`;
+  }
+  return intake.value.source === "set"
+    ? `set by hand ${fmt.sinceIso(intake.value.at)}`
+    : "conduct's own default";
+});
 const controlDisabled = computed(() =>
   controlState.value.available ? null : "the control route has no token - see WINDMILL_DASHBOARD_TOKEN",
 );
@@ -265,7 +326,16 @@ async function toggleIntake(): Promise<void> {
   // re-derived. Two ternaries over one boolean agree only for as long as
   // somebody keeps them agreeing, and the failure is a button that does the
   // opposite of what it reads.
-  await control({ action: intake.value.action, project: "upskald" });
+  const asked = intake.value.action;
+  await control({ action: asked, project: "upskald" });
+  // AFTER THE POST AND ONLY ON SUCCESS. A command that never reached Windmill
+  // is not outstanding, it failed, and the chip says so itself.
+  remembered.value = { action: asked, at: Math.floor(Date.now() / 1000) };
+  try {
+    sessionStorage.setItem(ASK_KEY, JSON.stringify(remembered.value));
+  } catch {
+    // A private window. The in-memory ref still carries it for this mount.
+  }
   // ASKED, NOT DONE. conduct applies it on its next cycle, so the honest way to
   // learn what happened is the next document rather than an optimistic local
   // flip - which would show `armed` over a fleet that had refused.
@@ -279,6 +349,8 @@ const board = computed(() =>
     action: roundAction(r),
     progress: roundProgress(r),
     eta: etaLabel(r),
+    elapsed: elapsedLabel(r),
+    phaseClock: phaseClock(r),
     branch: roundBranch(r),
     error: roundError(r),
     // THE NUMBER IS ONLY WORTH THE LINE WHEN IT IS NOT ONE. Every round that
@@ -322,6 +394,47 @@ function etaLabel(r: FleetRound): string {
   if (at === null) return fmt.NO_DATA;
   const remaining = at - host.now;
   return remaining <= 0 ? `overdue ${fmt.coarse(-remaining)}` : `~${fmt.coarse(remaining)}`;
+}
+
+/**
+ * How long the round has been going, or how long it took.
+ *
+ * ELAPSED IS ALWAYS KNOWABLE AND THE ESTIMATE USUALLY IS NOT - the collector
+ * withholds an ETA entirely when any remaining phase has fewer than five
+ * completed runs, so this column read `-` on most rows most of the time while a
+ * round had visibly been running for half an hour. `opened N ago` under the
+ * progress bar answers WHEN; this answers HOW LONG, and on a finished round
+ * they are different numbers.
+ */
+function elapsedLabel(r: FleetRound): string {
+  const from = fmt.isoToUnix(r.started_at ?? r.opened_at);
+  if (!Number.isFinite(from)) return fmt.NO_DATA;
+  if (r.closed_at !== null) {
+    const to = fmt.isoToUnix(r.closed_at);
+    return Number.isFinite(to) ? `took ${fmt.coarse(to - from)}` : fmt.NO_DATA;
+  }
+  return fmt.coarse(host.now - from);
+}
+
+/**
+ * The second clock: the phase in flight, against this host's own median for it.
+ *
+ * FROM THE ROUND'S OWN PHASE AND THE FLEET-WIDE MEDIAN, which are two different
+ * sources and deliberately so - `phase_stats` is thirty days of completed runs
+ * of that phase across every round, and there is no per-round expectation
+ * anywhere to compare against instead. Below five samples the collector
+ * withholds the median, and so does this: `dev 26m` rather than a made-up
+ * fraction of a number nobody measured.
+ */
+function phaseClock(r: FleetRound): string | null {
+  if (r.closed_at !== null) return null;
+  const name = r.phase;
+  const started = fmt.isoToUnix(fleet.doc?.runs?.find((run) => run.ended_at === null)?.started_at);
+  if (!name || !Number.isFinite(started)) return null;
+  const elapsed = fmt.coarse(host.now - started);
+  const stat = fleet.phaseStats[name];
+  const median = stat && stat.samples >= 5 ? stat.median_seconds : null;
+  return median === null ? `${name} ${elapsed}` : `${name} ${elapsed} of ~${fmt.coarse(median)}`;
 }
 
 const rowCostTip = computed(() => ({
@@ -518,11 +631,10 @@ const costTip = computed(() => ({
               :disabled="controlDisabled"
               :act="() => toggleIntake()"
               :title="intake.title"
+              :pending="askedFor !== null"
             />
           </span>
-          <span class="mono sub">{{
-            intake.source === "set" ? `set by hand ${fmt.sinceIso(intake.at)}` : "conduct's own default"
-          }}</span>
+          <span class="mono sub" :class="{ warnish: askedFor !== null }">{{ intakeSub }}</span>
         </div>
       </div>
     </PanelBox>
@@ -642,9 +754,15 @@ const costTip = computed(() => ({
             <span v-else class="mono sub">opened {{ fmt.sinceIso(row.r.opened_at) }}</span>
           </span>
 
-          <span class="cell mono eta" v-bind="tip.hover(`ag-eta-${row.r.worktree_id}`, etaTip)">{{
-            row.eta
-          }}</span>
+          <!-- TWO CLOCKS, AND THE ESTIMATE IS THE ONE THAT IS OFTEN ABSENT.
+               This column used to hold the ETA alone and so read `-` on most
+               rows: the collector withholds an estimate below five samples of
+               any remaining phase. Elapsed is always knowable, so it leads. -->
+          <span class="cell mono eta" v-bind="tip.hover(`ag-eta-${row.r.worktree_id}`, etaTip)">
+            {{ row.elapsed }}
+            <span v-if="row.phaseClock" class="sub">{{ row.phaseClock }}</span>
+            <span v-else-if="row.eta !== fmt.NO_DATA" class="sub">{{ row.eta }} left</span>
+          </span>
 
           <!-- What this attempt cost, which the totals panel below cannot show:
                today's five rounds span $2.47 to $17.94 and an expensive failure
@@ -927,15 +1045,18 @@ const costTip = computed(() => ({
                different question. The state, the chip and the command are the
                parts that must not differ, and those come from one function. -->
           <span class="mono sub">{{
-            intake.source === "set"
-              ? `set by hand ${fmt.sinceIso(intake.at)}${intake.note ? ` - ${intake.note}` : ""}`
-              : "conduct's own default, unchanged"
+            askedFor !== null
+              ? intakeSub
+              : intake.source === "set"
+                ? `set by hand ${fmt.sinceIso(intake.at)}${intake.note ? ` - ${intake.note}` : ""}`
+                : "conduct's own default, unchanged"
           }}</span>
           <ChipButton
             :label="intake.label"
             :disabled="controlDisabled"
             :act="() => toggleIntake()"
             :title="intake.title"
+            :pending="askedFor !== null"
           />
         </div>
 
@@ -1150,7 +1271,8 @@ const costTip = computed(() => ({
   margin-bottom: 0;
 }
 
-.cell.phase .sub {
+.cell.phase .sub,
+.cell.eta .sub {
   white-space: nowrap;
 }
 
