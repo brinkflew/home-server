@@ -3490,3 +3490,47 @@ three of them are the same mistake in different clothes.
   block beside it. Nothing failed and no test noticed; the board would have drawn "attempt 3 of 2"
   the first time a change used its third. A second copy of a fact is a thing to check when the first
   one moves, and there are now two of them in that file.
+
+### One SIGTERM, three defects, and five rounds that produced nothing
+- **conduct's phase wait read no stop flag**, so a SIGTERM arriving while a phase ran was noticed
+  only after the phase finished. `RUNTIME_MAX_SEC` allows a phase 5,400s and
+  `home-server-conduct.service` declares no `TimeoutStopSec`, so systemd's default 90s expired,
+  systemd escalated to SIGABRT, and conduct was **core-dumped mid-phase** - `code=dumped,
+  status=6/ABRT`, with the dump's own stack sitting in that `time.sleep`. The phase died either
+  way; what was lost was conduct's account of it. The fix is an interruptible wait, NOT a longer
+  timeout - raising it would hang every deploy for up to ninety minutes.
+- **A reaped worktree left its round claiming the work still existed.** reconcile removing an
+  interrupted tree is correct and deliberate, but the `chain` row survived carrying `done =
+  ["plan"]` - and `_failed_flow`'s three guards ask whether conduct broke the run, whether it has
+  already resumed once, and whether `done` is non-empty. **None of them asks whether the tree those
+  phases wrote to still exists.** So the round resumed 1h41m later, skipped the planning phase on
+  the strength of that row, and dev tried to continue a directory that was gone: `EmptyTree`, in
+  **zero seconds, twice**, before closing with "the phase before it never ran" - which was false.
+- **Closing the round is the fix, not clearing `done`.** `_failed_flow` and the continuation pass
+  both iterate `chains_open`, so a closed round is one neither can reach, and it holds even when the
+  cancel and the notification fail. `chain_open` is `INSERT OR REPLACE` on a primary key, so the
+  next round overwrites `done` anyway - a second mechanism for one fact is how two halves drift.
+- **Every outbound call the reconciler makes is wrapped on its own.** `act` runs its lambda inline
+  and `serve` wraps the whole sweep in ONE `except` that prints `reconcile failed`, so an unwrapped
+  raise would abandon every later step - the orphaned networks and containers included. A Windmill
+  outage must cost the cancel and nothing else.
+- **An `EmptyTree` cannot tell its two causes apart and must not assert either.** It takes a project
+  and a path, not a database. Naming the wrong one sent a real investigation looking for a phase
+  that had never been dispatched.
+- **The $15.00 dev ceiling was binding on its own distribution.** Four dev phases that day cost
+  $4.88, $10.93, $14.63 and $15.11 - one finished with 37 cents of head room and the next crossed
+  the line, answered nothing, and cost twenty minutes and the round. A ceiling that fires on the
+  upper half of ordinary runs is a coin toss, not a bound on a runaway. Now $25.00.
+- **Running out of room is repairable; breaking is not.** An exhausted budget or turn count leaves
+  the plan and the commits on the worktree, so dev CONTINUING that tree completes work already paid
+  for - the same branch a red gate takes. `error_during_execution` is a broken CLI and deliberately
+  not in `quota.RETRYABLE_STOPS`. **Keyed on the result event's SUBTYPE, never on the sentence**:
+  `STOP_REASONS`' prose is written for a phone and is free to change. `MAX_ATTEMPTS` still bounds it.
+- **The phase log is parsed once for both answers.** They are ~11 MB each, 342 MB across the tree,
+  and the caller needs the subtype for the retry decision and the sentence for a person. `stopped`
+  and `ran_out` are two out-parameters because `stopped` is handed straight to `finish_run` as the
+  run's detail - a subtype appended to it would surface in a person's copy of what happened.
+- **A failed round parks its task where intake cannot reach it, by design.** `odoo.move` refuses any
+  stage outside the fleet's three, so conduct cannot return a task to Pending and should not be able
+  to. Five tasks - 1247, 1251, 1254, 1260, 1271 - sat in Implementation after that day and needed a
+  person to move them back.

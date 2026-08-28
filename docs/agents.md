@@ -1410,6 +1410,17 @@ ceiling to raise or a task to split, against a tree to fix. The result event has
 exit code. `quota.why_it_stopped` translates it, and an unknown subtype is still reported: the
 catalogue is a translation, never a filter.
 
+**And on 2026-08-28 the same subtype stopped being only a sentence.** Naming the cause was still
+leaving the round dead: a dev phase that crossed the ceiling by eleven cents lost twenty minutes and
+everything it had committed, the round closed, and the task parked in Implementation where
+`odoo.IN_PROGRESS` excludes it from every future candidate pool - so a person had to move it back by
+hand. `quota.RETRYABLE_STOPS` names the two subtypes that mean **ran out** rather than **broke**,
+and they now take `_repair`: the plan survives, the commits survive, and dev CONTINUES the tree it
+had already written to. `error_during_execution` is deliberately not one of them - a broken CLI
+gives no reason to think a second run of the same thing ends differently. **The flag is keyed on the
+subtype and never on the prose**, which is written for a phone and is free to change, and
+`MAX_ATTEMPTS` bounds it exactly as it bounds a red gate's repair.
+
 **It is a new accepted risk**, recorded beside the existing one: `uvx` executes a PyPI package inside
 a container that holds the model credential in `/proc/1/environ`. The version pin and the mounted
 `UV_CACHE_DIR` bound it; the egress allowlist named above is what would close it.
@@ -1428,7 +1439,7 @@ observe. It is also what makes "Planning" a stage with a start and an end rather
 **What it costs, measured rather than guessed.** The ceiling started at $2.00 and was not enough
 twice: the second attempt ran 41 turns, read 1.7 million cached tokens and spent $2.25 without
 answering - and it reached `StructuredOutput` twice before the ceiling cut it off, so the money went
-on the work rather than on a loop. It is $5.00 now, against ship's $15.00. **What made it expensive
+on the work rather than on a loop. It is $5.00 now, against dev's $25.00. **What made it expensive
 is worth knowing**: 27 shell calls against 3 uses of the knowledge graph, on a phase whose entire
 advantage is the graph. The MCP server had connected and offered all 37 tools; the model reached for
 grep anyway. The prompt now says which questions each answers and that running out of budget
@@ -1550,7 +1561,7 @@ report none.
 | Phase | Writes? | Budget | What it does |
 |---|---|---|---|
 | `plan` | no | $5.00 | reads the tree, triages the last round's findings, answers a plan |
-| `dev` | yes | $15.00 | makes the change and commits it. Today's `ship`, renamed |
+| `dev` | yes | $25.00 | makes the change and commits it. Today's `ship`, renamed |
 | `review` | **no** | $8.00 | reads the change and reports findings. Cannot fix one |
 | `ship` | git only | $3.00 | squashes the run into one commit and writes the PR text |
 
