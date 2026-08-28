@@ -212,10 +212,223 @@ export const NETWORK = {
   pairs: "home_server_container_network_pairs",
 } as const;
 
+/**
+ * The CI lanes.
+ *
+ * THIS PAGE IS THE ONLY ONE THAT CAN SEE THIS FLEET AT ALL, and that is what
+ * shapes every query below. A lane container carries io.home-server.ephemeral,
+ * so source_containers and source_container_network skip it; it is
+ * `podman run --rm`, so no unit fails; and it defines no health check, so no
+ * container ever reads unhealthy. docs/ci.md states the consequence plainly: a
+ * wedged lane leaves no failed unit and no unhealthy container. The marker file
+ * these series come from is the ONLY witness.
+ *
+ * So absence is the finding here, not the fallback - see the note on inFlight.
+ */
+export const CI = {
+  /** 1 when at least one lane has written its marker. 0 on a host where no
+   *  lane is enabled, which every ci check reports as a NOTE. */
+  markerPresent: "home_server_ci_marker_present",
+
+  /** Timestamps, not ages: the consumer subtracts from time(), so a stopped
+   *  driver shows as staleness rather than freezing at its last value. */
+  heartbeat: "home_server_ci_heartbeat_timestamp_seconds",
+  lastJob: "home_server_ci_last_job_timestamp_seconds",
+  /** ABSENT WHILE A LANE IS IDLE, by design - the driver clears it at teardown.
+   *  That is what lets an in-flight job's age be computed without separately
+   *  asking whether one is running. */
+  jobStarted: "home_server_ci_job_started_timestamp_seconds",
+
+  /**
+   * 1 while this lane is running a job.
+   *
+   * ABSENT WHEN THE LANE HAS NEVER STARTED, which is not 0 and MUST NOT BE
+   * DRAWN AS IDLE - the collector's own help text says so in those words.
+   * `?? 0` here is the bug: it would report a lane nobody has ever run as a
+   * healthy idle one, on a page that is the only place it could be seen.
+   */
+  inFlight: "home_server_ci_job_in_flight",
+
+  /** A GAUGE that resets at midnight by design. rate() over it is a lie; use
+   *  jobsTotal, which is the counter. */
+  jobsToday: "home_server_ci_jobs_today",
+  jobsTotal: "home_server_ci_jobs_total",
+  lastJobSeconds: "home_server_ci_last_job_seconds",
+
+  /** Failed attempts to mint a runner identity since the last success. A
+   *  permanent rejection stops the lane instead, which shows as a failed unit. */
+  failures: "home_server_ci_consecutive_failures",
+
+  /** A SAWTOOTH HERE IS THE DESIGN WORKING: the driver clears the regenerable
+   *  parts of a lane when it passes its budget. */
+  laneDisk: "home_server_ci_lane_disk_bytes",
+
+  /**
+   * Converted in PromQL rather than in the page, because it is the one metric
+   * in the family not already in base units - and a chart mixing megabytes with
+   * the slice's bytes is a wrong number under a right axis.
+   */
+  laneMemPeak: "home_server_ci_lane_memory_peak_megabytes * 1048576",
+  lanePidsPeak: "home_server_ci_lane_pids_peak",
+
+  /** THIS, NOT THE PEAK, is the reading that justifies raising a ceiling: the
+   *  peak includes page cache, so a lane at its ceiling after a dependency
+   *  install is reclaim working rather than pressure. */
+  laneMemMaxEvents: "home_server_ci_lane_memory_max_events_total",
+  laneOomKills: "home_server_ci_lane_oom_kills_total",
+
+  /** Jobs the nested image store has served since it was last reset, against
+   *  GITHUB_RUNNER_STORE_MAX_JOBS. */
+  storeJobs: "home_server_ci_store_jobs",
+  storeResets: "home_server_ci_store_resets_total",
+
+  /** Counters, so increase() is meaningful where a rate over the daily gauges
+   *  would not be. */
+  jobsPerHour: "increase(home_server_ci_jobs_total[1h])",
+  resetsPerDay: "increase(home_server_ci_store_resets_total[24h])",
+
+  /** The slice. Every gauge below is ABSENT both when the slice is empty and
+   *  when a control is unlimited, which is what slicePresent tells apart. */
+  slicePresent: "home_server_ci_slice_present",
+  sliceMemory: "home_server_ci_slice_memory_bytes",
+  sliceMemoryPeak: "home_server_ci_slice_memory_peak_bytes",
+  sliceMemoryHigh: "home_server_ci_slice_memory_high_bytes",
+  sliceMemoryMax: "home_server_ci_slice_memory_max_bytes",
+  slicePids: "home_server_ci_slice_pids",
+  slicePidsMax: "home_server_ci_slice_pids_max",
+  sliceOom: "home_server_ci_slice_oom_total",
+
+  /**
+   * MIND THE PREFIX. Everything above is home_server_ci_*, minted by the
+   * collector from the lane markers. Everything below is
+   * home_server_github_runner_*, minted by source_status from
+   * bin/verify-host.sh's facts - a different writer on a different cadence.
+   * bin/lint-repo.sh leg 9 asserts the two families stay disjoint, because a
+   * collision rejects the WHOLE scrape rather than producing one wrong number.
+   */
+  lanesActive: "home_server_github_runner_lanes_active",
+  lanesFailed: "home_server_github_runner_lanes_failed",
+  imageAgeDays: "home_server_github_runner_image_age_d",
+  versionCheckAgeDays: "home_server_github_runner_version_check_age_d",
+  toolcacheStale: "home_server_github_runner_toolcache_stale",
+  /** ZERO IS THE INTERESTING NUMBER. upskald's coverage gate PASSES on an
+   *  absent baseline and fails only on an unavailable one, so an empty store is
+   *  a green pipeline enforcing nothing at all. */
+  artifactBaselines: "home_server_github_runner_artifact_baselines",
+  artifactStateBytes: "home_server_github_runner_artifact_state_bytes",
+  artifactRunsBytes: "home_server_github_runner_artifact_runs_bytes",
+  sliceUnlimited: "home_server_github_runner_slice_unlimited",
+  strays: "home_server_github_runner_strays",
+} as const;
+
+/**
+ * The agent fleet.
+ *
+ * EVERY SERIES HERE IS A SCALAR AND NONE OF THEM CAN SAY WHAT IT IS DOING.
+ * `runs_today = 3` names no task, no round and no pull request waiting on a
+ * person - a title and a job id are the label family the collector refuses to
+ * mint. That half of the page comes from fleet.json; this half is the numbers
+ * with a time axis.
+ *
+ * NOTE THE TWO FAMILIES, one letter apart. home_server_agent_* is the collector
+ * reading conduct's marker; home_server_agents_* is source_status mirroring
+ * bin/verify-host.sh's facts. They are different writers on different cadences,
+ * and where both measure the same thing - worktrees - they legitimately
+ * disagree. See worktreesLeased.
+ */
+export const AGENTS = {
+  markerPresent: "home_server_agent_marker_present",
+
+  heartbeat: "home_server_agent_heartbeat_timestamp_seconds",
+  /** Advances only on a CLEAN cycle, where heartbeat advances on any. */
+  lastOk: "home_server_agent_last_ok_timestamp_seconds",
+
+  /** 1 while a phase runner executes. ABSENT is "no phase has ever run", not
+   *  idle - the same rule as CI.inFlight and for the same reason. */
+  phaseInFlight: "home_server_agent_phase_in_flight",
+  phaseStarted: "home_server_agent_phase_started_timestamp_seconds",
+
+  /**
+   * 0 allowed, 1 allowed_warning, 2 rejected - graded in
+   * home_server_check_status's idiom, and UNKNOWN RANKS WORST.
+   *
+   * ABSENT until a model phase has run. This is the pacing currency and
+   * deliberately not a percentage: docs/observability.md records that the
+   * account-wide numbers are unreachable from a headless host at all, so this
+   * is the API's own rate-limit status taken from the phase's own model call.
+   */
+  quotaStatus: "home_server_agent_quota_status",
+  quotaResets: "home_server_agent_quota_resets_timestamp_seconds",
+  quotaRead: "home_server_agent_quota_read_timestamp_seconds",
+
+  intakeLast: "home_server_agent_intake_last_timestamp_seconds",
+
+  /** Gauges that reset at midnight UTC. See the daily strips below. */
+  tokensToday: "home_server_agent_tokens_today",
+  tokensWeek: "home_server_agent_tokens_week",
+  runsToday: "home_server_agent_runs_today",
+  runsFailedToday: "home_server_agent_runs_failed_today",
+
+  /** LEASES IN conduct's DATABASE. worktreesOnDisk below counts DIRECTORIES,
+   *  and the two disagreeing is exactly what agents.worktree_orphans grades -
+   *  so the page shows both, and showing one would hide the finding. */
+  worktreesLeased: "home_server_agent_worktrees",
+
+  /** From source_fleet. Counts are retained; the names in fleet.json are not. */
+  roundsOpen: "home_server_agent_rounds_open",
+  publicationsPending: "home_server_agent_publications_pending",
+  noticesOpen: "home_server_agent_notices_open",
+
+  slicePresent: "home_server_agent_slice_present",
+  sliceMemory: "home_server_agent_slice_memory_bytes",
+  sliceMemoryPeak: "home_server_agent_slice_memory_peak_bytes",
+  sliceMemoryHigh: "home_server_agent_slice_memory_high_bytes",
+  sliceMemoryMax: "home_server_agent_slice_memory_max_bytes",
+  slicePids: "home_server_agent_slice_pids",
+  slicePidsMax: "home_server_agent_slice_pids_max",
+  sliceOom: "home_server_agent_slice_oom_total",
+
+  /** The plural family - see the note above this object. */
+  worktreesOnDisk: "home_server_agents_worktrees",
+  /** COUNTS conduct's OWN SUSPENDED STEPS TOO, and the SQL behind it cannot
+   *  separate them: both are `suspend > 0`. An upper bound, and the page says so. */
+  approvalsPending: "home_server_agents_approvals_pending",
+  /** WATCHES TWO FLEETS: conduct-* and ci-* both carry the ephemeral label. */
+  runnersLeaked: "home_server_agents_runners_leaked",
+  windmillDbBytes: "home_server_agents_windmill_db_bytes",
+  workerLanes: "home_server_agents_worker_lanes",
+  mirrorAge: "home_server_agents_mirror_age_seconds",
+  checkoutDirty: "home_server_agents_checkout_dirty",
+  /** Proves a file and a row EXIST, not that the token is unexpired - the check
+   *  is named for what it can prove and the panel must be too. */
+  publishConfigured: "home_server_agents_publish_configured",
+  conductAge: "home_server_agents_conduct_age_seconds",
+
+  /**
+   * THE DAILY STRIPS, AND THEY BUCKET ON UTC.
+   *
+   * These are gauges that reset at midnight, so the day's peak IS the day's
+   * total and max_over_time is the right reducer. The reset is at UTC midnight
+   * because the host runs UTC - CLAUDE.md records that the household does not -
+   * so a strip bucketed into LOCAL days, which is what src/uptime.ts produces
+   * for the container availability bars, would straddle every reset and report
+   * the previous day's peak. The page buckets these itself and labels the strip
+   * UTC.
+   *
+   * Fetched at a 1h step: 721 points per series over 30 days, well inside
+   * Prometheus' 11,000-point cap, and 24 samples for every bucket.
+   */
+  runsHourly: "max_over_time(home_server_agent_runs_today[1h])",
+  runsFailedHourly: "max_over_time(home_server_agent_runs_failed_today[1h])",
+  tokensHourly: "max_over_time(home_server_agent_tokens_today[1h])",
+} as const;
+
 /** Flattened, so the fixtures can assert they cover every one of them. */
 export const ALL_QUERIES: string[] = [
   ...Object.values(SYSTEM),
   ...Object.values(SERVICES),
   ...Object.values(AVAILABILITY),
   ...Object.values(NETWORK),
+  ...Object.values(CI),
+  ...Object.values(AGENTS),
 ];

@@ -14,7 +14,7 @@ systemctl --user start home-server-dashboard-build.service   # the deploy; see b
 cd apps/dashboard && npm run dev                             # fixtures, no server needed
 ```
 
-**All five pages are built.** System and Services were the first cut, on 2026-08-15; **Home and
+**All seven pages are built.** System and Services were the first cut, on 2026-08-15; **Home and
 Library landed 2026-08-17** and needed a data layer before they needed a design. **Network split out
 of Services on 2026-08-18**, and needed a measurement that did not exist - see below.
 
@@ -26,7 +26,7 @@ one of those chips is a deep link into the owning application instead**, which k
 layout slot and is what its own fallback chip already did - `src/links.ts` holds the mapping, derived
 from `window.location.hostname` so no build-time variable is involved.
 
-**Five sources, and the split is the point:**
+**Six sources, and the split is the point:**
 
 | Source | Carries |
 |---|---|
@@ -34,10 +34,35 @@ from `window.location.hostname` so no build-time variable is involved.
 | **`status.json`**, served as a file at `/data/status.json` | the **prose** of the findings. The metric carries the verdict and deliberately not the message; the id is the join |
 | **`activity.json`**, every 30s | what is playing and what is in flight, **with titles** - sessions, downloads, transcodes, torrents |
 | **`library.json`**, every 5 minutes | requests, recently added, recent completions, stalled and queued files, the subtitle backlog |
+| **`fleet.json`**, every 5 minutes | what the agent fleet is doing, read out of `conduct.db`: open rounds with their task and attempt, publications pending, the last runs **with what they cost**, and why the intake last declined |
 | **`apps/dashboard/src/topology.ts`**, compiled in | the segment rails and the published-port table. The topology *is* static - it is `stacks/`, in git - and only the node colouring is live |
 | **`apps/dashboard/src/paths.ts`**, compiled in | who talks to whom. Half of it lives in an application's own database, so it is **validated** rather than derived |
 
-**THE TWO DOCUMENTS EXIST BECAUSE A TITLE CANNOT BE A PROMETHEUS LABEL, AND THE SECOND REASON IS THE
+**CI AND AGENTS LANDED 2026-08-28, AND THE TWO FLEETS ARE INVISIBLE FOR OPPOSITE REASONS.** A CI
+lane carries `io.home-server.ephemeral`, so both container sources skip it; it is `podman run --rm`,
+so no unit fails; and it defines no health check, so nothing reads unhealthy - `docs/ci.md` says a
+wedged lane leaves no failed unit and no unhealthy container, which means every other page here
+shows a quiet host. So `/ci` is a page about making one marker file legible, and **absence is the
+finding**: a lane with no heartbeat is grey and says "never started", never "idle". The agent fleet
+has the opposite problem - 41 series, all scalars, none of which can say which task is in flight or
+that a pull request has been waiting on a person since last night. That half is `fleet.json`.
+
+**`fleet.json` CARRIES COST, AND THAT IS NOT A REVERSAL OF THE NO-DOLLAR-METRIC RULE.**
+`docs/observability.md` refuses a dollar *metric*: the quota is a subscription window, percentages
+are the currency, and a spend ceiling would measure nothing that can stop the fleet. All of that
+stands - `home_server_agent_quota_status` is still what paces it. `run.cost_usd` is real (it is
+`total_cost_usd` from the CLI's own result event, not a price anybody invented), it had no reader at
+all, and a document keeps no history - so reporting it cannot turn into a second currency or a
+400-day series. If it ever grows one, the refusal has been reversed by accident.
+
+**AND IT MUST NEVER CARRY A RESUME URL.** Windmill's `jobs_u/resume/{id}/{resume_id}/{signature}`
+holds an HMAC in the path and needs no session, which is why `docs/agents.md` refuses it to ntfy.
+The same reasoning reaches further than the transport: a link on a page is a link that gets
+followed. `source_fleet` therefore constructs no link at all - it carries `notice.link`, which
+conduct built pointing at the approval page behind sign-on - and drops anything resembling a resume
+URL regardless. `fixtures/smoke.mjs` asserts both halves.
+
+**THE TWO MEDIA DOCUMENTS EXIST BECAUSE A TITLE CANNOT BE A PROMETHEUS LABEL, AND THE SECOND REASON IS THE
 ONE THAT MATTERS.** Cardinality is the obvious one. The real one is that `source_playback` refuses to
 label a session with the user, the device or the item, because a 400-day series of who watched what
 is surveillance of the household rather than monitoring of a machine. Home needs exactly that to draw

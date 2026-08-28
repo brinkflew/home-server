@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /**
- * The shell header: wordmark, the four pages, and a per-page toolbar.
+ * The shell header: wordmark, the seven pages, and a per-page toolbar.
  *
- * All four pages are built. The wordmark points at Home rather than System:
+ * All seven pages are built. The wordmark points at Home rather than System:
  * it is the go-home affordance, and pointing it somewhere `/` does not go would
  * be a contradiction the moment anyone noticed.
  */
@@ -19,6 +19,8 @@ const routes = [
   { to: "/services", label: "Services" },
   { to: "/network", label: "Network" },
   { to: "/system", label: "System" },
+  { to: "/ci", label: "CI" },
+  { to: "/agents", label: "Agents" },
 ];
 
 const tone = computed(() => {

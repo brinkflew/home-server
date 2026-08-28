@@ -7,6 +7,14 @@
  *
  * A missing sample is a gap at the floor rather than a zero-height bar, so an
  * absent series does not look like an idle one.
+ *
+ * TWO WIDTH MODES, AND THE DEFAULT IS THE NARROW ONE. Fixed 3px bars are what
+ * the rack needs: sixteen rows of a fixed-width column, where a strip that
+ * stretched would make every row's bars a different width depending on the
+ * container name beside it. A daily strip in a full-width panel wants the
+ * opposite - fourteen 3px bars in a 600px panel read as a stub of a chart that
+ * failed to load. `stretch` is that case, and it is a prop rather than a
+ * separate component because everything else about the two is identical.
  */
 import { computed } from "vue";
 
@@ -16,8 +24,10 @@ const props = withDefaults(
     values: number[];
     tone?: "ok" | "warn" | "fail" | "off";
     height?: number;
+    /** Fill the available width instead of using fixed 3px bars. */
+    stretch?: boolean;
   }>(),
-  { tone: "ok", height: 20 },
+  { tone: "ok", height: 20, stretch: false },
 );
 
 const bars = computed(() => {
@@ -34,7 +44,7 @@ const bars = computed(() => {
 </script>
 
 <template>
-  <div class="strip" :style="{ height: `${height}px` }">
+  <div class="strip" :class="{ stretch }" :style="{ height: `${height}px` }">
     <span
       v-for="(b, i) in bars"
       :key="i"
@@ -57,6 +67,14 @@ const bars = computed(() => {
   flex: none;
   border-radius: 1px;
   opacity: 0.85;
+}
+
+/* min-width, not width: a strip of 60 bars in a narrow panel must still draw
+   all 60 rather than overflowing its own container. */
+.stretch .bar {
+  width: auto;
+  min-width: 2px;
+  flex: 1;
 }
 
 .missing {

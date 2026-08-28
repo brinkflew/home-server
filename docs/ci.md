@@ -838,9 +838,22 @@ So the lane's own marker is the signal: `~/.cache/home-server/ci-state-<n>`, one
 because a whole-file rewrite needs a single owner, in `conduct-state`'s format and under its
 contract - **omitted is not zero**, because the collector drops a sample that does not parse.
 
-`bin/verify-host.sh` grows a `ci` section - nine checks, **WARN or NOTE and never FAIL**, on the
+`bin/verify-host.sh` grows a `ci` section - **fourteen** checks, **WARN or NOTE and never FAIL**,
+on the
 Agents section's charter: `bin/reboot-host.sh` refuses to act on a host this battery calls
 unhealthy, and nothing a CI lane does wrong is fixed by a reboot.
+
+That count said "nine" until 2026-08-28, which is the ordinary fate of a number written in prose
+next to a list that grows - `docs/observability.md` records the agent tally getting it wrong twice
+for the same reason. Count `say ci` to the next `say` in `bin/verify-host.sh` rather than trusting
+this sentence.
+
+**Since 2026-08-28 there is somewhere to look that is not `jq`.** `/ci` on the dashboard renders
+the lane markers, the two budgets, the slice and all fourteen checks - see `docs/dashboard.md`. It
+shows **passing** checks as well as failing ones, which the System page deliberately does not,
+because `github_runner_runtime_split` and `github_runner_root_label` are string facts that mint no
+series: the check's own status is the only route to them anywhere. It carries nothing from
+GitHub's API, and says so on screen rather than letting three lanes read as the whole picture.
 
 `ci.runner_version` is the only one with a **deadline** rather than a threshold. GitHub enforces a
 minimum runner version and a runner below it stops being given jobs - the symptom is a job that

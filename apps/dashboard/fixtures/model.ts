@@ -226,6 +226,55 @@ const CHECKS: Check[] = [
   { section: "metrics", id: "metrics.series_count", status: "pass", message: "2896 series of a 4000 budget" },
   { section: "metrics", id: "metrics.tsdb_size", status: "pass", message: "1.9 GB of a 16 GB cap" },
   { section: "verify", id: "verify.timer_enabled", status: "pass", message: "home-server-verify.timer armed" },
+
+  // --- the two fleets -------------------------------------------------------
+  //
+  // BOTH SECTIONS ARE WARN OR NOTE AND NEVER FAIL, by their own charter:
+  // bin/reboot-host.sh refuses to act on a host this battery calls unhealthy,
+  // and nothing a CI lane or an agent fleet does wrong is fixed by a reboot. A
+  // fixture that put a `fail` here would be exercising a state the real battery
+  // cannot produce.
+  //
+  // THE PASSES ARE NOT PADDING. /ci and /agents render their whole section
+  // rather than only what is failing, because two CI facts
+  // (github_runner_runtime_split, github_runner_root_label) are strings that
+  // mint no series - the check's status is the only route to them. So the
+  // passing rows are what those panels are for, and a fixture with only
+  // failures would leave that layout unseen.
+  { section: "ci", id: "ci.lanes_alive", status: "warn", message: "lane 3 is enabled and not active: exit 5, the credential was refused" },
+  { section: "ci", id: "ci.heartbeat", status: "pass", message: "stalest lane heartbeat 12s old" },
+  { section: "ci", id: "ci.job_stuck", status: "pass", message: "lane 1 has been running a job for 11m, well inside RuntimeMaxSec" },
+  { section: "ci", id: "ci.lane_disk", status: "pass", message: "worst lane 14.3 GB of a 20 GB budget" },
+  { section: "ci", id: "ci.lane_headroom", status: "warn", message: "lane 1 refused 2 allocations at MemoryMax; peaks are 2.7 GB and 604 pids" },
+  { section: "ci", id: "ci.lane_store", status: "warn", message: "lane 2 healed itself 4h ago after a docker start failure; 6 jobs into the window, 9 resets in total" },
+  { section: "ci", id: "ci.runtime_dir", status: "pass", message: "both live lanes agree with the engine: XDG_RUNTIME_DIR is /run and alive lives there" },
+  { section: "ci", id: "ci.slice_limits", status: "pass", message: "app-ci.slice: MemoryMax 9984M, MemoryHigh 8448M, TasksMax 1024, AllowedCPUs 4-9" },
+  { section: "ci", id: "ci.runner_isolation", status: "pass", message: "3 net-ci-* networks, all isolate=true, no lane on a stack segment" },
+  { section: "ci", id: "ci.fleet_root_label", status: "pass", message: "container_file_t" },
+  { section: "ci", id: "ci.runner_version", status: "pass", message: "2.331.0 on both lanes, stamp 3d old" },
+  { section: "ci", id: "ci.image_fresh", status: "warn", message: "the runner image is 19d old, and the weekly build should have replaced it" },
+  { section: "ci", id: "ci.toolcache_seed", status: "warn", message: "lane 2's tool cache is a seed behind the image" },
+  { section: "ci", id: "ci.artifact_store", status: "warn", message: "no baselines.json anywhere under state/ - upskald's coverage gate PASSES on absent, so it is enforcing nothing" },
+
+  { section: "agents", id: "agents.slice_limits", status: "pass", message: "app-agents.slice: MemoryMax 4608M, TasksMax 1024, AllowedCPUs 2-3" },
+  { section: "agents", id: "agents.worker_lanes", status: "pass", message: "2 tag sets answering: default and verify" },
+  { section: "agents", id: "agents.fleet_root_label", status: "pass", message: "container_file_t" },
+  { section: "agents", id: "agents.memory_age", status: "pass", message: "the memory root was touched 6h ago" },
+  { section: "agents", id: "agents.rounds_open", status: "warn", message: "task 1572's round has been open 11h, past the 6h mark" },
+  { section: "agents", id: "agents.tracker_configured", status: "pass", message: "all three Odoo variables are set" },
+  { section: "agents", id: "agents.runner_isolation", status: "pass", message: "net-conduct-* all isolate=true, no ephemeral container on a stack segment" },
+  { section: "agents", id: "agents.conduct_fresh", status: "pass", message: "conduct last completed a clean cycle 59s ago" },
+  { section: "agents", id: "agents.quota_headroom", status: "warn", message: "the API rejected the last call; the window clears in 1h and the fleet is held until it does" },
+  { section: "agents", id: "agents.intake", status: "pass", message: "the intake looked 4m ago and picked nothing: three rounds already open, which is REVIEW_CAP" },
+  { section: "agents", id: "agents.model_credential", status: "pass", message: "the podman secret is newer than the last .env render" },
+  { section: "agents", id: "agents.phase_stuck", status: "pass", message: "a phase has been running 31m, inside RuntimeMaxSec" },
+  { section: "agents", id: "agents.runners_leaked", status: "pass", message: "no ephemeral container past the 2h ceiling, across either fleet" },
+  { section: "agents", id: "agents.worktree_orphans", status: "warn", message: "4 worktrees on disk against 3 leases - one is an orphan the reconciler has not reaped" },
+  { section: "agents", id: "agents.approvals_pending", status: "warn", message: "2 suspended step(s), the oldest for 38h - conduct claims its own within one 60s poll, so at this age it is a human gate nobody saw" },
+  { section: "agents", id: "agents.windmill_db_size", status: "pass", message: "1.3 GB of a 2 GB cap" },
+  { section: "agents", id: "agents.checkout_drift", status: "pass", message: "/var/agents is clean" },
+  { section: "agents", id: "agents.mirror_fresh", status: "pass", message: "the oldest mirror fetched 40m ago" },
+  { section: "agents", id: "agents.publish_configured", status: "note", message: "a push key and a workspace token both exist - this cannot prove the token is unexpired" },
 ];
 
 const SECTION_TITLES: Record<string, string> = {
@@ -243,6 +292,8 @@ const SECTION_TITLES: Record<string, string> = {
   logs: "Logs",
   metrics: "Metrics",
   verify: "Self",
+  ci: "Continuous integration",
+  agents: "Agents",
 };
 
 function iso(offsetSeconds: number): string {
@@ -282,6 +333,8 @@ export function statusDocument(): StatusDocument {
     sections,
     checks: CHECKS,
     facts: {
+      github_runner_runtime_split: "0",
+      github_runner_root_label: "container_file_t",
       booted_version: "44.20260810.3.0",
       staged_version: "44.20260814.3.0",
       deployments: 2,

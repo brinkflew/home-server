@@ -376,8 +376,10 @@ rules running - safe, but not what you asked for:
 ```bash
 ## The agent fleet
 
-**Fourteen checks, one collector source and one alert group.** The count has been wrong in this
-paragraph twice - it said twelve when `agents.mirror_fresh` had already made it thirteen - which is
+**Nineteen checks, two collector sources and one alert group.** The count has been wrong in this
+paragraph three times now - it said fourteen until 2026-08-28, when `source_fleet` became the
+second source and the Agents page needed the section counted to render it. The count has been wrong
+in this paragraph twice before that - it said twelve when `agents.mirror_fresh` had already made it thirteen - which is
 the ordinary fate of a number written in prose next to a list that grows. It is corrected rather
 than removed because the section's shape is the thing worth stating; if it drifts again, count
 `say agents` to the next `say` in `bin/verify-host.sh`.
@@ -451,6 +453,17 @@ reading is graded before the reading is.
 **There is no dollar metric and no daily spend ceiling, deliberately.** The quota is a subscription
 session key paced against a 5-hour window and a weekly cap, so a price per token would have to be
 invented and would measure nothing that can stop the fleet. Percentages are the currency.
+
+**That refusal stands, and 2026-08-28 tested it rather than reversing it.** `conduct.db`'s `run`
+table has carried `cost_usd` on every row since the orchestrator shipped - `total_cost_usd` from
+the CLI's own result event, so the half of the objection about an invented price no longer holds -
+and it had no reader anywhere. It is now on the Agents page, **in `fleet.json` and in no series**.
+The second half is what decides that: cost measures nothing that can stop the fleet, so it must not
+sit where it can be graphed against a threshold and quietly become the thing people pace against. A
+document is rewritten whole and keeps no history, which makes reporting it and retaining it two
+different acts. `home_server_agent_quota_status` is still the only currency. **If a
+`home_server_agent_cost_*` series ever appears, this paragraph has been reversed by accident** and
+the argument above needs re-making rather than re-discovering.
 
 **Not one of the agents alerts can ride on `CheckFailing`.** Every check in the section is WARN or
 NOTE by charter - `bin/reboot-host.sh` refuses to act on a host this battery calls unhealthy, and

@@ -13,6 +13,7 @@
 import type { Plugin } from "vite";
 import { alerts, statusDocument } from "./model";
 import { activityDocument, libraryDocument } from "./media";
+import { fleetDocument, fleetUnreadable } from "./fleet";
 import { MISSING_POSTERS, posterSvg } from "./images";
 import { instant, range, uncovered } from "./prometheus";
 
@@ -53,6 +54,15 @@ export function fixtureServer(): Plugin {
 
         if (path === "/data/library.json") {
           send(res, libraryDocument());
+          return;
+        }
+
+        // HS_FIX_BROKEN=conduct_db is the state worth looking at: the document
+        // was written and conduct's database could not be read, so every list is
+        // empty for a reason that is NOT an idle fleet. Without `sources` those
+        // two are the same bytes.
+        if (path === "/data/fleet.json") {
+          send(res, process.env.HS_FIX_BROKEN === "conduct_db" ? fleetUnreadable() : fleetDocument());
           return;
         }
 

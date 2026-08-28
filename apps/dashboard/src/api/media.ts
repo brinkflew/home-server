@@ -18,41 +18,18 @@
 // for the reason the collector's own textfile split records: a five-minute slice
 // living in a thirty-second file blinks out nine ticks in ten and renders as a
 // sawtooth that looks exactly like a fault. Both pages read both.
+//
+// THE TWO HERE ARE THE MEDIA ONES. fleet.json is a third document on the same
+// contract and it lives in api/fleet.ts, because what it may and may not carry
+// is a different argument - see that file. The fetch shape all three share is
+// in api/document.ts.
 // =============================================================================
 
-import { fetchJson, HttpError } from "./http";
+import { fetchDocument } from "./document";
 import type { ActivityDocument, LibraryDocument } from "@/types";
 
 const ACTIVITY_PATH = "/data/activity.json";
 const LIBRARY_PATH = "/data/library.json";
-
-/**
- * Distinguishable from a fetch failure: the collector has not written this here.
- * On a fresh host that means the timer has not run yet, which is a different
- * thing from broken - the same distinction StatusNeverWritten draws.
- */
-export class DocumentNeverWritten extends Error {
-  readonly doc: string;
-
-  constructor(doc: string) {
-    super(`${doc} has not been written yet`);
-    this.name = "DocumentNeverWritten";
-    this.doc = doc;
-  }
-}
-
-async function fetchDocument<T>(path: string, name: string, signal?: AbortSignal): Promise<T> {
-  try {
-    // Cache-busted on top of the server's no-store for the reason status.ts
-    // gives: a 304 from an intermediate would let a frozen playback position
-    // read as current, and a progress bar is the one thing here that looks
-    // plausible while being wrong.
-    return await fetchJson<T>(`${path}?t=${Date.now()}`, { signal });
-  } catch (error) {
-    if (error instanceof HttpError && error.status === 404) throw new DocumentNeverWritten(name);
-    throw error;
-  }
-}
 
 export function fetchActivity(signal?: AbortSignal): Promise<ActivityDocument> {
   return fetchDocument<ActivityDocument>(ACTIVITY_PATH, "activity.json", signal);

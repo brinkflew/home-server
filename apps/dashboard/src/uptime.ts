@@ -67,3 +67,58 @@ export function ratioSummary(days: number[]): string {
   const text = `${(mean * 100).toFixed(mean > 0.999 ? 2 : 1)}%`;
   return known.length === days.length ? text : `${text} over ${known.length}d`;
 }
+
+// -----------------------------------------------------------------------------
+// The UTC half, for gauges that reset at midnight
+// -----------------------------------------------------------------------------
+// EVERYTHING ABOVE BUCKETS INTO LOCAL DAYS ON PURPOSE, and for the container
+// availability strip that is right: a person reading "Tuesday" means their own
+// Tuesday. The agent fleet's daily counters are the opposite case and the
+// difference is not cosmetic.
+//
+// home_server_agent_runs_today, runs_failed_today and tokens_today are GAUGES
+// that conduct resets at midnight - and the host runs UTC, which CLAUDE.md
+// records the household does not. So the day's peak IS the day's total, but only
+// if the bucket boundary is the same boundary the counter resets on. Bucketed
+// locally, a Brussels day starting at 23:00 UTC would take its maximum from the
+// tail of the PREVIOUS UTC day - reporting yesterday's total as today's, every
+// day, with nothing anywhere to say so. In summer that is two hours of every
+// day's runs attributed to the wrong bar.
+//
+// So these bucket on UTC, and the panel that draws them says UTC on it. Two
+// functions rather than a flag, because a boolean argument at a call site is
+// exactly how the wrong one gets picked.
+
+/** UTC midnight of each of the last `days` days, oldest first. */
+export function utcDayStarts(days: number, now = Date.now() / 1000): number[] {
+  const todayStart = Math.floor(now / DAY_S) * DAY_S;
+  return Array.from({ length: days }, (_, i) => todayStart - (days - 1 - i) * DAY_S);
+}
+
+/**
+ * Bucket samples into UTC days and take the MAXIMUM of each.
+ *
+ * Max rather than mean, because these are resetting counters: the highest value
+ * seen during a day is that day's total, where an average would report roughly
+ * half of it and look entirely plausible doing so.
+ *
+ * A day with no sample comes back NaN, which every bar component here draws grey
+ * - "the store does not go back that far" rather than "nothing ran".
+ */
+export function dailyPeaks(points: Point[], days: number, now = Date.now() / 1000): number[] {
+  const out = new Array<number>(days).fill(Number.NaN);
+  const todayStart = Math.floor(now / DAY_S) * DAY_S;
+
+  for (const [t, v] of points) {
+    if (!Number.isFinite(v)) continue;
+    // Same clamp as dailyRatios, and for the same reason: a sample taken since
+    // midnight is "today" but sits after todayStart, so the raw offset is
+    // negative and the index would land one past the last bar.
+    const offset = Math.max(0, Math.floor((todayStart - t) / DAY_S + 1e-9));
+    const index = days - 1 - offset;
+    if (index < 0 || index >= days) continue;
+    out[index] = Number.isFinite(out[index]) ? Math.max(out[index], v) : v;
+  }
+
+  return out;
+}
