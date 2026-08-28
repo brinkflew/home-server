@@ -1,17 +1,17 @@
 // =============================================================================
-// The four wire formats this dashboard reads
+// The five wire formats this dashboard reads
 // -----------------------------------------------------------------------------
 // Every one of them is somebody else's contract, so these types are a
 // transcription rather than a design. bin/verify-host.sh owns status.json,
-// Prometheus owns its own API, and bin/collect-metrics.py owns activity.json and
-// library.json.
+// Prometheus owns its own API, and bin/collect-metrics.py owns activity.json,
+// library.json and fleet.json.
 //
 // THE ONE RULE THAT MATTERS, from CLAUDE.md: "Every finding is keyed by a
 // STABLE ID, and the prose is not stable." Key on `id`. Never parse `message`,
 // never switch on it, never assume its wording - it gets reworded whenever it
 // turns out to be wrong, and that must cost nothing.
 //
-// THE TWO DOCUMENTS ARE NOT SERIES AND MUST NEVER BECOME THEM. They carry
+// THE THREE DOCUMENTS ARE NOT SERIES AND MUST NEVER BECOME THEM. They carry
 // titles, users and devices, which cannot be Prometheus labels - the collector
 // refuses to label a session that way because a 400-day record of who watched
 // what is surveillance of the household rather than monitoring of a machine. A
@@ -292,5 +292,143 @@ export interface LibraryDocument {
   requests: RequestItem[];
   request_counts: Record<string, number | null>;
   totals: LibraryTotals;
+  sources: Record<string, SourceHealth>;
+}
+
+// -----------------------------------------------------------------------------
+// fleet.json, written by bin/collect-metrics.py's source_fleet
+// -----------------------------------------------------------------------------
+// Read out of conduct.db, which is the only place that knows which task is in
+// flight and what a round has cost. The refusals that travel with this document
+// are stated in full in src/api/fleet.ts: no resume URL, and cost is reported
+// but never retained.
+
+/**
+ * Who owes a step an answer.
+ *
+ * THE DISCRIMINATOR IS THE MODULE ID PREFIX, not the kind or the wording. A
+ * module id starting `conduct_` is one conduct answers; `publish_pr` is
+ * deliberately unprefixed because a PERSON answers it, and conduct refuses to
+ * answer a step it does not own - conduct approving its own gate is the single
+ * outcome that whole design exists to prevent.
+ */
+export type FleetWaiting = "conduct" | "person";
+
+/** A notification sent to a person and not yet answered. */
+export interface FleetNotice {
+  flow_job_id: string | null;
+  module_id: string;
+  project: string;
+  kind: string;
+  summary: string | null;
+  /**
+   * conduct's own link to the approval page, behind sign-on, or null. NEVER
+   * construct one - see src/api/fleet.ts.
+   */
+  link: string | null;
+  first_at: string;
+  last_at: string | null;
+  /** Repeat sends. ntfy caches for 12h and the gate waits seven days, so a
+   *  once-ever notification is lost for ever; this is what repeats. */
+  sends: number;
+  waiting_on: FleetWaiting;
+}
+
+/** One open review round: a task being carried through the phases. */
+export interface FleetRound {
+  worktree_id: string;
+  project: string;
+  odoo_task: number | null;
+  ref: string | null;
+  phase: string | null;
+  opened_at: string;
+  attempts: number;
+  /** conduct's MAX_ATTEMPTS, carried so the board can say "2 of 2" - the number
+   *  that says whether the fleet is about to give up. */
+  max_attempts: number;
+  flow_job_id: string | null;
+  head: string | null;
+  resumed_at: string | null;
+  /**
+   * NULL MEANS IN FLIGHT, NOT "conduct". chain.flow_job_id is the job that
+   * STOPPED rather than the one running, so a round mid-flight legitimately
+   * matches no notice. Rendering null as "waiting on conduct" would claim the
+   * fleet owns a step nobody has looked at.
+   */
+  waiting_on: FleetWaiting | null;
+  link: string | null;
+  summary: string | null;
+}
+
+/** A branch conduct pushed whose pull request has not opened yet. */
+export interface FleetPublication {
+  job_id: string;
+  project: string;
+  worktree_id: string;
+  odoo_task: number | null;
+  branch: string | null;
+  opened_at: string;
+}
+
+/** One phase run. `cost_usd` is display only - see src/api/fleet.ts. */
+export interface FleetRun {
+  phase: string;
+  project: string;
+  worktree_id: string;
+  started_at: string;
+  /** Null while the run is still going. NOT a failure. */
+  ended_at: string | null;
+  /** "ok", "killed", or null while in flight. conduct counts a failure as
+   *  `result IS NOT NULL AND result != 'ok'`, and so must anything here. */
+  result: string | null;
+  exit_code: number | null;
+  tokens_in: number | null;
+  tokens_out: number | null;
+  cost_usd: number | null;
+  task: string | null;
+  /** Stored raw by conduct because a model fallback can retract structured
+   *  output. Truncated for display; do not parse it. */
+  verdict: string | null;
+}
+
+/** What the fleet last chose for itself, and why it declined. */
+export interface FleetIntake {
+  project: string;
+  odoo_task: number | null;
+  flow_job_id: string | null;
+  opened_at: string | null;
+  closed_at: string | null;
+  last_looked_at: string | null;
+  /**
+   * The reason the fleet picked nothing. AN INTAKE THAT HAS STOPPED LOOKS
+   * EXACTLY LIKE AN EMPTY BACKLOG, and only the age of last_looked_at tells
+   * them apart - never this string.
+   */
+  last_why: string | null;
+}
+
+export interface FleetTotals {
+  runs_today: number | null;
+  runs_failed_today: number | null;
+  tokens_today: number | null;
+  tokens_week: number | null;
+  /** Display only, and deliberately absent from Prometheus. */
+  cost_today: number | null;
+  cost_week: number | null;
+  rounds_open: number | null;
+  publications_pending: number | null;
+}
+
+export interface FleetDocument {
+  schema: number;
+  generated_at: string;
+  rounds: FleetRound[];
+  publications: FleetPublication[];
+  notices: FleetNotice[];
+  runs: FleetRun[];
+  intake: FleetIntake[];
+  totals: FleetTotals;
+  /** `conduct_db`. Not optional: a locked database and an idle fleet are the
+   *  same empty list without it. */
   sources: Record<string, SourceHealth>;
 }

@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory } from "vue-router";
 
 /**
- * Five routes, all five built.
+ * Seven routes, all seven built.
  *
  * `/` lands on Home now. It used to land on System, because Home was the stub and
  * sending someone to a page that says "not built" would have been a strange front
@@ -40,6 +40,20 @@ export const router = createRouter({
       path: "/library",
       name: "library",
       component: () => import("@/pages/LibraryPage.vue"),
+    },
+    // The two ephemeral fleets. They are last in the nav and separate from each
+    // other because they answer different questions off different data planes -
+    // CI is three lane markers, Agents is a document - and because a lane and a
+    // phase runner are invisible to every other page here.
+    {
+      path: "/ci",
+      name: "ci",
+      component: () => import("@/pages/CiPage.vue"),
+    },
+    {
+      path: "/agents",
+      name: "agents",
+      component: () => import("@/pages/AgentsPage.vue"),
     },
     { path: "/:pathMatch(.*)*", redirect: "/home" },
   ],

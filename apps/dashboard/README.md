@@ -4,7 +4,7 @@ A Vue 3 application, served as static files, at `https://home.avanserv.com` behi
 sign-on as everything else. It is the last item on CLAUDE.md's roadmap: *"status.json for what is
 true now, keyed by stable ids, and Prometheus for when it stopped being true."*
 
-All five pages are built. **System** and **Services** landed first; **Home** and **Library** were
+All seven pages are built. **System** and **Services** landed first; **Home** and **Library** were
 the second cut, and they needed a data layer before they needed a design - Prometheus holds counts,
 and a now-playing card with a number and no title is not the design. **Network** split out of
 Services on 2026-08-18 for the same reason a third time: drawing what can reach what, and what is
@@ -50,6 +50,7 @@ browser ---> caddy (home.avanserv.com, import protected)
 | **`status.json`** | the **prose** of the findings, plus `summary`, `facts`, `generated_at`, `mode` | `message` is deliberately absent from the metric. The id is stable and alertable; the prose is readable and disposable. That split is the intended join |
 | **`activity.json`** (30s) | what is playing and what is in flight, **with titles**: sessions, downloads, transcodes, torrents | a title cannot be a Prometheus label. Cardinality is the obvious reason and the lesser one - see below |
 | **`library.json`** (5min) | requests, recently added, recent completions, the stalled and queued files, the subtitle backlog | same, on the cadence its contents actually change at |
+| **`fleet.json`** (5min) | the agent fleet's open rounds with their task and attempt, publications pending, recent runs **with what they cost**, and why the intake last declined | read out of `conduct.db`, which nothing else here can reach. A task title, a branch and a Windmill job id are the same forbidden label family a session title is - and cost lives here rather than in a series precisely so it keeps no history |
 | **`src/topology.ts`** | the segment rails and the published-port table | the topology *is* static - it is defined in `stacks/`, in git. Only the node colouring is live |
 | **`src/paths.ts`** | who talks to whom, and why | half of these edges live in an application's own DATABASE - the \*arr download client, Prowlarr's FlareSolverr tag - so git cannot derive them. `bin/lint-repo.sh` validates instead: both endpoints must share a segment, because every bridge is `isolate=true` |
 
@@ -123,6 +124,37 @@ wrong. Every bridge also has a gateway to the outside: `net-dashboard` mirrors
 `flaresolverr.rx` of 36 MB, because FlareSolverr is headless Chrome fetching indexer pages and nearly
 all of it is internet egress. Reconcile on **rates**, never on the raw counters: containers have
 different start times, so their totals cover different windows.
+
+## What the CI and Agents pages are for
+
+**They landed 2026-08-28, and the two fleets are invisible for opposite reasons.**
+
+A CI lane produces no signal any other page could show. It carries
+`io.home-server.ephemeral`, so `source_containers` and `source_container_network` skip it; it is
+`podman run --rm`, so nothing is left in `failed`; and it defines no health check, so it can never
+read unhealthy. `docs/ci.md` states the consequence: **a wedged lane leaves no failed unit and no
+unhealthy container.** The marker file is the only witness, so `/ci` is a page about making one
+file legible and about making **absence loud** - a lane with no heartbeat is grey and says "never
+started", never "idle". `src/health.ts`'s `laneTone` checks grey FIRST for that reason, and
+`fixtures/smoke.mjs` asserts it: `?? 0` at a call site would mint a healthy idle lane out of no
+evidence at all.
+
+The agent fleet has the opposite problem. There are 41 series and none of them can say which task
+is in flight, which round it is on, or that a pull request has been waiting on you since last
+night. That is `fleet.json`, and two rules travel with it, both restated in `src/api/fleet.ts`:
+
+- **No resume URL, ever.** Windmill's `jobs_u/resume/{id}/{resume_id}/{signature}` carries an HMAC
+  in the path and needs no session, so anything holding one can approve an agent's merge.
+  `source_fleet` builds no link - it carries `notice.link`, pointing at the approval page behind
+  sign-on - and drops anything resembling a resume URL anyway.
+- **Cost is reported, never retained.** `docs/observability.md` refuses a dollar metric and that
+  stands; a document keeps no history, which is what makes reporting it a different act from
+  retaining it. The quota status is still what paces the fleet.
+
+**Both pages show PASSING checks**, which the System page deliberately does not. Two CI facts -
+`github_runner_runtime_split` and `github_runner_root_label` - are strings that mint no series, so
+the check's own status is the only route to them anywhere in this application. Hiding it while it
+passes would mean the only way to learn the runtime split is fine is for it to stop being fine.
 
 ## The four things that will bite
 

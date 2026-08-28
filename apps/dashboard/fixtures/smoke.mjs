@@ -12,7 +12,9 @@ const { activityDocument, libraryDocument } = await load("/fixtures/media.ts");
 const { sortRows, actionFor, badgeFor, whoLine, stateClass, STATE_LABEL, STATE_TONE } =
   await load("/src/media.ts");
 const { posterHeight, posterUrl } = await load("/src/images.ts");
-const { containerTone } = await load("/src/health.ts");
+const { containerTone, laneTone, quotaTone, heartbeatTone } = await load("/src/health.ts");
+const { dailyPeaks, utcDayStarts } = await load("/src/uptime.ts");
+const { fleetDocument, fleetUnreadable } = await load("/fixtures/fleet.ts");
 const fmt = await load("/src/format.ts");
 
 let failures = 0;
@@ -160,6 +162,108 @@ check("absent is still", G.intensity(Number.NaN), 0);
 check("the scale is logarithmic", G.intensity(1024 ** 2) > 0.5 && G.intensity(1024 ** 2) < 0.7, true);
 check("the ceiling clamps", G.intensity(1024 ** 4), 1);
 check("busier is faster", G.flowDuration(10e6) < G.flowDuration(10e3), true);
+
+
+// --- the two fleets ----------------------------------------------------------
+//
+// EVERY ASSERTION HERE IS ABOUT ABSENCE, because that is what both pages exist
+// to render and what no screenshot can prove. A lane with no marker, a phase
+// that has never run and a quota nobody has read all have to come out GREY, and
+// the failure mode if they do not is silent: a green row for a fleet nothing is
+// reporting on.
+
+console.log("\n-- absence, on both fleet pages --");
+
+// A lane whose heartbeat and in-flight series are both absent has never started.
+check("a lane with no marker is grey", laneTone(Number.NaN, undefined, Number.NaN).tone, "off");
+check("...and says so", laneTone(Number.NaN, undefined, Number.NaN).state, "never started");
+
+// THE ONE THAT MATTERS. inFlight === undefined must outrank a fresh heartbeat:
+// `?? 0` at a call site would produce a healthy idle lane out of no evidence.
+check("absent in-flight beats a fresh heartbeat", laneTone(12, undefined, 0).tone, "off");
+check("in-flight 0 really is idle", laneTone(12, 0, 0).state, "idle");
+check("in-flight 1 is running", laneTone(12, 1, 0).state, "running a job");
+check("a stale heartbeat fails", laneTone(400, 0, 0).tone, "fail");
+check("a stale heartbeat outranks mint failures", laneTone(400, 0, 3).state, "heartbeat stale");
+check("mint failures are amber", laneTone(12, 0, 3).tone, "warn");
+
+// The quota is a status, and unknown ranks worst - except absent, which is grey.
+check("an unread quota is grey", quotaTone(undefined).tone, "off");
+check("allowed is green", quotaTone(0).tone, "ok");
+check("the warning is amber", quotaTone(1).tone, "warn");
+check("rejected is red", quotaTone(2).tone, "fail");
+check("an unrecognised status is not green", quotaTone(7).tone, "fail");
+
+check("a heartbeat nobody wrote is grey", heartbeatTone(Number.NaN, 600).tone, "off");
+check("a stale heartbeat is amber", heartbeatTone(900, 600).tone, "warn");
+
+// --- the UTC daily strip -----------------------------------------------------
+//
+// The trap this exists for: these are gauges conduct resets at UTC midnight, and
+// bucketing them into LOCAL days would take each bar's maximum from the tail of
+// the previous UTC day. Anchor on a known instant rather than "now" so the
+// assertion does not depend on the machine's zone or on the hour it runs at.
+const DAY = 86400;
+const anchor = 1787_000_000 - (1787_000_000 % DAY) + 3600; // 01:00 UTC, some day
+
+console.log("\n-- the daily strip buckets on UTC --");
+const starts = utcDayStarts(3, anchor);
+check("day starts are UTC midnights", starts.map((t) => t % DAY), [0, 0, 0]);
+check("the last bar is today", starts[2], anchor - 3600);
+
+// A resetting counter: 8 late yesterday, then 1 early today. The max reducer
+// must report 8 for yesterday and 1 for today - never 8 for today.
+const peaks = dailyPeaks(
+  [
+    [anchor - DAY - 7200, 5],
+    [anchor - DAY - 3600, 8],
+    [anchor - 1800, 1],
+  ],
+  3,
+  anchor,
+);
+check("yesterday keeps its own peak", peaks[1], 8);
+check("today does not inherit it", peaks[2], 1);
+check("a day with no sample is NaN, not zero", Number.isNaN(peaks[0]), true);
+
+// --- the fleet document ------------------------------------------------------
+console.log("\n-- the fleet document --");
+const fleet = fleetDocument();
+
+check("the document names its upstream", Object.keys(fleet.sources), ["conduct_db"]);
+
+// waiting_on null is IN FLIGHT, not "conduct". Rendering it as conduct's would
+// claim the fleet owns a step nobody has looked at.
+const byWaiting = fleet.rounds.map((r) => r.waiting_on);
+check("all three waiting states are present", byWaiting, ["person", "conduct", null]);
+
+// NO RESUME URL, EVER. A link carrying one would make a reader of this page able
+// to approve an agent's merge, which is the outcome the whole design prevents.
+const links = [
+  ...fleet.rounds.map((r) => r.link),
+  ...fleet.notices.map((n) => n.link),
+].filter(Boolean);
+check("no link is a resume URL", links.some((l) => l.includes("/resume/")), false);
+check("the approval links survive", links.length > 0, true);
+
+// An orphan notice: asked, unanswered, and matching no open round. The board has
+// to keep showing it or an approval silently disappears.
+const jobs = new Set(fleet.rounds.filter((r) => r.waiting_on === "person").map((r) => r.flow_job_id));
+const orphans = fleet.notices.filter((n) => n.waiting_on === "person" && !jobs.has(n.flow_job_id));
+check("the fixture has an orphan notice", orphans.length, 1);
+
+// A run still going: result null, no ended_at. conduct counts a failure as
+// `result IS NOT NULL AND result != 'ok'`, and the collector's first SQL had it
+// backwards - drawing every running phase as a failed one.
+const running = fleet.runs.filter((r) => r.result === null);
+check("the fixture has a run in flight", running.length, 1);
+check("an in-flight run is not a failure", fleet.totals.runs_failed_today < fleet.totals.runs_today, true);
+
+// A LOCKED DATABASE IS NOT AN IDLE FLEET, and both produce the same empty list.
+const broken = fleetUnreadable();
+check("the unreadable document has no rounds", broken.rounds.length, 0);
+check("...and says why", broken.sources.conduct_db.ok, false);
+check("...with a reason", typeof broken.sources.conduct_db.error, "string");
 
 
 await server.close();

@@ -3195,3 +3195,32 @@ and WebKit to be the hard one and offered to leave WebKit hosted. Both halves we
   them conflicting, and a person who has stopped reading them. The fleet moves a task to `Review`
   when its PR opens and never past it, so that number only goes down when a human acts.
 
+
+### A fleet that is invisible to every reader except its own marker
+- **Ephemeral-labelled containers are skipped by BOTH container sources, run `--rm` so nothing is
+  left `failed`, and are started `--no-healthcheck` so nothing reads unhealthy.** Three independent
+  reasons, and they compose: a wedged CI lane or a stuck phase runner leaves a host on which every
+  unit is active, every container is healthy and every other dashboard page is quiet. The marker
+  file is the only witness, which makes **absence the finding** rather than the fallback - so
+  `laneTone` checks grey BEFORE green, and `?? 0` anywhere near `job_in_flight` or
+  `phase_in_flight` mints a healthy idle lane out of no evidence. The collector's own help text
+  says it: absent "must not be drawn as idle".
+- **A gauge that resets at midnight must be bucketed on the boundary it resets on.** `runs_today`,
+  `jobs_today` and `tokens_today` reset at UTC midnight because the host runs UTC; the container
+  availability strip buckets into LOCAL days on purpose, and reusing that here would take every
+  bar's maximum from the tail of the previous UTC day - two hours of every day's runs on the wrong
+  bar in summer, with nothing to say so. `dailyPeaks`/`utcDayStarts` are the UTC half, two
+  functions rather than a flag, because a boolean argument is how the wrong one gets picked.
+- **conduct counts a failure as `result IS NOT NULL AND result != 'ok'`, and the inverse is a real
+  bug rather than a nicety.** A run in flight has a NULL result; the first version of
+  `source_fleet`'s SQL counted those as failures and drew every running phase as a failed one. It
+  also has to match `state.counts_today` exactly, or the document and
+  `home_server_agent_runs_failed_today` put two disagreeing numbers on one page with no way to tell
+  which lied.
+- **The oldest suspended step's age is in a check's MESSAGE and in no fact.** `verify-host.sh`
+  measures it and records only the count, so displaying the sentence is the only way that number
+  reaches a screen - keyed on the stable id, displayed and never parsed.
+- **`chain.flow_job_id` is the job that STOPPED, not the one running**, so a round mid-flight
+  matches no notice. `waiting_on: null` therefore means "in flight" and must not default to
+  "conduct" - that would claim the fleet owns a step nobody has looked at. It is also why an
+  orphaned notice has to be rendered separately: dropping it would hide an unanswered approval.

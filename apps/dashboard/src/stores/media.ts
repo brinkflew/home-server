@@ -20,7 +20,8 @@ import { computed } from "vue";
 import { defineStore } from "pinia";
 
 import { usePoll } from "@/composables/usePoll";
-import { DocumentNeverWritten, fetchActivity, fetchLibrary } from "@/api/media";
+import { DocumentNeverWritten } from "@/api/document";
+import { fetchActivity, fetchLibrary } from "@/api/media";
 import { SignedOutError } from "@/api/http";
 import { freshness, type Freshness } from "@/freshness";
 import { sortRows } from "@/media";

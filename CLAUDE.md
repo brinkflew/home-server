@@ -1050,6 +1050,14 @@ signal read green.
 - **Fedora ships no pip for a parallel `python3.13`** - no such package at all; `ensurepip
   --altinstall`, and `--altinstall` is what stops 3.14's `pip3` becoming 3.13's.
 
+### A fleet that is invisible to every reader except its own marker
+- Ephemeral-labelled, `--rm` and `--no-healthcheck` compose into a host where a wedged lane or a
+  stuck phase leaves no failed unit, no unhealthy container and no other page anything to show. The
+  marker is the only witness, so absence is the finding and grey is checked before green.
+- A gauge that resets at UTC midnight must be bucketed on UTC; the availability strip's local days
+  would take every bar's peak from the previous day. A NULL `run.result` is in flight, not failed.
+  The oldest approval's age lives in a check's message and in no fact.
+
 ### A lane at 45% of its cores was not waiting on the network
 - 45% mean, 71% p90, 76% max across a lane's two pinned cores with 0.8% iowait reads as "give it
   more cores", and does not mean that. **Both long jobs on upskald's critical path are

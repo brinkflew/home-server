@@ -65,6 +65,7 @@ import calendar
 import glob
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import time
@@ -97,7 +98,30 @@ MARKER = os.path.expanduser("~/.cache/home-server/metrics-state")
 DOC_DIR = os.path.join(CACHE, "dashboard")
 DOC_ACTIVITY = os.path.join(DOC_DIR, "activity.json")
 DOC_LIBRARY = os.path.join(DOC_DIR, "library.json")
+
+# THE THIRD DOCUMENT, AND IT IS HERE FOR THE SAME REASON AS THE OTHER TWO.
+#
+# The agent fleet has 41 series and not one of them can say WHICH task is in
+# flight, which round it is on, or whether a pull request has been sitting on a
+# person's approval since last night. A task title, a branch name and a
+# Windmill job id are exactly the forbidden label family - unbounded, and
+# retained for 400 days by a store that has no business keeping them.
+#
+# So it travels as a document: rewritten whole every five minutes, no history
+# anywhere, and the numbers worth keeping stay as the counts the agent source
+# already emits. COST TRAVELS HERE AND NOWHERE ELSE - docs/observability.md
+# records "there is no dollar metric and no daily spend ceiling, deliberately",
+# and that refusal is unchanged: home_server_agent_quota_status is still the
+# pacing signal, and a document reporting what a round cost cannot become a
+# second currency because it cannot be graphed over time.
+DOC_FLEET = os.path.join(DOC_DIR, "fleet.json")
 DOC_SCHEMA = 1
+
+# conduct's own state, read-only. The default matches conduct/config.py's
+# STATE_DB, which derives it from DOCKER_VOLUME_CONFIG the same way.
+CONFIG_ROOT = os.environ.get("DOCKER_VOLUME_CONFIG", "/var/home-server/config")
+CONDUCT_DB = os.environ.get("CONDUCT_STATE_DB",
+                            os.path.join(CONFIG_ROOT, "conduct", "conduct.db"))
 
 # How many not-yet-available requests get a title resolved per slow run. Each
 # one costs a separate call to jellyseerr's TMDB proxy, and the Requests panel
@@ -1604,7 +1628,15 @@ CI_NUMBERS = (
 )
 
 # (marker key, metric infix)
-CI_STAMPS = (("heartbeat_at", "heartbeat"), ("last_job_at", "last_job"))
+#
+# job_started_at IS ABSENT WHILE A LANE IS IDLE, and that is the point. The
+# driver clears it at teardown, so _epoch returns None and Metrics.add drops the
+# sample - which is what lets a consumer compute an in-flight job's age without
+# also having to ask whether a job is running. The cross-lane worst case already
+# reached status.json as github_runner_job_age_s; this is the per-lane series
+# that fact could never be, because a fact is one number for the whole host.
+CI_STAMPS = (("heartbeat_at", "heartbeat"), ("last_job_at", "last_job"),
+             ("job_started_at", "job_started"))
 
 
 def source_ci(m):
@@ -2899,6 +2931,239 @@ def _attention_rows(m, doc):
 
 
 # ------------------------------------------------------------------------------
+# The agent fleet, from conduct's own database
+# ------------------------------------------------------------------------------
+# READ-ONLY, FAIL SOFT, AND NEVER A LINK THIS SOURCE BUILT ITSELF.
+#
+# conduct.db is the only place that knows which task is in flight, which round
+# it is on and what a round has cost. None of that can be a series - a task
+# title and a Windmill job id are the forbidden label family - so it travels as
+# a document, on the slow tier, rewritten whole.
+#
+# THE RESUME URL IS THE ONE THING THAT MUST NOT TRAVEL. docs/agents.md and
+# conduct/notify.py are both explicit: Windmill's
+# jobs_u/resume/{id}/{resume_id}/{signature} carries an HMAC in the path and
+# needs no session, so anything holding one can approve an agent's merge. ntfy
+# is refused it for that reason, and the same reasoning reaches further than the
+# transport: a link that appears on a page is a link that gets followed. So this
+# source constructs no link at all - it carries notice.link, which conduct built
+# pointing at the approval page behind sign-on, and _fleet_link drops anything
+# resembling a resume URL regardless. Both, because the cheap guard is the half
+# that survives somebody changing the other end.
+CONDUCT_MODULE_PREFIX = "conduct_"
+
+# conduct/config.py's MAX_ATTEMPTS. Duplicated rather than imported, because the
+# collector is stdlib-only and must run on a host where /var/agents is absent -
+# and a round board that cannot say "attempt 2 of 2" has lost the number that
+# says whether the fleet is about to give up.
+FLEET_MAX_ATTEMPTS = 2
+
+# How many recent runs the document carries. A run row holds a task body and a
+# raw verdict, both unbounded, and this file is fetched by a browser every five
+# minutes - so the cap is the panel's depth plus headroom, named rather than
+# implied, the way the requests source already caps its title lookups.
+FLEET_RUNS = 20
+
+
+def _fleet_link(raw):
+    """conduct's own link, or nothing. Never a resume URL, never constructed."""
+    link = str(raw or "").strip()
+    if not link:
+        return None
+    lowered = link.lower()
+    if "/resume/" in lowered or "resume_id" in lowered:
+        return None
+    if not (lowered.startswith("https://") or lowered.startswith("http://")):
+        return None
+    return link
+
+
+def _fleet_text(raw, limit):
+    """Bounded display text. A task body and a raw verdict are both unbounded."""
+    if raw is None:
+        return None
+    text = " ".join(str(raw).split())
+    if not text:
+        return None
+    return text if len(text) <= limit else text[:limit - 3] + "..."
+
+
+def _fleet_rows(conn, sql, params=()):
+    cur = conn.execute(sql, params)
+    names = [c[0] for c in cur.description]
+    return [dict(zip(names, row)) for row in cur.fetchall()]
+
+
+def _fleet_waiting(module_id):
+    """Who owes this step an answer.
+
+    A module id WITHOUT the prefix is one a PERSON answers - `publish_pr` is
+    deliberately unprefixed for exactly that reason, and conduct refuses to
+    answer a step it does not own. That single distinction is the most useful
+    thing on the Agents page.
+    """
+    return ("conduct" if str(module_id or "").startswith(CONDUCT_MODULE_PREFIX)
+            else "person")
+
+
+def source_fleet(m, doc):
+    """What the fleet is doing, for the Agents page.
+
+    IT MUST NEVER RAISE, for the reason source_agents already documents at
+    length: one source raising stops last_ok_at advancing for every source at
+    once. An absent database is the normal state on a host where conduct has
+    never run, and a locked one is a live writer doing its job.
+    """
+    doc.set("rounds", [])
+    doc.set("publications", [])
+    doc.set("notices", [])
+    doc.set("runs", [])
+    doc.set("intake", [])
+    doc.set("totals", {"runs_today": None, "runs_failed_today": None,
+                       "tokens_today": None, "tokens_week": None,
+                       "cost_today": None, "cost_week": None,
+                       "rounds_open": None, "publications_pending": None})
+
+    if not os.path.exists(CONDUCT_DB):
+        # A NOTE, NOT AN ERROR. Every conduct-dependent check reported exactly
+        # this for months before the orchestrator shipped, and a finding nobody
+        # can act on is how a reader learns to skip a whole section.
+        doc.note("conduct_db", False, "conduct has never run here")
+        return
+
+    conn = None
+    try:
+        # mode=ro rather than immutable=1: there is a live writer, and immutable
+        # would let us read a torn WAL and call it the truth.
+        conn = sqlite3.connect("file:%s?mode=ro" % CONDUCT_DB, uri=True,
+                               timeout=2.0)
+        conn.execute("PRAGMA busy_timeout = 2000")
+
+        midnight = time.strftime("%Y-%m-%dT00:00:00Z", time.gmtime(now()))
+        week_ago = iso(now() - 7 * 86400)
+
+        notices = _fleet_rows(conn, """
+            SELECT flow_job_id, module_id, project, kind, summary, link,
+                   first_at, last_at, sends
+              FROM notice WHERE closed_at IS NULL ORDER BY first_at
+        """)
+        by_job = {}
+        for row in notices:
+            row["waiting_on"] = _fleet_waiting(row.get("module_id"))
+            row["link"] = _fleet_link(row.get("link"))
+            row["summary"] = _fleet_text(row.get("summary"), 240)
+            by_job.setdefault(row.get("flow_job_id"), []).append(row)
+
+        rounds = _fleet_rows(conn, """
+            SELECT worktree_id, project, odoo_task, ref, phase, opened_at,
+                   attempts, flow_job_id, head, resumed_at
+              FROM chain WHERE closed_at IS NULL ORDER BY opened_at
+        """)
+        for row in rounds:
+            # BEST EFFORT, AND NULL WHERE IT CANNOT BE KNOWN. chain.flow_job_id
+            # is the job that STOPPED, not the one running - state.py says so -
+            # so a round mid-flight legitimately matches no notice. Null means
+            # "in flight", and `notices` below is the authoritative account of
+            # what a person has actually been asked. Defaulting to "conduct"
+            # here would claim the fleet owns a step nobody has looked at.
+            matched = by_job.get(row.get("flow_job_id")) or []
+            person = [n for n in matched if n["waiting_on"] == "person"]
+            row["waiting_on"] = ("person" if person
+                                 else "conduct" if matched else None)
+            row["link"] = person[0]["link"] if person else None
+            row["summary"] = person[0]["summary"] if person else None
+            row["max_attempts"] = FLEET_MAX_ATTEMPTS
+
+        publications = _fleet_rows(conn, """
+            SELECT job_id, project, worktree_id, odoo_task, branch, opened_at
+              FROM publication WHERE closed_at IS NULL ORDER BY opened_at
+        """)
+
+        runs = _fleet_rows(conn, """
+            SELECT phase, project, worktree_id, started_at, ended_at, result,
+                   exit_code, tokens_in, tokens_out, cost_usd, task, verdict
+              FROM run ORDER BY started_at DESC, id DESC LIMIT ?
+        """, (FLEET_RUNS,))
+        for row in runs:
+            row["task"] = _fleet_text(row.get("task"), 200)
+            # The verdict is stored RAW because a model fallback can retract
+            # structured output - state.py says so, and parsing it on the way in
+            # would turn a rendering problem into a lost record. Rendering it is
+            # card.py's job; all this needs is enough to show that one exists.
+            row["verdict"] = _fleet_text(row.get("verdict"), 160)
+
+        intake = _fleet_rows(conn, """
+            SELECT project, odoo_task, flow_job_id, opened_at, closed_at,
+                   last_looked_at, last_why FROM intake ORDER BY project
+        """)
+        for row in intake:
+            row["last_why"] = _fleet_text(row.get("last_why"), 200)
+
+        # ONE STATEMENT RATHER THAN SIX ROUND TRIPS.
+        #
+        # THE FAILURE PREDICATE IS conduct's OWN, COPIED FROM state.counts_today:
+        # `result IS NOT NULL AND result != 'ok'`. A NULL result is a run still
+        # in flight, NOT a failure - the first version of this counted it as one,
+        # which drew every running phase as a failed one. It matters beyond being
+        # wrong: home_server_agent_runs_failed_today comes from the marker, which
+        # serve.snapshot derives from that same function, so a different
+        # predicate here would put two numbers on one page that disagree with
+        # each other and give a reader no way to tell which lied.
+        totals = _fleet_rows(conn, """
+            SELECT
+              (SELECT COUNT(*) FROM run WHERE started_at >= ?) AS runs_today,
+              (SELECT COUNT(*) FROM run WHERE started_at >= ?
+                 AND result IS NOT NULL AND result != 'ok') AS runs_failed_today,
+              (SELECT COALESCE(SUM(COALESCE(tokens_in,0)+COALESCE(tokens_out,0)),0)
+                 FROM run WHERE started_at >= ?) AS tokens_today,
+              (SELECT COALESCE(SUM(COALESCE(tokens_in,0)+COALESCE(tokens_out,0)),0)
+                 FROM run WHERE started_at >= ?) AS tokens_week,
+              (SELECT COALESCE(SUM(cost_usd),0)
+                 FROM run WHERE started_at >= ?) AS cost_today,
+              (SELECT COALESCE(SUM(cost_usd),0)
+                 FROM run WHERE started_at >= ?) AS cost_week
+        """, (midnight, midnight, midnight, week_ago, midnight, week_ago))[0]
+        totals["rounds_open"] = len(rounds)
+        totals["publications_pending"] = len(publications)
+
+        doc.set("rounds", rounds)
+        doc.set("publications", publications)
+        doc.set("notices", notices)
+        doc.set("runs", runs)
+        doc.set("intake", intake)
+        doc.set("totals", totals)
+        doc.note("conduct_db", True)
+
+        # THE COUNTS ARE RETAINED AND THE NAMES ARE NOT, which is the rule
+        # source_transfers already states for the pipeline. A round count has a
+        # useful history; the branch it is on does not, and could not be kept
+        # safely if it did. NO COST METRIC - see DOC_FLEET's comment.
+        m.add("home_server_agent_rounds_open", len(rounds), None,
+              "Review rounds conduct has open. Each is one task being carried "
+              "through plan, dev, verify and review; agents.rounds_open warns "
+              "when one has been open longer than six hours.")
+        m.add("home_server_agent_publications_pending", len(publications), None,
+              "Branches conduct has pushed whose pull request has not opened "
+              "yet. NOT the REVIEW_CAP headroom, which is counted from the "
+              "tracker's Review stage and is not measured on this host at all.")
+        m.add("home_server_agent_notices_open", len(notices), None,
+              "Notifications sent to a person and not yet answered. Counts "
+              "conduct's own steps too; fleet.json's waiting_on separates them "
+              "and agents.approvals_pending's SQL cannot.")
+    except (sqlite3.Error, OSError, IndexError) as exc:
+        # A LOCKED DATABASE IS NOT AN EMPTY FLEET. Without this note the page
+        # would render "no rounds open" over a database it could not read, which
+        # is the failure `sources` exists to make impossible.
+        doc.note("conduct_db", False, "%s" % exc)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
+
+
+# ------------------------------------------------------------------------------
 # The collector's own record
 # ------------------------------------------------------------------------------
 # There is deliberately no home_server_collector_up 1. A sample asserting
@@ -2954,6 +3219,7 @@ SOURCES = (
     ("tdarr", source_tdarr, True, None),
     ("requests", source_requests, True, "library"),
     ("catalogue", source_catalogue, True, "library"),
+    ("fleet", source_fleet, True, "fleet"),
 )
 
 
@@ -3067,8 +3333,15 @@ def write_marker(ok, started, duration, failed, series):
               file=sys.stderr)
 
 
+# A DICT RATHER THAN A TERNARY, which it was while there were two. A third
+# document would have silently been written to library.json - same bytes, same
+# permissions, no error anywhere, and the Library page rendering a fleet.
+_DOC_PATHS = {"activity": DOC_ACTIVITY, "library": DOC_LIBRARY,
+              "fleet": DOC_FLEET}
+
+
 def _doc_path(key):
-    return DOC_ACTIVITY if key == "activity" else DOC_LIBRARY
+    return _DOC_PATHS[key]
 
 
 def main():
@@ -3087,7 +3360,7 @@ def main():
 
     m = Metrics()
     slow = Metrics()
-    docs = {"activity": Document(), "library": Document()}
+    docs = {key: Document() for key in _DOC_PATHS}
     wrote_doc = set()
     failed = []
     for name, fn, is_slow, doc_key in SOURCES:

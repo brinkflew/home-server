@@ -44,12 +44,16 @@
 		respond "ok" 200
 	}
 
-	# The host's copy of status.json, bind-mounted read-only at /srv/data.
+	# The host's copies of status.json and the three collector documents -
+	# activity.json, library.json and fleet.json - bind-mounted read-only at
+	# /srv/data. A GLOB rather than four routes, so a fourth document needs no
+	# change here.
 	#
-	# no-store IS LOAD-BEARING. This file is the freshness signal for the whole
-	# page: a cached copy would let the UI report a stale battery as current,
-	# which is the exact failure this repository is written around. It is 30 KB
-	# once an hour, so there is nothing to save by caching it.
+	# no-store IS LOAD-BEARING. These files are the freshness signal for the whole
+	# page: a cached copy would let the UI report a stale battery, or a fleet
+	# document written three hours ago, as current - which is the exact failure
+	# this repository is written around. It is tens of kilobytes at worst, so
+	# there is nothing to save by caching them.
 	handle /data/* {
 		root * /srv
 		file_server

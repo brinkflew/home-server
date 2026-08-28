@@ -8,7 +8,7 @@
 // dev server says so on the first request.
 // =============================================================================
 
-import { ALL_QUERIES, AVAILABILITY, NETWORK, SERVICES, SYSTEM } from "../src/queries";
+import { AGENTS, ALL_QUERIES, AVAILABILITY, CI, NETWORK, SERVICES, SYSTEM } from "../src/queries";
 import { CONTAINERS, wave } from "./model";
 import { NODES } from "../src/topology";
 
@@ -289,6 +289,160 @@ function bySeries(): Record<string, SeriesSpec[]> {
   }));
   table[NETWORK.pairs] = [{ metric: {}, at: constant(measured.length) }];
   table[NETWORK.unmapped] = [{ metric: {}, at: constant(0) }];
+
+  // --- CI lanes -------------------------------------------------------------
+  //
+  // THREE LANES IN THREE DIFFERENT STATES, and the third is the one that earns
+  // its place. Lane 1 is busy, lane 2 is idle and healing, and LANE 3 HAS NEVER
+  // STARTED - which in a fixture means it appears in NO map at all, not as a
+  // zero. That is the state the whole page is built to render as grey, and a
+  // fixture where every lane reports would exercise the layout that needs the
+  // least care and hide the rule that needs the most.
+  const LANES = ["1", "2"];
+  const laneAt = (v: Record<string, number>) =>
+    LANES.map((lane) => ({ metric: { lane }, at: constant(v[lane]) }));
+
+  table[CI.markerPresent] = [{ metric: {}, at: constant(1) }];
+  table[CI.heartbeat] = LANES.map((lane) => ({ metric: { lane }, at: () => now - 12 }));
+  table[CI.lastJob] = laneAt({ "1": now - 900, "2": now - 5400 });
+
+  // Present for lane 1 only: the driver clears it at teardown, so an idle lane
+  // legitimately has no series here.
+  table[CI.jobStarted] = [{ metric: { lane: "1" }, at: () => now - 640 }];
+  table[CI.inFlight] = laneAt({ "1": 1, "2": 0 });
+
+  table[CI.jobsToday] = laneAt({ "1": 7, "2": 4 });
+  table[CI.jobsTotal] = [
+    { metric: { lane: "1" }, at: (t) => 1204 + Math.floor((t - now) / 900) },
+    { metric: { lane: "2" }, at: (t) => 988 + Math.floor((t - now) / 1400) },
+  ];
+  table[CI.lastJobSeconds] = laneAt({ "1": 512, "2": 1764 });
+
+  // Lane 2 is failing to mint, which is the amber state.
+  table[CI.failures] = laneAt({ "1": 0, "2": 3 });
+
+  // THE SAWTOOTH IS THE POINT. Lane 2 resets partway through the window, so the
+  // chart has a vertical drop in it and the caveat about it has something to
+  // point at.
+  const RESET_AT = now - 9000;
+  table[CI.laneDisk] = [
+    { metric: { lane: "1" }, at: (t) => (14200 + ((t / 60) % 900)) * MB },
+    { metric: { lane: "2" }, at: (t) => (t < RESET_AT ? 19900 : 3100 + ((t - RESET_AT) / 90)) * MB },
+  ];
+
+  table[CI.laneMemPeak] = laneAt({ "1": 2790 * MB, "2": 2410 * MB });
+  table[CI.lanePidsPeak] = laneAt({ "1": 604, "2": 511 });
+  // Non-zero on lane 1: this, not the peak, is what justifies a ceiling change.
+  table[CI.laneMemMaxEvents] = laneAt({ "1": 2, "2": 0 });
+  table[CI.laneOomKills] = laneAt({ "1": 0, "2": 0 });
+
+  table[CI.storeJobs] = laneAt({ "1": 39, "2": 6 });
+  table[CI.storeResets] = laneAt({ "1": 4, "2": 9 });
+
+  table[CI.jobsPerHour] = [
+    { metric: { lane: "1" }, at: swing("cijobs1", 3.4, 2.2) },
+    { metric: { lane: "2" }, at: swing("cijobs2", 2.1, 1.8) },
+  ];
+  table[CI.resetsPerDay] = laneAt({ "1": 1, "2": 3 });
+
+  table[CI.slicePresent] = [{ metric: {}, at: constant(1) }];
+  table[CI.sliceMemory] = [{ metric: {}, at: swing("cislice", 5100 * MB, 1900 * MB) }];
+  table[CI.sliceMemoryPeak] = [{ metric: {}, at: constant(8990 * MB) }];
+  table[CI.sliceMemoryHigh] = [{ metric: {}, at: constant(8448 * MB) }];
+  table[CI.sliceMemoryMax] = [{ metric: {}, at: constant(9984 * MB) }];
+  table[CI.slicePids] = [{ metric: {}, at: swing("cipids", 240, 120) }];
+  table[CI.slicePidsMax] = [{ metric: {}, at: constant(1024) }];
+  table[CI.sliceOom] = [{ metric: {}, at: constant(0) }];
+
+  table[CI.lanesActive] = [{ metric: {}, at: constant(2) }];
+  table[CI.lanesFailed] = [{ metric: {}, at: constant(1) }];
+  table[CI.imageAgeDays] = [{ metric: {}, at: constant(19) }];
+  table[CI.versionCheckAgeDays] = [{ metric: {}, at: constant(3) }];
+  table[CI.toolcacheStale] = [{ metric: {}, at: constant(1) }];
+  // ZERO ON PURPOSE. An empty baseline store is a green pipeline enforcing
+  // nothing, and it must be on screen in dev or the panel that shouts about it
+  // is never looked at.
+  table[CI.artifactBaselines] = [{ metric: {}, at: constant(0) }];
+  table[CI.artifactStateBytes] = [{ metric: {}, at: constant(12 * MB) }];
+  table[CI.artifactRunsBytes] = [{ metric: {}, at: constant(3400 * MB) }];
+  table[CI.sliceUnlimited] = [{ metric: {}, at: constant(0) }];
+  table[CI.strays] = [{ metric: {}, at: constant(0) }];
+
+  // --- the agent fleet ------------------------------------------------------
+  table[AGENTS.markerPresent] = [{ metric: {}, at: constant(1) }];
+  table[AGENTS.heartbeat] = [{ metric: {}, at: () => now - 41 }];
+  table[AGENTS.lastOk] = [{ metric: {}, at: () => now - 41 }];
+  table[AGENTS.phaseInFlight] = [{ metric: {}, at: constant(1) }];
+  table[AGENTS.phaseStarted] = [{ metric: {}, at: () => now - 1870 }];
+
+  // REJECTED, which is the loud state and the one AgentQuotaRejected fires on.
+  table[AGENTS.quotaStatus] = [{ metric: {}, at: constant(2) }];
+  table[AGENTS.quotaResets] = [{ metric: {}, at: () => now + 4300 }];
+  table[AGENTS.quotaRead] = [{ metric: {}, at: () => now - 300 }];
+  table[AGENTS.intakeLast] = [{ metric: {}, at: () => now - 260 }];
+
+  table[AGENTS.tokensToday] = [{ metric: {}, at: constant(2_140_000) }];
+  table[AGENTS.tokensWeek] = [{ metric: {}, at: constant(11_900_000) }];
+  table[AGENTS.runsToday] = [{ metric: {}, at: constant(6) }];
+  table[AGENTS.runsFailedToday] = [{ metric: {}, at: constant(1) }];
+
+  // THE TWO WORKTREE COUNTS DISAGREE, deliberately: three leases against four
+  // directories is an orphan, which is exactly what agents.worktree_orphans
+  // grades and what the tile prints both numbers to show.
+  table[AGENTS.worktreesLeased] = [{ metric: {}, at: constant(3) }];
+  table[AGENTS.worktreesOnDisk] = [{ metric: {}, at: constant(4) }];
+
+  table[AGENTS.roundsOpen] = [{ metric: {}, at: constant(3) }];
+  table[AGENTS.publicationsPending] = [{ metric: {}, at: constant(1) }];
+  table[AGENTS.noticesOpen] = [{ metric: {}, at: constant(2) }];
+
+  table[AGENTS.slicePresent] = [{ metric: {}, at: constant(1) }];
+  table[AGENTS.sliceMemory] = [{ metric: {}, at: swing("agslice", 1180 * MB, 620 * MB) }];
+  table[AGENTS.sliceMemoryPeak] = [{ metric: {}, at: constant(2960 * MB) }];
+  table[AGENTS.sliceMemoryHigh] = [{ metric: {}, at: constant(3840 * MB) }];
+  table[AGENTS.sliceMemoryMax] = [{ metric: {}, at: constant(4608 * MB) }];
+  table[AGENTS.slicePids] = [{ metric: {}, at: swing("agpids", 88, 40) }];
+  table[AGENTS.slicePidsMax] = [{ metric: {}, at: constant(1024) }];
+  table[AGENTS.sliceOom] = [{ metric: {}, at: constant(0) }];
+
+  table[AGENTS.approvalsPending] = [{ metric: {}, at: constant(2) }];
+  table[AGENTS.runnersLeaked] = [{ metric: {}, at: constant(0) }];
+  table[AGENTS.windmillDbBytes] = [{ metric: {}, at: constant(1290 * MB) }];
+  table[AGENTS.workerLanes] = [{ metric: {}, at: constant(2) }];
+  table[AGENTS.mirrorAge] = [{ metric: {}, at: constant(2400) }];
+  table[AGENTS.checkoutDirty] = [{ metric: {}, at: constant(0) }];
+  table[AGENTS.publishConfigured] = [{ metric: {}, at: constant(1) }];
+  table[AGENTS.conductAge] = [{ metric: {}, at: constant(41) }];
+
+  // The daily strips. A resetting gauge, so the fixture ramps within a UTC day
+  // and drops back at midnight - which is what makes dailyPeaks' max reducer
+  // visibly right rather than merely plausible. Four days back is deliberately
+  // absent so a grey bar is on screen.
+  const DAY = 86400;
+
+  // A DIFFERENT PEAK EVERY DAY, and that is not decoration. The first version
+  // ramped every day to the same ceiling, so dailyPeaks' max reducer produced
+  // fourteen identical bars - which reads as a strip that failed to render
+  // rather than as a fleet with quiet days and busy ones, and would have hidden
+  // a real bug in the reducer behind a plausible-looking wall.
+  //
+  // Deterministic rather than random, for the reason images.ts gives about
+  // poster hues: a reload that reshuffles the data makes a visual review
+  // impossible.
+  const dayFactor = (daysAgo: number) => 0.35 + 0.65 * Math.abs(Math.sin(daysAgo * 1.7));
+
+  const dayRamp = (peak: number, gapDaysAgo: number): At => (t) => {
+    const daysAgo = Math.floor((now - t) / DAY);
+    if (daysAgo === gapDaysAgo) return Number.NaN;
+    // A resetting counter: it climbs through the day and drops at UTC midnight,
+    // so the day's maximum IS the day's total - which is what makes dailyPeaks'
+    // choice of reducer visibly right rather than merely plausible.
+    const intoDay = ((t % DAY) + DAY) % DAY;
+    return Math.round(peak * dayFactor(daysAgo) * (0.2 + 0.8 * (intoDay / DAY)));
+  };
+  table[AGENTS.runsHourly] = [{ metric: {}, at: dayRamp(9, 4) }];
+  table[AGENTS.runsFailedHourly] = [{ metric: {}, at: dayRamp(2, 4) }];
+  table[AGENTS.tokensHourly] = [{ metric: {}, at: dayRamp(2_600_000, 4) }];
 
   return table;
 }
