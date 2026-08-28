@@ -503,12 +503,26 @@ preflight() {
 #
 # LANE 1 IS NEVER HELD, AND EVERY LANE ABOVE IT IS. The point is to stop the
 # whole CI fleet and a phase peaking together on a 15.8 GB host, not to stop CI.
-# At a measured 6.9% phase duty cycle this costs almost nothing and CI never
-# drops to zero. The predicate is a comparison against 1 rather than a list, so
-# a third lane joined the held set on 2026-08-27 without an edit - which is the
-# behaviour that was wanted, and is stated here because silence is not consent:
-# holding two of three during a phase is a deliberate widening of what this
-# yields, not an oversight in what it names.
+# The predicate is a comparison against 1 rather than a list, so a third lane
+# joined the held set on 2026-08-27 without an edit - which is the behaviour that
+# was wanted, and is stated here because silence is not consent: holding two of
+# three during a phase is a deliberate widening of what this yields, not an
+# oversight in what it names.
+#
+# WHAT THIS COSTS IS UNMEASURED ON THE CURRENT SHAPE, and the claim that used to
+# stand here is deleted rather than restated. It read "at a measured 6.9% phase
+# duty cycle this costs almost nothing and CI never drops to zero", off a 30-day
+# mean of home_server_agent_phase_in_flight taken when the fleet was two lanes
+# and this held exactly one of them. Both halves of that premise then moved: the
+# third lane took the held set to two of three, and the fleet began chaining
+# rounds with no gap between them. A spot reading on 2026-08-28 over 08:18-10:35
+# put lanes 2 and 3 in the hold for roughly 49 and 51 of 137 minutes - about
+# 36-38%, five times the figure the sentence rested on. That is one window on one
+# busy morning and NOT a replacement measurement, which is exactly why no number
+# is asserted here now. The 30-day mean is the thing to re-read before this is
+# tuned; until then the hold stands as written and is being watched in normal
+# use. Narrowing it - holding only the lanes above the second, say - is the
+# obvious lever and is deliberately not pulled on a two-hour sample.
 phase_in_flight() {
 	[ "$LANE" = 1 ] && return 1
 
@@ -896,6 +910,17 @@ while [ "$stopping" = 0 ]; do
 	while phase_in_flight && [ "$stopping" = 0 ]; do
 		log "a conduct phase is in flight - holding this lane (lane 1 keeps taking jobs)"
 		nap 60
+		# THE SAME DEFECT AS THE IDLE CASE FURTHER DOWN, in the one other place
+		# this loop can sit still. `nap` samples the scope and writes nothing, so
+		# without this the marker moved once per HOLD - not once per poll - and a
+		# held lane went stale for as long as the phase ran. ci.heartbeat grades
+		# at 300s and a dev phase runs past thirty minutes, so every phase longer
+		# than five minutes warned on two perfectly healthy lanes: measured at
+		# 710s and 258s on lanes 3 and 2 on 2026-08-28, units active, no
+		# restarts, registrations online. Holding IS the normal state - it is
+		# what a lane above the first does while the fleet works - and a check
+		# that fires on the normal case is a check somebody learns to ignore.
+		marker_write 0
 	done
 	[ "$stopping" = 0 ] || break
 

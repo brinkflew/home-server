@@ -36,9 +36,15 @@
 #
 # WHAT MAKES THAT SAFE RATHER THAN LUCKY is that bin/github-runner.sh holds every
 # lane ABOVE THE FIRST while a conduct phase is in flight, reading the same marker
-# and the same heartbeat freshness rule bin/reboot-when-staged.sh uses. At 6.9%
-# that costs almost nothing, and CI never drops to zero lanes. That predicate is
-# `[ "$LANE" = 1 ] && return 1`, so it widened to a third lane by saying nothing.
+# and the same heartbeat freshness rule bin/reboot-when-staged.sh uses. That
+# predicate is `[ "$LANE" = 1 ] && return 1`, so it widened to a third lane by
+# saying nothing. This paragraph used to close "at 6.9% that costs almost
+# nothing, and CI never drops to zero lanes"; the second clause still holds and
+# the first is deleted, because the 6.9% was measured when this held one lane of
+# two and a 2026-08-28 spot reading put the held lanes near 36-38% of a busy
+# morning. What it costs CI is being re-measured in normal use - see the note in
+# bin/github-runner.sh. It does not change what this slice reserves either way:
+# the hold is why the ceilings may overlap, not a term in their arithmetic.
 #
 # THE PER-LANE LIMITS BIND BEFORE THIS DOES, deliberately: three lanes at their
 # scope MemoryMax of 3,584M is 10,752M against the 9,984M below, so the slice
