@@ -25,7 +25,7 @@
 // dashboard is cheap to expose has gone.
 // =============================================================================
 
-import { fetchJson } from "./http";
+import { fetchText } from "./http";
 
 /** The actions `f/agents/control`'s schema declares. Kept in the same order. */
 export type ControlAction = "intake_on" | "intake_off" | "hold" | "release" | "restart";
@@ -52,12 +52,21 @@ const ENDPOINT = "/api/control/run";
  * returns immediately; conduct applies it within a minute, and what it did shows
  * up in the next `fleet.json`. So a caller must not report success as "done" -
  * it is "asked", and the page re-reads to find out.
+ *
+ * AND THE RECEIPT IS `201 text/plain`, not JSON. `fixtures/smoke.mjs` asserts
+ * that against a stubbed `fetch`, which is the only place in this repository
+ * that exercises the client half of this route: every measurement recorded in
+ * `docs/agents.md` was made with `curl` from the host, and curl proving a route
+ * proves nothing whatever about the browser reading its answer.
  */
 export async function control(request: ControlRequest): Promise<string> {
   const body: Record<string, unknown> = { action: request.action };
   if (request.project) body.project = request.project;
   if (request.target) body.target = request.target;
   if (request.note) body.note = request.note;
-  // Windmill answers the run endpoint with a bare job-id string, not an object.
-  return (await fetchJson<string>(ENDPOINT, { method: "POST", json: body })) as string;
+  // `fetchText` AND NOT `fetchJson`, WHICH IS THE WHOLE BUG THIS ONCE HAD. This
+  // spot carried a comment reading "Windmill answers the run endpoint with a
+  // bare job-id string, not an object", immediately above a call that handed
+  // that string to a JSON parser. A comment naming a hazard is not a guard.
+  return await fetchText(ENDPOINT, { method: "POST", json: body });
 }

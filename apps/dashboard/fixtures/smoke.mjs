@@ -28,6 +28,7 @@ const {
 const { holdExpiresIn, intakeState, intakeSwitch, roundControls, HOLD_TIMEOUT_S } =
   await load("/src/control.ts");
 const fmt = await load("/src/format.ts");
+const { control } = await load("/src/api/control.ts");
 
 let failures = 0;
 const check = (name, got, want) => {
@@ -575,6 +576,69 @@ check("the unreadable document has no rounds", broken.rounds.length, 0);
 check("...and says why", broken.sources.conduct_db.ok, false);
 check("...with a reason", typeof broken.sources.conduct_db.error, "string");
 
+
+console.log("\n-- the one route that acts, and the receipt it answers with --");
+
+// THE FIRST ASSERTIONS IN THIS FILE THAT REACH src/api/, AND A LIVE DEFECT IS
+// WHY. `control()` posted a command, Windmill carried it out, conduct wrote the
+// row and a round started - and the board printed `failed`, because the run
+// endpoint answers `201 text/plain` with a bare job id and `fetchJson` handed
+// that to `JSON.parse`. Every measurement ever recorded for this route was made
+// with curl from the host, so the client half had never once run.
+//
+// NO DOM IS NEEDED FOR ANY BRANCH BELOW. `looksLikeSignIn` reads `window` only
+// when `res.redirected`, which a constructed Response never is, and
+// `reauthenticate` catches its own missing `sessionStorage`. So a stubbed
+// `fetch` reaches all three outcomes in plain node.
+const JOB_ID = "01a04a31-dbc7-7fdf-0e59-afcce643d0e6";
+const realFetch = globalThis.fetch;
+let sent = null;
+const answers = (body, status, type) => {
+  globalThis.fetch = async (url, options) => {
+    sent = { url, options };
+    return new Response(body, { status, headers: { "content-type": type } });
+  };
+};
+const attempt = async () => {
+  try {
+    return { got: await control({ action: "intake_on", project: "upskald" }) };
+  } catch (error) {
+    return { got: `threw ${error.name}: ${error.message}`, error };
+  }
+};
+
+// WINDMILL'S OWN ANSWER, measured off Caddy's access log on 2026-08-28:
+// 201, text/plain; charset=utf-8, 36 bytes. Point `control()` back at
+// `fetchJson` and this row fails with a SyntaxError - which is how it was
+// proved to fire before it was trusted.
+answers(JOB_ID, 201, "text/plain; charset=utf-8");
+const receipt = await attempt();
+check("a plain-text job id is a receipt, not a failure", receipt.got, JOB_ID);
+check("it posts the command to the one fixed path",
+  [sent.url, sent.options.method, sent.options.credentials, JSON.parse(sent.options.body)],
+  ["/api/control/run", "POST", "same-origin", { action: "intake_on", project: "upskald" }]);
+// A STANDING INVARIANT OF src/api/control.ts, asserted rather than trusted: the
+// token lives in Caddy and this bundle never sees it. If the browser ever sends
+// a credential of its own, the reason this dashboard is cheap to expose is gone.
+check("the browser sends no credential of its own",
+  Object.keys(sent.options.headers).filter((h) => /^(authorization|cookie)$/i.test(h)),
+  []);
+
+// CADDY REFUSES A NON-POST ITSELF, with a plain-text body. The status line is
+// all there is to report, and reporting it is not the same as parsing it.
+answers("post only", 405, "text/plain; charset=utf-8");
+const notPost = await attempt();
+check("a refusal carries its status, not a parse error",
+  [notPost.error?.name, notPost.error?.status], ["HttpError", 405]);
+
+// THE TRAP src/api/http.ts EXISTS FOR, now that this route reads text: an
+// expired session is a 302 that fetch FOLLOWS, so the body is a sign-in page
+// with res.ok true. It must never be handed back as a job id.
+answers("<!doctype html><title>sign in</title>", 200, "text/html; charset=utf-8");
+const signedOut = await attempt();
+check("a sign-in page is never mistaken for a job id", signedOut.error?.name, "SignedOutError");
+
+globalThis.fetch = realFetch;
 
 await server.close();
 console.log(`\n${failures === 0 ? "all checks passed" : `${failures} FAILED`}`);

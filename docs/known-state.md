@@ -3534,3 +3534,28 @@ three of them are the same mistake in different clothes.
   stage outside the fleet's three, so conduct cannot return a task to Pending and should not be able
   to. Five tasks - 1247, 1251, 1254, 1260, 1271 - sat in Implementation after that day and needed a
   person to move them back.
+
+### The command arrived, and the receipt could not be read
+- **Windmill's run endpoint answers `201`, `text/plain; charset=utf-8`, 36 bytes** - a bare job id,
+  measured off Caddy's own access log, which records the upstream's headers. `res.ok` is true for a
+  201 and the sign-in sniffer knows only `text/html`, so a plain-text body walks past both of
+  `http.ts`'s guards and into `JSON.parse`, which throws on a UUID.
+- **The comment naming the hazard sat one line above the call that ignored it.** `control.ts` read
+  "Windmill answers the run endpoint with a bare job-id string, not an object" and then handed that
+  string to `fetchJson`; the return type had been changed to `string` and the parser underneath it
+  had not. conduct had already met the same thing and handled it - `windmill.py` falls back to
+  `raw.strip()`, with a comment saying why.
+- **Proving a route with curl does not prove the client.** Every measurement recorded for this route
+  was made from the host, and no fixture reached `src/api/` at all, so the browser's own read of the
+  response had never once run. Four assertions over a stubbed `fetch` close it, and they need no
+  DOM: `looksLikeSignIn` reads `window` only when `res.redirected`, which a constructed `Response`
+  never is, and `reauthenticate` catches its own missing `sessionStorage`.
+- **Every other layer said yes** - 201 at the edge, a successful flow, `intake armed for upskald` in
+  the journal, a row in `conduct.db`, and a round started on task 1260 four minutes later. The only
+  wrong thing in the system was the word on the button, and it was the safest-sounding wrong word:
+  `failed` invites a second press of a command that has already been carried out. It got one, 4.2
+  seconds later, and `name` being a PRIMARY KEY is the only reason that cost nothing.
+- **A chip that never cleared `asked` stopped naming its own action.** Set once and never reset, so
+  once the next `fleet.json` flipped its label from `arm` to `disarm` the button read `asked` over a
+  command that would now do the opposite. It clears on a label change, which is the moment the fleet
+  has been observed doing the thing; a timer would expire while the answer was still unknown.

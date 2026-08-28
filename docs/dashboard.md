@@ -33,6 +33,13 @@ bundle never sees, and conduct answers the resulting suspended step on its next 
 browser writes to a container; the host polls. **`paths.ts` still carries `conduct` as outbound-only,
 and `bin/lint-repo.sh` now enforces that** rather than only asserting it in prose.
 
+**THE ONE CALL HERE WHOSE ANSWER IS NOT JSON IS THE ONE THAT ACTS.** Windmill's run endpoint replies
+`201 text/plain` with a bare 36-byte job id, and `fetchJson` parsed it until 2026-08-28 - so a
+command Windmill carried out, conduct recorded and a round acted on printed `failed` on the button.
+`fetchText` reads it now, over the same shared `request()`, so the sign-in trap that file exists for
+still applies to it. **`fetchJson` stays strict**: its six other callers really do answer JSON, and a
+lenient parse there would turn a corrupt document into silence.
+
 **THE INTAKE SWITCH IS DRAWN TWICE, AND THAT IS THE FIX RATHER THAN THE PROBLEM.** It shipped in the
 Intake panel alone, at the foot of the Agents page below six other panels, where it was correct,
 enabled and *missed* - the first thing asked of it after it shipped was where it was. It is now also
