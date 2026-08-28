@@ -344,12 +344,18 @@ export interface FleetPhaseStat {
 }
 
 /**
- * One review round: a task being carried through the phases.
+ * One review round: one attempt at a task, carried through the phases.
  *
- * NOT ONLY OPEN ONES since the run board landed. `closed_at` distinguishes
- * them, and the collector keeps every open round plus a capped tail of closed
- * ones - a round used to vanish the moment it closed, which made "published"
- * and "stopped" states this page could never draw.
+ * DERIVED FROM THE RUN LOG, NOT READ OUT OF `chain`. conduct's chain table is
+ * current state: `worktree_id` is its PRIMARY KEY, `chain_open` does INSERT OR
+ * REPLACE, and the worktree is REUSED for every change - so each round
+ * overwrites the last one's row and the table holds exactly one however much
+ * the fleet has done. Measured: 1 row in chain against eleven rounds in the run
+ * log. `chain` still supplies `waiting_on`, `link` and the tracker id, but only
+ * for the round in flight, which is the one thing it describes accurately.
+ *
+ * ONE ROW PER ATTEMPT. A `plan` run starts a round, which is conduct's own
+ * definition - chain.attempts counts plan phases.
  */
 export interface FleetRound {
   worktree_id: string;
@@ -358,7 +364,19 @@ export interface FleetRound {
   ref: string | null;
   phase: string | null;
   opened_at: string;
-  attempts: number;
+  /** When the first phase of this round started, and when the last one ended.
+   *  `ended_at` is null while one is still running. */
+  started_at: string;
+  ended_at: string | null;
+  /**
+   * Which attempt at this task this round is, or null.
+   *
+   * NULL IS NOT ZERO AND NOT ONE. It is counted among rounds sharing an
+   * `odoo_task`, so a round whose runs predate `run.odoo_task` cannot have one
+   * - and "attempt 1 of 2" about a round whose task is unknown is a claim
+   * rather than a count. The row hides the line instead.
+   */
+  attempts: number | null;
   /** conduct's MAX_ATTEMPTS, carried so the board can say "2 of 2" - the number
    *  that says whether the fleet is about to give up. */
   max_attempts: number;
@@ -417,6 +435,12 @@ export interface FleetRound {
   eta_seconds: number | null;
   /** The weakest sample count in that sum. Null whenever eta_seconds is. */
   eta_samples: number | null;
+
+  /** Summed over the round's phase runs. DISPLAY ONLY - mirroring this into a
+   *  series would reverse the refusal docs/observability.md states. */
+  cost_usd: number | null;
+  tokens_in: number | null;
+  tokens_out: number | null;
 }
 
 /** A branch conduct pushed whose pull request has not opened yet. */

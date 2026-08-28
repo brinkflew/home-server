@@ -1109,6 +1109,11 @@ signal read green.
 - **Hiding a merged round needs positive evidence and the GitHub leg fails open** - `unknown` stays
   visible. It is the FIRST host-side network call the collector makes, on a third, read-only token,
   and `github` is the one source `sourceNotes` must not speak for.
+- **`chain` IS NOT A LOG**: its worktree_id is a PRIMARY KEY on a REUSED worktree and `chain_open`
+  does INSERT OR REPLACE, so it holds ONE row against eleven rounds in `run`. The board reads the run
+  log and groups on `plan`; `chain` speaks only for the round in flight. The publication join is
+  windowed in consequence, and `run.odoo_task` exists because a task id cannot be parsed out of the
+  prompt in `run.task`.
 - **The two halves deploy separately**: a SELECT naming `pr_url` before conduct migrates reads as an
   unreadable database and blanks the board. Guarded on `pragma_table_info`, caught against a copy of
   the LIVE database - every fixture already had the column. And a row written before those columns

@@ -3337,6 +3337,26 @@ three of them are the same mistake in different clothes.
   had been waiting eleven hours**, which would have been the most confidently wrong number on the
   page.
 
+### `chain` is not a log, and the board that read it drew one row out of eleven
+- **`chain.worktree_id` is a PRIMARY KEY, `chain_open` does `INSERT OR REPLACE`, and the worktree is
+  REUSED for every change** - every task this fleet has run went through `upskald-ship`. So each
+  round overwrites the last one's row and the table holds exactly ONE however much work has
+  happened. Measured: 1 row in `chain` against 67 in `run`, eleven rounds over six days. A history
+  cannot be read out of it and no amount of ordering or capping changes that.
+- **`run` is the only durable record** - AUTOINCREMENT, never deleted - so rounds are grouped out of
+  it: a `plan` run starts one, which is conduct's own definition of an attempt. `verify` runs on
+  `<worktree>-verify` and must be folded back or every round loses its gate and reads 3/5 for ever.
+- **The publication join had to become windowed in the same change.** On `worktree_id` alone it was
+  invisible with one row and wrong the instant history appeared: all ten rounds on `upskald-ship`
+  would carry the same pull request. A publication belongs to the latest round that had already
+  started when it opened. Measured: 2 of 11, and the right two.
+- **A task id cannot be parsed out of `run.task`** - that column holds the phase's whole prompt,
+  which happens to contain "(task 1251)". `run.odoo_task` exists for that reason, and it fills in
+  going forward only: an older round renders a disabled chip and hides its attempt line.
+- **The whole class of error is a premise about a table, not a bug in code.** Every fixture was
+  written by the same person who held the premise, so the entire suite was green; only counting the
+  rows the deployed collector produced from the live database disagreed.
+
 ### The two halves deploy separately, and the gap was measured rather than reasoned about
 - **A SELECT naming `publication.pr_url` before conduct has migrated raises `no such column`**, which
   `source_fleet` catches and reports as an unreadable database - so the whole board would have read
