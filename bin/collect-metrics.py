@@ -4528,15 +4528,32 @@ def _round_fresh(path, log_paths, settled):
     A SETTLED ROUND RENDERS ONCE. An unsettled one renders every pass, because
     its rows are still moving - and there is at most one or two of those. Beyond
     that the only thing that can change a finished round is a log arriving late,
-    so the document's own mtime against its inputs answers it with no index to
-    keep in step.
+    so the document's own mtime against its inputs answers it.
+
+    EXCEPT THAT A DEFERRED PHASE MUST COME BACK, and the first draft of this
+    made sure it never did. The per-run budget writes a document with some
+    phases unrendered; this then called that document current, so those phases
+    stayed unrendered for ever and the whole "a cold start converges over
+    several passes" claim was false. Measured on the live host: three
+    consecutive passes with `pending` frozen at 35 and `bytes` unchanged.
+
+    So a document carrying a budget-deferred phase is NOT fresh. `short` is the
+    discriminator rather than `rendered`, because a phase whose log has aged out
+    of LOG_RETAIN_SEC is also unrendered and will never become renderable - and
+    keying on that would re-render every old round on every pass for ever, which
+    is the same defect pointing the other way.
     """
     if not settled:
         return False
     try:
         stamp = os.path.getmtime(path)
-    except OSError:
+        with open(path, "r", encoding="utf-8") as handle:
+            existing = json.load(handle)
+    except (OSError, ValueError):
         return False
+    for phase in existing.get("phases") or []:
+        if isinstance(phase, dict) and phase.get("short"):
+            return False
     for log_path in log_paths:
         try:
             if os.path.getmtime(log_path) > stamp:
