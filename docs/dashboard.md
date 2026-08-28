@@ -34,7 +34,7 @@ from `window.location.hostname` so no build-time variable is involved.
 | **`status.json`**, served as a file at `/data/status.json` | the **prose** of the findings. The metric carries the verdict and deliberately not the message; the id is the join |
 | **`activity.json`**, every 30s | what is playing and what is in flight, **with titles** - sessions, downloads, transcodes, torrents |
 | **`library.json`**, every 5 minutes | requests, recently added, recent completions, stalled and queued files, the subtitle backlog |
-| **`fleet.json`**, every 5 minutes | what the agent fleet is doing, read out of `conduct.db`: open rounds with their task and attempt, publications pending, the last runs **with what they cost**, and why the intake last declined |
+| **`fleet.json`**, every 5 minutes | what the agent fleet is doing, read out of `conduct.db`: rounds with their task, attempt, progress, ETA and pull request, publications pending, the last runs **with what they cost**, and why the intake last declined |
 | **`apps/dashboard/src/topology.ts`**, compiled in | the segment rails and the published-port table. The topology *is* static - it is `stacks/`, in git - and only the node colouring is live |
 | **`apps/dashboard/src/paths.ts`**, compiled in | who talks to whom. Half of it lives in an application's own database, so it is **validated** rather than derived |
 
@@ -54,6 +54,74 @@ stands - `home_server_agent_quota_status` is still what paces it. `run.cost_usd`
 `total_cost_usd` from the CLI's own result event, not a price anybody invented), it had no reader at
 all, and a document keeps no history - so reporting it cannot turn into a second currency or a
 400-day series. If it ever grows one, the refusal has been reversed by accident.
+
+**THE RUN BOARD SHOWS FINISHED ROUNDS, AND EVERY OUTCOME ON IT IS STRUCTURAL.** The first cut read
+`chain WHERE closed_at IS NULL`, so a round vanished the moment it closed and `published` and
+`stopped` were states the page could never draw. What replaced it does **not** read `closed_why` -
+that is prose ("reached the publish path", "the rounds are used up"), and keying a state on those
+words is the habit this repository names as a defect everywhere else it appears. **The publication
+join says the same thing structurally**: whether a round reached the publish path is a row's
+existence, whether it published is a column on that row, and the sentence is shown to a reader
+rather than read by the code. `fixtures/smoke.mjs` rewords a `closed_why` and asserts the state does
+not move.
+
+**A CLOSED PUBLICATION CARRYING NO PULL REQUEST IS A THIRD OUTCOME**, and collapsing it into either
+neighbour loses a real distinction: the flow ended without opening one, which is what a declined
+approval and a seven-day timeout both look like. It is not a round still waiting to publish, and it
+is not a fleet that gave up before the publish path.
+
+**PROGRESS IS `chain.done`, WHICH IS PER ATTEMPT**, so the row keeps printing "attempt N of 2"
+beside it. `chain_restart` clears that list wholesale when a round starts again - a re-plan is the
+whole point of another round - so 2/5 on attempt 2 is work being redone rather than work that was
+lost, and only the attempt counter says which.
+
+**THE ETA IS A MEDIAN OF THIS HOST'S OWN COMPLETED RUNS, AND IT IS USUALLY A DASH.** conduct records
+no expectation anywhere - `flows/ship.py` has prose in its module summaries and nothing
+machine-readable - so the number is derived from what this host has actually done, over 30 days,
+successful runs only. **It is withheld entirely below five samples** rather than computed from two,
+and `phase_stats` travels with the document so the tooltip can name what it rests on. **A round
+waiting on a person carries none at all**: the remaining phases sum to a couple of minutes of
+`ship`, while the real wait is however long somebody takes to look, bounded only by the seven-day
+human timeout. "~1m" over a gate that has been waiting since last night would be the most
+confidently wrong number on the page.
+
+**TWO HALVES DEPLOY INDEPENDENTLY, AND THE FIRST VERSION TOOK THE BOARD DOWN BETWEEN THEM.** The
+collector arrives by `git pull` and the `publication.pr_url` column does not exist until conduct next
+opens the database and runs its own migration. A SELECT naming it raises `no such column: pr_url`,
+which `source_fleet` catches and reports as `conduct_db` unreadable - so the whole board would read
+"these rows are absent, not zero" over a perfectly healthy fleet for however long the two were out of
+step. **Measured against the live database before the migration had run, not reasoned about.** The
+columns are asked for on `pragma_table_info`, which is the same discriminator conduct's own `_migrate`
+uses.
+
+**AND THE FIX EXPOSED A SECOND ONE THAT WOULD HAVE BEEN PERMANENT.** A row written before those
+columns existed holds NULL whether or not it opened a pull request - a migration is a moment in time -
+so the one round this fleet has actually merged, `avanserv/upskald#249`, read **"not published"**. That
+is a confident lie that no later run would have corrected. `pr_state` is therefore `unknown` for a
+publication row this code could not have read a url off at all, and `unknown` outranks the
+"not published" claim: **a null only means "opened none" when a url would have been visible had there
+been one.**
+
+**HIDING A MERGED ROUND REQUIRES POSITIVE EVIDENCE, AND THE GITHUB LEG FAILS OPEN.** The board drops
+a round once its pull request is merged and offers the rest behind a toggle that prints its own
+count - a filter a reader cannot see is a filter that lies. `pr_state` is `unknown` whenever GitHub
+could not be asked, and an unknown round **stays**. A row disappearing because a token expired would
+be the same class of error as an empty list reading as an idle fleet, which is what this whole
+document exists to prevent. The board says so on screen rather than filtering silently.
+
+**`github` IS THE ONE SOURCE `sourceNotes` DOES NOT SPEAK FOR.** Every other upstream supplies rows,
+so "absent, not zero" is exactly right for it; GitHub supplies one *field* on rows that are already
+present and can only ever cost a merged state. The generic sentence would send a reader looking for
+missing rounds that are on the screen in front of them.
+
+**IT IS ALSO THE FIRST HOST-SIDE NETWORK CALL `bin/collect-metrics.py` MAKES.** Every other outbound
+request in that file goes through `podman exec <container> curl`, and this one cannot: the token
+must not enter a container, which is the rule `docs/ci.md` already states for the credential that
+never enters a lane. `GITHUB_PR_READ_TOKEN` is a *third* GitHub credential and deliberately so -
+the Windmill variable is `pull_requests: write` and `GITHUB_RUNNER_PAT` is org-scoped, so widening
+either would give a monitor the ability to act. It lives on the monitor rather than in conduct for
+the reason `docs/agents.md` already gives: a reconciler that stops is safe and a monitor that stops
+is blind.
 
 **AND IT MUST NEVER CARRY A RESUME URL.** Windmill's `jobs_u/resume/{id}/{resume_id}/{signature}`
 holds an HMAC in the path and needs no session, which is why `docs/agents.md` refuses it to ntfy.

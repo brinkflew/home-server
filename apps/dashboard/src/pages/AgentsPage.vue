@@ -23,7 +23,7 @@
  * that paces the fleet. The quota status does that, and it is a status rather
  * than a number on purpose.
  */
-import { computed, watch } from "vue";
+import { computed, ref, watch } from "vue";
 
 import PanelBox from "@/components/PanelBox.vue";
 import StatusDot from "@/components/StatusDot.vue";
@@ -45,6 +45,7 @@ import { useFleetStore } from "@/stores/fleet";
 import { instant, range, value } from "@/api/prometheus";
 import { AGENTS } from "@/queries";
 import { heartbeatTone, quotaTone } from "@/health";
+import { byUrgency, roundAction, roundEtaAt, roundProgress, roundState } from "@/fleet";
 import { toPoints } from "@/charts";
 import { dailyPeaks, utcDayStarts } from "@/uptime";
 import type { FleetRound, InstantSeries, Tone } from "@/types";
@@ -199,32 +200,73 @@ const stripDays = computed(() => utcDayStarts(STRIP_DAYS, host.now));
 
 // --- the document ------------------------------------------------------------
 
-const rounds = computed(() => fleet.rounds);
 const totals = computed(() => fleet.totals);
 
-/** Waiting on a person first, then oldest. The board's whole job is to put the
- *  card somebody has to act on at the top. */
-const board = computed(() => {
-  const rank = (r: FleetRound) => (r.waiting_on === "person" ? 0 : r.waiting_on === null ? 1 : 2);
-  return [...rounds.value].sort(
-    (a, b) => rank(a) - rank(b) || a.opened_at.localeCompare(b.opened_at),
-  );
-});
+/**
+ * Whether the board is showing merged rounds too.
+ *
+ * A FILTER NOBODY CAN SEE IS A FILTER THAT LIES, so the count it is holding
+ * back is printed beside the toggle whether or not it is on. Default off: a
+ * merged round is finished work and the page exists to show what is not.
+ */
+const showAll = ref(false);
 
-function roundTone(r: FleetRound): Tone {
-  if (r.waiting_on === "person") return "warn";
-  // NULL IS NOT "conduct". chain.flow_job_id names the job that stopped, so a
-  // round mid-flight matches no notice - and grey says "in flight, nobody has
-  // been asked" rather than claiming the fleet owns a step.
-  if (r.waiting_on === null) return "off";
-  return "ok";
+/**
+ * The rows, with everything derived ONCE.
+ *
+ * The template asked roundState() four times per row - for the tint, the dot,
+ * the pill and the bar's tone - and each call is a fresh object, so `v-if` on
+ * one of them could not even be compared against another. Deriving here also
+ * means the template never contains the state machine, which is the whole point
+ * of src/fleet.ts being a module.
+ */
+const board = computed(() =>
+  [...(showAll.value ? fleet.rounds : fleet.openRounds)].sort(byUrgency).map((r) => ({
+    r,
+    ...roundState(r),
+    action: roundAction(r),
+    progress: roundProgress(r),
+    eta: etaLabel(r),
+  })),
+);
+
+/** The phase in flight, and its position in the round's own sequence. Reads
+ *  "dev 2/5" while running and "done 5/5" once every phase has finished. */
+function phaseLabel(r: FleetRound): string {
+  const total = r.phases.length || 0;
+  const at = r.done.length;
+  if (!total) return r.phase ?? "no phase";
+  if (at >= total) return `done ${at}/${total}`;
+  return `${r.phase ?? "no phase"} ${at}/${total}`;
 }
 
-function roundState(r: FleetRound): string {
-  if (r.waiting_on === "person") return "waiting on you";
-  if (r.waiting_on === null) return "in flight";
-  return "with conduct";
+/**
+ * The ETA cell, which says "-" far more often than it says a number.
+ *
+ * THREE OUTCOMES, AND TWO OF THEM ARE NOT A TIME. The collector withholds the
+ * estimate entirely when any remaining phase has fewer than five completed runs
+ * behind it, and a round past its own median has an unknown remainder rather
+ * than a negative one - so that reads "overdue", which is the estimate
+ * admitting it was wrong instead of freezing at zero.
+ */
+function etaLabel(r: FleetRound): string {
+  const at = roundEtaAt(r, fleet.generatedAt);
+  if (at === null) return fmt.NO_DATA;
+  const remaining = at - host.now;
+  return remaining <= 0 ? `overdue ${fmt.coarse(-remaining)}` : `~${fmt.coarse(remaining)}`;
 }
+
+const etaTip = computed(() => ({
+  title: "ETA",
+  lines: Object.entries(fleet.phaseStats).map(
+    ([phase, stat]) =>
+      `${phase}: ${
+        stat.median_seconds === null ? "no completed runs" : fmt.duration(stat.median_seconds)
+      } (${stat.samples} samples)`,
+  ),
+  caveat:
+    "A median of this host's own completed runs of each REMAINING phase, over 30 days - conduct records no expectation anywhere, so this is derived rather than declared. It is a prediction, it has been wrong, and it is withheld entirely below five samples rather than guessed.",
+}));
 
 const CONTAINMENT = ["agents.slice_limits", "agents.runner_isolation", "agents.fleet_root_label"];
 
@@ -382,12 +424,22 @@ const costTip = computed(() => ({
       </div>
     </PanelBox>
 
-    <!-- The round board ----------------------------------------------------->
-    <PanelBox label="Rounds" :stale="fleet.stale">
+    <!-- The run board -------------------------------------------------------->
+    <PanelBox label="Runs" :stale="fleet.stale">
       <template #aside>
         <span class="mono">
-          {{ rounds.length }} open / {{ fleet.waitingOnPerson.length }} waiting on you
+          {{ fleet.openRounds.length }} live / {{ fleet.waitingOnPerson.length }} waiting on you
         </span>
+        <!-- THE COUNT IS SHOWN WHETHER OR NOT THE TOGGLE IS ON, because a
+             filter a reader cannot see is a filter that lies to them. -->
+        <button
+          v-if="fleet.settledCount > 0 || showAll"
+          type="button"
+          class="mono toggle"
+          @click="showAll = !showAll"
+        >
+          {{ showAll ? "hide merged" : `show ${fleet.settledCount} merged` }}
+        </button>
       </template>
 
       <!-- A LOCKED DATABASE IS NOT AN IDLE FLEET, and the empty list looks the
@@ -396,30 +448,97 @@ const costTip = computed(() => ({
         conduct's database could not be read in the last run. These rows are absent, not zero.
       </p>
 
-      <ul v-else-if="board.length" class="board">
-        <li v-for="r in board" :key="r.worktree_id" class="round" :class="roundTone(r)">
-          <StatusDot :tone="roundTone(r)" :live="r.waiting_on === 'person'" :size="7" />
-          <div class="rbody">
-            <p class="rtitle">
-              <span class="mono task">{{ r.odoo_task ? `#${r.odoo_task}` : r.worktree_id }}</span>
-              <span class="rsummary">{{ r.summary ?? r.ref ?? "no branch recorded" }}</span>
-            </p>
-            <p class="rmeta mono">
-              {{ r.project }} / {{ r.phase ?? "no phase" }} / attempt {{ r.attempts }} of
-              {{ r.max_attempts }} / opened {{ fmt.sinceIso(r.opened_at) }}
-            </p>
-          </div>
-          <StatePill :label="roundState(r)" :tone="roundTone(r)" size="sm" />
-          <!-- conduct's own link to the approval page, behind sign-on. NEVER a
-               resume URL - see src/api/fleet.ts. -->
-          <ChipLink v-if="r.link" label="approve" :href="r.link" title="Windmill approval page" />
-          <span v-else class="mono nolink">-</span>
-        </li>
-      </ul>
+      <!-- --cols is defined ONCE, in the stylesheet, so the header and the
+           rows cannot drift apart. Same convention as LibraryPage's table. -->
+      <div v-else-if="board.length" class="table">
+        <div class="row head mono">
+          <span>state</span>
+          <span>task</span>
+          <span>phase</span>
+          <span>progress</span>
+          <span v-bind="tip.hover('ag-eta', etaTip)">eta</span>
+          <span>pull request</span>
+          <span></span>
+        </div>
+
+        <div v-for="row in board" :key="row.r.worktree_id" class="row" :class="row.tone">
+          <span class="cell state">
+            <StatusDot
+              :tone="row.tone"
+              :live="row.r.closed_at === null && row.r.waiting_on === 'person'"
+              :size="7"
+            />
+            <StatePill :label="row.state" :tone="row.tone" size="sm" />
+          </span>
+
+          <!-- The tracker task this round is carrying. A disabled chip when
+               ODOO_URL is unset, which is also the `npm run dev` case. -->
+          <span class="cell task">
+            <ChipLink
+              :label="row.r.odoo_task ? `#${row.r.odoo_task}` : row.r.worktree_id"
+              :href="row.r.odoo_url"
+              title="open this task in the tracker"
+            />
+            <span class="tsummary" :title="row.r.summary ?? row.r.ref ?? ''">{{
+              row.r.summary ?? row.r.ref ?? "no branch recorded"
+            }}</span>
+          </span>
+
+          <span class="cell mono phase">
+            {{ phaseLabel(row.r) }}
+            <!-- ATTEMPT BESIDE PROGRESS, NOT INSTEAD OF IT. `done` is cleared
+                 when a round starts again, so 2/5 on attempt 2 is a re-plan
+                 rather than work that was lost - and only this says so. -->
+            <span class="sub">attempt {{ row.r.attempts }} of {{ row.r.max_attempts }}</span>
+          </span>
+
+          <span class="cell">
+            <ProgressBar
+              :ratio="row.progress"
+              :tone="row.tone"
+              :live="row.r.closed_at === null && row.r.waiting_on === null"
+            />
+            <span class="mono sub">opened {{ fmt.sinceIso(row.r.opened_at) }}</span>
+          </span>
+
+          <span class="cell mono eta" v-bind="tip.hover(`ag-eta-${row.r.worktree_id}`, etaTip)">{{
+            row.eta
+          }}</span>
+
+          <span class="cell mono pr">
+            <ChipLink
+              v-if="row.r.pr_url"
+              :label="row.r.pr_number === null ? 'pr' : `#${row.r.pr_number}`"
+              :href="row.r.pr_url"
+              :title="`the pull request this round opened (${row.r.pr_state})`"
+            />
+            <!-- A ROUND THAT CLOSED WITHOUT ONE IS NOT A ROUND STILL WAITING.
+                 A declined approval and a seven-day timeout both land here. -->
+            <span v-else-if="row.r.published" class="nolink">opened none</span>
+            <span v-else class="nolink">-</span>
+          </span>
+
+          <span class="cell r">
+            <ChipLink :label="row.action.label" :href="row.action.href" :title="row.action.title" />
+          </span>
+        </div>
+      </div>
+
+      <p v-else-if="fleet.settledCount > 0" class="empty mono">
+        Nothing in flight. {{ fleet.settledCount }} merged round(s) are hidden - press
+        "show merged" above.
+      </p>
 
       <p v-else class="empty mono">
         No rounds open. That is the fleet idle, which is its ordinary resting state.
       </p>
+
+      <!-- The GitHub leg fails OPEN, so this is the sentence that explains why
+           a merged round is still on the board rather than a silent filter. -->
+      <StaleNote
+        v-if="fleet.doc?.sources.github && !fleet.doc.sources.github.ok"
+        :reason="`GitHub did not answer (${fleet.doc.sources.github.error}), so no round could be confirmed merged - none is hidden`"
+      />
 
       <!-- A notice with no matching round is still an unanswered approval, and
            it must not be dropped just because chain.flow_job_id names the job
@@ -443,7 +562,10 @@ const costTip = computed(() => ({
 
     <!-- Runs, tokens, cost --------------------------------------------------->
     <section class="grid-2">
-      <PanelBox label="Runs" :stale="metricsStale">
+      <!-- A DIFFERENT UNIT FROM THE BOARD ABOVE, and the label has to say so.
+           A round is one task through five phases, so `runs_today = 6` is six
+           PHASE executions and could be one round or three. -->
+      <PanelBox label="Phase runs" :stale="metricsStale">
         <template #aside>
           <span class="mono">
             {{ fmt.number(m?.runsToday ?? Number.NaN) }} today,
@@ -642,67 +764,110 @@ const costTip = computed(() => ({
   color: var(--fg-5);
 }
 
-.board {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.round {
-  display: grid;
-  grid-template-columns: 14px minmax(0, 1fr) 108px 92px;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 11px;
-  border-radius: var(--r-xs);
-  border-left: 2px solid var(--off);
-  background: var(--fill);
-}
-
-.round.warn {
-  border-left-color: var(--warn);
-  background: var(--warn-tint);
-}
-
-.round.ok {
-  border-left-color: var(--ok);
-}
-
-.rbody {
-  min-width: 0;
-}
-
-.rtitle {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-
-.task {
-  font: var(--t-mono-sm);
-  color: var(--fg-3);
-  flex: none;
-}
-
-.rsummary {
-  font: var(--t-ui-md);
-  color: var(--fg-2);
+/* --cols DEFINED ONCE, so the header row and every body row are laid out by
+   the same declaration and cannot drift apart. LibraryPage's convention. */
+.table {
+  --cols: 132px 1.5fr 128px 1fr 84px 104px 112px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
   overflow: hidden;
-  text-overflow: ellipsis;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: var(--cols);
+  gap: 12px;
+  align-items: center;
+  padding: 7px 13px;
+  border-bottom: 1px solid var(--line-faint);
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.row.head {
+  font: var(--t-label);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--ink-faint);
+  background: var(--surface-sunken);
+}
+
+/* A tint rather than a border, so a red row does not shift the grid by a pixel
+   against the ones above and below it. */
+.row.warn {
+  background: color-mix(in srgb, var(--warn) 6%, transparent);
+}
+
+.row.fail {
+  background: color-mix(in srgb, var(--fail) 6%, transparent);
+}
+
+.cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cell.state {
+  gap: 5px;
+}
+
+.cell.phase .sub {
   white-space: nowrap;
 }
 
-.rmeta {
-  font: var(--t-mono-xs);
-  color: var(--fg-5);
-  margin-top: 2px;
+.cell.phase,
+.cell.eta {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+}
+
+.cell.r {
+  justify-content: flex-end;
+}
+
+.tsummary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-dim);
+}
+
+.cell .sub {
+  font: var(--t-micro);
+  color: var(--ink-faint);
+}
+
+/* The whole progress cell stacks, so the bar keeps its full width. */
+.row .cell:nth-child(4) {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+}
+
+.toggle {
+  margin-left: 10px;
+  padding: 1px 7px;
+  font: inherit;
+  color: var(--ink-dim);
+  background: var(--surface-sunken);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.toggle:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
 }
 
 .nolink {
-  font: var(--t-mono-xs);
-  color: var(--fg-dim);
-  text-align: center;
+  color: var(--ink-faint);
 }
 
 .orphans {

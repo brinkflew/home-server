@@ -69,6 +69,8 @@ import sqlite3
 import subprocess
 import sys
 import time
+import urllib.request
+from urllib.parse import urlparse
 
 CACHE = os.environ.get("DOCKER_VOLUME_CACHE", "/var/home-server/cache")
 TEXTFILE = os.path.join(CACHE, "textfile", "home-server.prom")
@@ -2964,6 +2966,39 @@ FLEET_MAX_ATTEMPTS = 2
 # implied, the way the requests source already caps its title lookups.
 FLEET_RUNS = 20
 
+# How many rounds. OPEN ONES ARE NEVER DROPPED - the cap applies to the closed
+# tail, because the board hides a merged round by default and the toggle needs
+# something to reveal. A count rather than a time window: a busy week must not
+# grow this file without bound and a quiet one must not empty the history.
+FLEET_ROUNDS = 40
+
+# The five conduct_* handlers in conduct/poll.py, in flow order. Duplicated for
+# the same reason FLEET_MAX_ATTEMPTS is - the collector cannot import conduct -
+# and it is the denominator of every progress bar on the Agents page.
+#
+# chain.done is APPEND-ONLY WITHIN A ROUND and chain_restart clears it wholesale,
+# so progress is progress through the CURRENT attempt. The board prints
+# "attempt N of 2" beside it; without that a second attempt reads as lost work.
+FLEET_PHASES = ("plan", "dev", "verify", "review", "ship")
+
+# The window and the floor for the ETA. A median needs enough runs behind it to
+# mean anything, and below the floor the answer is NULL - a grey dash rather
+# than a number nobody should act on. Thirty days because a phase's duration
+# tracks the project it is working on, and a year-old plan phase is evidence
+# about a different codebase.
+FLEET_ETA_WINDOW_S = 30 * 86400
+FLEET_ETA_MIN_SAMPLES = 5
+
+# How many pull requests may be asked about in one run. Only rounds this
+# document carries whose state is not already terminal are asked, so in practice
+# this is a handful; the cap is what stops a backlog of never-merged branches
+# turning a monitor into a crawler.
+FLEET_PR_MAX = 10
+
+# GitHub's API, and the only host-side network call this collector makes.
+FLEET_GITHUB_API = "https://api.github.com"
+FLEET_GITHUB_TIMEOUT = 8
+
 
 def _fleet_link(raw):
     """conduct's own link, or nothing. Never a resume URL, never constructed."""
@@ -2994,6 +3029,227 @@ def _fleet_rows(conn, sql, params=()):
     return [dict(zip(names, row)) for row in cur.fetchall()]
 
 
+def _fleet_seconds(started_at, ended_at):
+    """Elapsed seconds between two of conduct's stamps, or None.
+
+    Both are `%Y-%m-%dT%H:%M:%SZ` written by conduct's own utcnow(). A row that
+    does not parse is dropped rather than defaulted: a zero-length phase would
+    drag a median down and nothing would say why.
+    """
+    try:
+        start = calendar.timegm(time.strptime(started_at, "%Y-%m-%dT%H:%M:%SZ"))
+        end = calendar.timegm(time.strptime(ended_at, "%Y-%m-%dT%H:%M:%SZ"))
+    except (TypeError, ValueError):
+        return None
+    return end - start if end >= start else None
+
+
+def _fleet_median(values):
+    """The median of a non-empty list. Mean of the middle two when even."""
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return float(ordered[middle])
+    return (ordered[middle - 1] + ordered[middle]) / 2.0
+
+
+def _fleet_phase_stats(conn):
+    """How long each phase actually takes on THIS host, with its sample count.
+
+    THE ONLY DURATION EVIDENCE THAT EXISTS. conduct records no expectation
+    anywhere - flows/ship.py has prose in its module summaries ("dev 10-25
+    minutes") and nothing machine-readable - so an ETA is either derived from
+    what this host has done or it is invented.
+
+    SUCCESSFUL RUNS ONLY. A killed phase stopped early and a failed one may have
+    stopped anywhere, so including them would predict a shorter round the worse
+    things are going. The sample count travels with the median because the page
+    has to be able to say what the number rests on, and to refuse to draw one
+    below FLEET_ETA_MIN_SAMPLES.
+    """
+    cutoff = iso(now() - FLEET_ETA_WINDOW_S)
+    durations = {}
+    for row in _fleet_rows(conn, """
+        SELECT phase, started_at, ended_at FROM run
+         WHERE ended_at IS NOT NULL AND result = 'ok' AND started_at >= ?
+    """, (cutoff,)):
+        if row["phase"] not in FLEET_PHASES:
+            continue
+        seconds = _fleet_seconds(row["started_at"], row["ended_at"])
+        if seconds is not None:
+            durations.setdefault(row["phase"], []).append(seconds)
+
+    # EVERY PHASE IS PRESENT, with nulls where there is no evidence. A key that
+    # appears and disappears between runs forces a reader to guess which case it
+    # is in - the same contract Document's docstring states for its values.
+    stats = {}
+    for phase in FLEET_PHASES:
+        samples = durations.get(phase) or []
+        stats[phase] = {
+            "median_seconds": round(_fleet_median(samples)) if samples else None,
+            "samples": len(samples),
+        }
+    return stats
+
+
+def _fleet_eta(stats, done, phase, phase_elapsed):
+    """Seconds until this round is expected to finish, or None.
+
+    NULL IS THE ANSWER MORE OFTEN THAN A NUMBER IS, and that is the point. If
+    any remaining phase has fewer than FLEET_ETA_MIN_SAMPLES behind it, the sum
+    would be a guess wearing a median's clothes - so the whole estimate is
+    withheld rather than quietly computed from two runs.
+
+    Returns (seconds, samples) where samples is the WEAKEST evidence in the sum,
+    which is what the page's tooltip has to name. The current phase's median is
+    reduced by however long it has already been running, floored at zero: a
+    phase past its median has an unknown remainder, not a negative one.
+    """
+    remaining = [p for p in FLEET_PHASES if p not in done]
+    if not remaining:
+        return None, None
+    total = 0.0
+    weakest = None
+    for name in remaining:
+        stat = stats.get(name) or {}
+        median = stat.get("median_seconds")
+        samples = stat.get("samples") or 0
+        if median is None or samples < FLEET_ETA_MIN_SAMPLES:
+            return None, None
+        weakest = samples if weakest is None else min(weakest, samples)
+        if name == phase and phase_elapsed is not None:
+            total += max(0.0, median - phase_elapsed)
+        else:
+            total += median
+    return int(round(total)), weakest
+
+
+def _fleet_phase_started(conn, worktree_id, phase):
+    """When the phase now in flight on this worktree started, or None.
+
+    THE `run` ROW, NOT THE `lease`. A lease is taken and released around a
+    phase, so a round between phases holds none - and reading the lease would
+    make the ETA jump to the full remaining sum every time one closed. The run
+    row survives, which is what lets a phase's elapsed time be subtracted from
+    its own median.
+
+    result IS NULL is in flight rather than failed - conduct's own predicate,
+    and the one the first version of this file got backwards.
+    """
+    row = conn.execute(
+        "SELECT started_at FROM run WHERE worktree_id = ? AND phase = ?"
+        " AND result IS NULL ORDER BY id DESC LIMIT 1",
+        (worktree_id, phase),
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        return calendar.timegm(time.strptime(row[0], "%Y-%m-%dT%H:%M:%SZ"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _fleet_odoo_url(env, odoo_task):
+    """The tracker's own page for a task, or None.
+
+    BUILT HERE BECAUSE IT CANNOT BE BUILT IN THE BROWSER. src/links.ts derives
+    every sibling application from window.location.hostname and refuses a
+    build-time variable; ODOO_URL is an encrypted secret and is not a sibling of
+    home.{$DOMAIN} at all. Absent config yields None, which ChipLink already
+    renders as a disabled box - the same answer it gives under `npm run dev`.
+    """
+    base = str(env.get("ODOO_URL") or "").strip().rstrip("/")
+    if not base or not odoo_task:
+        return None
+    if not (base.startswith("https://") or base.startswith("http://")):
+        return None
+    return "%s/web#id=%s&model=project.task" % (base, int(odoo_task))
+
+
+def _fleet_pr_api(pr_url):
+    """The REST endpoint for a pull request html_url, or None.
+
+    PARSED FROM THE STORED URL RATHER THAN BUILT FROM A CONFIGURED SLUG.
+    conduct/config.py's slug cannot be imported here and copying it into .env
+    would be a second hand-maintained duplicate of a value that already exists -
+    so the repository comes from the url GitHub itself minted.
+
+    The host check is what stops a rewritten pr_url pointing this at anything
+    else: only github.com produces an api.github.com call.
+    """
+    parts = urlparse(str(pr_url or ""))
+    if parts.scheme != "https" or parts.hostname != "github.com":
+        return None
+    segments = [seg for seg in parts.path.split("/") if seg]
+    if len(segments) != 4 or segments[2] != "pull" or not segments[3].isdigit():
+        return None
+    return "%s/repos/%s/%s/pulls/%s" % (FLEET_GITHUB_API, segments[0],
+                                        segments[1], segments[3])
+
+
+def _fleet_pr_state(api_url, token):
+    """`open`, `merged`, `closed`, or None when it could not be asked.
+
+    THE ONLY HOST-SIDE NETWORK CALL IN THIS FILE. Every other outbound request
+    goes through `podman exec <container> curl`, and this one cannot: the token
+    must not enter a container, which is the same rule docs/ci.md states for the
+    credential that never enters a lane.
+
+    It lives on the monitor rather than in conduct because a reconciler that
+    stops is safe and a monitor that stops is blind - and because one dead flow
+    job has already stopped that fleet for two hours.
+    """
+    request = urllib.request.Request(api_url, headers={
+        "Authorization": "Bearer %s" % token,
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "home-server-collector",
+    })
+    with urllib.request.urlopen(request,
+                                timeout=FLEET_GITHUB_TIMEOUT) as response:
+        body = json.loads(response.read().decode("utf-8", "replace"))
+    if not isinstance(body, dict):
+        return None
+    # merged_at RATHER THAN `merged`. The boolean is present on this endpoint
+    # but absent from the list endpoint, and a closed-unmerged pull request is
+    # not a merged one - conflating them would hide a branch somebody abandoned.
+    if body.get("merged_at"):
+        return "merged"
+    state = body.get("state")
+    return state if state in ("open", "closed") else None
+
+
+def _fleet_pull_requests(doc, rounds, env):
+    """Fill in pr_state on every round that has a pull request.
+
+    IT FAILS OPEN, AND THAT IS THE WHOLE DESIGN. The board hides a round once
+    its pull request is merged, so an unreachable GitHub or an expired token
+    must leave `unknown` and keep every row visible. A round disappearing
+    because a credential lapsed is the same class of error as an empty list
+    reading as an idle fleet, and this file exists to prevent that one.
+    """
+    wanted = [r for r in rounds if r.get("pr_url")][:FLEET_PR_MAX]
+    if not wanted:
+        # NOT A FAILURE AND NOT A SUCCESS EITHER. Nothing was asked, so nothing
+        # can be reported; recording ok here would claim a credential works on a
+        # run that never used it.
+        return
+    token = str(env.get("GITHUB_PR_READ_TOKEN") or "").strip()
+    if not token:
+        doc.note("github", False, "GITHUB_PR_READ_TOKEN is not set")
+        return
+    failure = None
+    for row in wanted:
+        api_url = _fleet_pr_api(row.get("pr_url"))
+        if api_url is None:
+            continue
+        try:
+            row["pr_state"] = _fleet_pr_state(api_url, token) or "unknown"
+        except Exception as exc:  # noqa: BLE001 - a monitor may not raise
+            failure = failure or ("%s" % exc)
+    doc.note("github", failure is None, failure)
+
+
 def _fleet_waiting(module_id):
     """Who owes this step an answer.
 
@@ -3019,6 +3275,8 @@ def source_fleet(m, doc):
     doc.set("notices", [])
     doc.set("runs", [])
     doc.set("intake", [])
+    doc.set("phase_stats", {p: {"median_seconds": None, "samples": 0}
+                            for p in FLEET_PHASES})
     doc.set("totals", {"runs_today": None, "runs_failed_today": None,
                        "tokens_today": None, "tokens_week": None,
                        "cost_today": None, "cost_week": None,
@@ -3041,6 +3299,10 @@ def source_fleet(m, doc):
 
         midnight = time.strftime("%Y-%m-%dT00:00:00Z", time.gmtime(now()))
         week_ago = iso(now() - 7 * 86400)
+        # ONCE PER RUN, not once per row. load_env degrades to {} rather than
+        # raising - there is a window during render-env.sh when the file is half
+        # written, and it must cost the links and nothing else.
+        env = load_env()
 
         notices = _fleet_rows(conn, """
             SELECT flow_job_id, module_id, project, kind, summary, link,
@@ -3054,11 +3316,55 @@ def source_fleet(m, doc):
             row["summary"] = _fleet_text(row.get("summary"), 240)
             by_job.setdefault(row.get("flow_job_id"), []).append(row)
 
+        # OPEN ROUNDS FIRST, THEN THE CLOSED TAIL, and the cap applies only to
+        # the tail. Reading `closed_at IS NULL` - which this did until the board
+        # grew a history - meant a round vanished the moment it closed, so
+        # "published" and "stopped" were states the page could never draw.
+        #
+        # The ORDER BY sorts open rows (closed_at NULL) ahead of closed ones and
+        # then puts the most recent first within each group, so the LIMIT can
+        # only ever discard old closed rounds.
         rounds = _fleet_rows(conn, """
             SELECT worktree_id, project, odoo_task, ref, phase, opened_at,
-                   attempts, flow_job_id, head, resumed_at
-              FROM chain WHERE closed_at IS NULL ORDER BY opened_at
-        """)
+                   attempts, flow_job_id, head, resumed_at, closed_at,
+                   closed_why, done
+              FROM chain
+             ORDER BY closed_at IS NOT NULL, COALESCE(closed_at, opened_at) DESC
+             LIMIT ?
+        """, (FLEET_ROUNDS,))
+        stats = _fleet_phase_stats(conn)
+
+        # THE PUBLICATION JOIN IS WHAT MAKES THE OUTCOME STRUCTURAL. closed_why
+        # is prose - "reached the publish path", "the rounds are used up" - and
+        # keying a state on it would be parsing a message, which is the habit
+        # this repository names as a defect everywhere else. Whether a round
+        # reached the publish path is a row's existence; whether it published is
+        # a column on that row.
+        # THE PR COLUMNS ARE ASKED FOR ONLY IF THEY EXIST, and that is a
+        # deployment-ordering fix rather than defensiveness.
+        #
+        # This file and conduct deploy independently: a `git pull` brings the
+        # new SELECT in, and the columns do not appear until conduct next opens
+        # the database and runs its own migration. Naming them unconditionally
+        # raises `no such column: pr_url`, which this function catches and
+        # reports as `conduct_db` unreadable - so the whole Agents board would
+        # read "these rows are absent, not zero" over a perfectly healthy fleet
+        # for however long the two halves were out of step. MEASURED against the
+        # live database before the migration had run, not reasoned about.
+        #
+        # pragma_table_info is the same discriminator conduct's own _migrate
+        # uses, and for the same reason: CREATE TABLE IF NOT EXISTS does not add
+        # a column to an existing table.
+        columns = {row[1] for row in
+                   conn.execute("SELECT * FROM pragma_table_info('publication')")}
+        has_pr = "pr_url" in columns and "pr_number" in columns
+        by_worktree = {}
+        for row in _fleet_rows(conn, """
+            SELECT worktree_id, branch, closed_at, opened_at%s
+              FROM publication ORDER BY opened_at
+        """ % (", pr_url, pr_number" if has_pr else "")):
+            by_worktree[row["worktree_id"]] = row
+
         for row in rounds:
             # BEST EFFORT, AND NULL WHERE IT CANNOT BE KNOWN. chain.flow_job_id
             # is the job that STOPPED, not the one running - state.py says so -
@@ -3073,6 +3379,72 @@ def source_fleet(m, doc):
             row["link"] = person[0]["link"] if person else None
             row["summary"] = person[0]["summary"] if person else None
             row["max_attempts"] = FLEET_MAX_ATTEMPTS
+            row["kind"] = person[0]["kind"] if person else (
+                matched[0]["kind"] if matched else None)
+
+            # Progress through the CURRENT attempt. chain_restart clears `done`
+            # wholesale when a round starts again, which is why the board must
+            # keep printing "attempt N of 2" beside this - without it a second
+            # attempt reads as work that was lost.
+            try:
+                done = [p for p in json.loads(row.pop("done") or "[]") or []
+                        if p in FLEET_PHASES]
+            except (TypeError, ValueError):
+                done = []
+            row["done"] = done
+            row["phases"] = list(FLEET_PHASES)
+            row["closed_why"] = _fleet_text(row.get("closed_why"), 200)
+            row["odoo_url"] = _fleet_odoo_url(env, row.get("odoo_task"))
+
+            published = by_worktree.get(row["worktree_id"]) or {}
+            row["branch"] = published.get("branch")
+            row["pr_url"] = _fleet_link(published.get("pr_url"))
+            row["pr_number"] = published.get("pr_number")
+            # PUBLISHED AT ALL, which is a different question from "merged".
+            # A closed publication with no pr_url is a flow that ended without
+            # opening one - a declined approval, a seven-day timeout - and that
+            # must not read as a round still waiting to publish.
+            row["published"] = bool(published) and published.get(
+                "closed_at") is not None
+
+            # "unknown" IS NOT ONLY GITHUB BEING DOWN. It also covers a
+            # publication row this collector could not read a pull request off
+            # at all, which is every row that predates the two columns - a
+            # migration is a moment in time and rows written before it hold NULL
+            # whether or not they opened one.
+            #
+            # Without this the single historical row on this host, which really
+            # did open avanserv/upskald#249, would read "not published" for
+            # ever. A null pr_url only means "opened none" when this code could
+            # have seen a url had there been one.
+            if row["pr_url"]:
+                row["pr_state"] = "unknown"
+            elif row["published"] and not has_pr:
+                row["pr_state"] = "unknown"
+            else:
+                row["pr_state"] = None
+
+            # NULL WHENEVER THE EVIDENCE IS THIN, which is most of the time on a
+            # young fleet. _fleet_eta withholds the whole sum rather than
+            # computing one from two runs.
+            elapsed = None
+            if row["closed_at"] is None and row.get("phase"):
+                started = _fleet_phase_started(conn, row["worktree_id"],
+                                               row["phase"])
+                if started is not None:
+                    elapsed = max(0, now() - started)
+            # NO ETA WHILE A PERSON OWES AN ANSWER, and this is not a detail.
+            # The remaining phases sum to the MACHINE's work - a couple of
+            # minutes of `ship` for a round sitting on the publish gate - while
+            # the actual wait is however long somebody takes to look, bounded
+            # only by conduct's seven-day HUMAN_TIMEOUT. Drawing "~1m" over a
+            # round that has been waiting since last night would be the most
+            # confidently wrong number on the page.
+            waiting = row["waiting_on"] == "person"
+            eta, samples = (None, None) if row["closed_at"] or waiting else _fleet_eta(
+                stats, set(done), row.get("phase"), elapsed)
+            row["eta_seconds"] = eta
+            row["eta_samples"] = samples
 
         publications = _fleet_rows(conn, """
             SELECT job_id, project, worktree_id, odoo_task, branch, opened_at
@@ -3126,6 +3498,15 @@ def source_fleet(m, doc):
         totals["rounds_open"] = len(rounds)
         totals["publications_pending"] = len(publications)
 
+        # LAST, AND OUTSIDE THE ROW LOOP. It is the only network call in this
+        # file and it must not sit between two database reads holding a
+        # read-only connection open across eight seconds of someone else's
+        # latency. It fails open: every row stays visible and pr_state stays
+        # "unknown", because a round must never disappear because a token
+        # expired.
+        _fleet_pull_requests(doc, rounds, env)
+
+        doc.set("phase_stats", stats)
         doc.set("rounds", rounds)
         doc.set("publications", publications)
         doc.set("notices", notices)
