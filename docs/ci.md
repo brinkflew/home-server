@@ -64,7 +64,6 @@ written down because that is the only thing that can be done about them.
 ```
 preflight (once)   config, image, lane dirs, net-ci-<n>, seed the runner tree
 loop:
-  hold             lane 2 only, while a conduct phase is in flight
   gc               if the lane is over its disk budget
   reap             offline registrations this lane left behind
   mint             POST /orgs/<org>/actions/runners/generate-jitconfig

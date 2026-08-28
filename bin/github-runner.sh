@@ -121,7 +121,6 @@ NET="net-ci-$LANE"
 # living somewhere the backup happens to walk.
 ARTIFACTS="${GITHUB_RUNNER_ARTIFACTS:-$FLEET_ROOT/artifacts}"
 MARKER="${HOME_SERVER_CI_STATE:-${HOME:-/var/home/core}/.cache/home-server/ci-state-$LANE}"
-CONDUCT_STATE="${HOME_SERVER_CONDUCT_STATE:-${HOME:-/var/home/core}/.cache/home-server/conduct-state}"
 
 LABELS="${GITHUB_RUNNER_LABELS:-self-hosted,Linux,X64,home-server}"
 IDLE_SEC="${GITHUB_RUNNER_IDLE_SEC:-1800}"
@@ -494,48 +493,36 @@ preflight() {
 }
 
 # ------------------------------------------------------------------------------
-# Holding every lane above the first while the agent fleet is working
+# Every lane takes work, including while the agent fleet is working
 # ------------------------------------------------------------------------------
-# BUSY ONLY WHEN THE MARKER SAYS BUSY *AND* ITS HEARTBEAT IS FRESH. conduct
-# killed mid-phase leaves phase_in_flight=1 behind for ever, and a stale flag
-# that holds a lane indefinitely is a lane that silently stops taking work - the
-# same reasoning, and the same 600-second window, bin/reboot-when-staged.sh uses.
+# THIS IS WHERE THE HOLD USED TO BE, and it is named rather than simply deleted
+# because its absence is now load-bearing. Until 2026-08-28 a `phase_in_flight()`
+# predicate parked every lane above the first whenever conduct had a phase in
+# flight, so that the whole CI fleet and a model phase could not peak together on
+# a 15.8 GB host. It was removed deliberately: measured over 08:18-10:35 that
+# morning it was holding lanes 2 and 3 for some 36-38% of the window, having been
+# sized when the fleet was two lanes and it held exactly one - so it had quietly
+# become the reason CI ran at roughly one lane through a working day.
 #
-# LANE 1 IS NEVER HELD, AND EVERY LANE ABOVE IT IS. The point is to stop the
-# whole CI fleet and a phase peaking together on a 15.8 GB host, not to stop CI.
-# The predicate is a comparison against 1 rather than a list, so a third lane
-# joined the held set on 2026-08-27 without an edit - which is the behaviour that
-# was wanted, and is stated here because silence is not consent: holding two of
-# three during a phase is a deliberate widening of what this yields, not an
-# oversight in what it names.
+# WHAT BOUNDS THE HOST NOW IS THE CGROUP CEILINGS AND NOTHING ELSE, which is a
+# genuinely weaker guarantee and is stated plainly here rather than discovered
+# later. app-ci.slice caps at 9,984M and app-agents.slice at 4,608M; that sums to
+# 14,592M of 15,828M, so the two slices can no longer be assumed not to coincide
+# and their overlap is now real rather than theoretical. What makes that
+# survivable is that neither slice has ever approached its ceiling: a lane's
+# measured peak is 2,817M of its 3,584M scope limit and the fleet's 30-day median
+# is 957M against p90 1,455M, so three lanes and a phase at their observed peaks
+# come to roughly 9.9 GB, not 14.6. The ceilings squeeze before the kernel picks
+# a victim, which is the property that has to keep holding.
 #
-# WHAT THIS COSTS IS UNMEASURED ON THE CURRENT SHAPE, and the claim that used to
-# stand here is deleted rather than restated. It read "at a measured 6.9% phase
-# duty cycle this costs almost nothing and CI never drops to zero", off a 30-day
-# mean of home_server_agent_phase_in_flight taken when the fleet was two lanes
-# and this held exactly one of them. Both halves of that premise then moved: the
-# third lane took the held set to two of three, and the fleet began chaining
-# rounds with no gap between them. A spot reading on 2026-08-28 over 08:18-10:35
-# put lanes 2 and 3 in the hold for roughly 49 and 51 of 137 minutes - about
-# 36-38%, five times the figure the sentence rested on. That is one window on one
-# busy morning and NOT a replacement measurement, which is exactly why no number
-# is asserted here now. The 30-day mean is the thing to re-read before this is
-# tuned; until then the hold stands as written and is being watched in normal
-# use. Narrowing it - holding only the lanes above the second, say - is the
-# obvious lever and is deliberately not pulled on a two-hour sample.
-phase_in_flight() {
-	[ "$LANE" = 1 ] && return 1
-
-	local flag hb hb_epoch age
-	flag=$(sed -n 's/^phase_in_flight=//p' "$CONDUCT_STATE" 2>/dev/null | tail -1)
-	[ "${flag:-0}" = 1 ] || return 1
-
-	hb=$(sed -n 's/^heartbeat_at=//p' "$CONDUCT_STATE" 2>/dev/null | tail -1)
-	[ -n "$hb" ] || return 1
-	hb_epoch=$(date -d "$hb" +%s 2>/dev/null) || return 1
-	age=$(( $(date +%s) - hb_epoch ))
-	[ "$age" -le 600 ]
-}
+# WHAT TO WATCH, because this trades a scheduling guarantee for a measurement:
+# `ci.lane_headroom` already grades a lane against its own scope, and the numbers
+# that would say this was wrong are app-ci.slice's memory.events `max` becoming
+# non-zero, `oom_kill` becoming non-zero anywhere, or host swap growing rather
+# than sitting flat. A lane being throttled at MemoryHigh is the design working
+# and is NOT the signal. If it does need to come back, it should come back
+# narrower than it was - holding only the lanes above the second - and on a
+# measurement rather than on this paragraph.
 
 # ------------------------------------------------------------------------------
 # The lane store: what resets it, and the evidence that outlives the reset
@@ -906,23 +893,6 @@ log "lane $LANE ready: cpus $LANE_CPUS, org $GITHUB_RUNNER_ORG, group $GITHUB_RU
 
 while [ "$stopping" = 0 ]; do
 	marker_write 0
-
-	while phase_in_flight && [ "$stopping" = 0 ]; do
-		log "a conduct phase is in flight - holding this lane (lane 1 keeps taking jobs)"
-		nap 60
-		# THE SAME DEFECT AS THE IDLE CASE FURTHER DOWN, in the one other place
-		# this loop can sit still. `nap` samples the scope and writes nothing, so
-		# without this the marker moved once per HOLD - not once per poll - and a
-		# held lane went stale for as long as the phase ran. ci.heartbeat grades
-		# at 300s and a dev phase runs past thirty minutes, so every phase longer
-		# than five minutes warned on two perfectly healthy lanes: measured at
-		# 710s and 258s on lanes 3 and 2 on 2026-08-28, units active, no
-		# restarts, registrations online. Holding IS the normal state - it is
-		# what a lane above the first does while the fleet works - and a check
-		# that fires on the normal case is a check somebody learns to ignore.
-		marker_write 0
-	done
-	[ "$stopping" = 0 ] || break
 
 	gc_lane
 	reap_offline
