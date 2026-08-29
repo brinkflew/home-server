@@ -3826,3 +3826,54 @@ three of them are the same mistake in different clothes.
   site was. The bar renders only in flight now, and the line under the reading says WHICH nothing:
   `no phase running` against `no phase has started on this host`.
 - The band was also labelled `Fleet` directly under a sub-nav whose other segment is `Fleet`.
+
+### The fixture gave every round a distinct id and the live board gives them all one
+- **The task chip fell back to the WORKTREE ID, which names a lane and not a round.** A worktree is
+  reused between changes by design, so ten of the eleven live rounds carried the identical grey chip
+  `upskald-ship` at the top of the cell - above the summary that was the only line telling them
+  apart. A fallback that is the same on every row is not an identifier. The chip is the tracker task
+  or nothing now, and the worktree id is the TITLE's last fallback, where it costs no line.
+- **The same string was the `v-for` key and the per-row tooltip id.** Vue does not warn about a
+  duplicate key and a list that never reorders renders correctly anyway, so nothing caught it; a
+  keyed diff over a list that DOES reorder may reuse the wrong node. The round's document name is
+  unique because it carries the start time.
+- **Every fixture round has a distinct worktree id and one in ten has no task id. The live board is
+  the exact mirror: one worktree, ten rounds, one task id.** So no screenshot review and no
+  `shoot.mjs` run at any viewport could ever have shown either of these - the fixture models as an
+  edge case the thing that is the rule.
+
+### A class on a component is not a class on the element you meant
+- `class="fold3"` on a `ChipLink` lands on the component's ROOT, where its own scoped
+  `.chip { display: inline-flex }` is one class more specific than a bare `.fold3` - so the fold
+  never hid and the wide board printed the branch twice, once in the meta line and once in the
+  Outcome column it had not dropped. A wrapper element is the fix.
+- **An EMPTY wrapper is still a flex item and still costs a gap**, which is a 12px hole between two
+  visible things on the rows where the round has no branch yet. `display: contents` removes it - and
+  only inside the rung, or it outranks the `display: none` that has to win above it.
+
+### A column priced at 48% of the table for one word, and the worst width was a laptop
+- **The narrowest the task column ever got was at 1000px, not on a phone.** Six columns carry 814px
+  of FIXED width, so a 1000px window left the one flexible column **104px** - about thirteen
+  characters - and nothing on the ladder between 1180 and 900 caught it. Cost and Outcome now drop
+  at 1180 on a `.p4` tier, which is a tier on an existing rung and not a re-rung of `.p3`: the round
+  page's five-column table still gives its flexible column 384px at 920 and needed none of it.
+- **Dropping columns at 900 was not enough either.** 168 + 282 + 140 of fixed width left an 834px
+  tablet 162px, so Time leaves at that rung too - the narrowest column and the one most often empty,
+  since the ETA half is withheld below five samples. Phase stays: the progress bar is the round's
+  only picture of itself. The phase sub line truncates at 200px, which is the trade.
+- **At 640 the state column was 156px of 328 with about 70px of it empty.** That width was measured
+  twice and both readings were right ABOUT THE PILL; neither asked whether the COLUMN was worth its
+  width once only two were left. It folds into the task cell now, keeping its left edge, its dot,
+  its tone and its link, so the scan down for `waiting on you` is unchanged.
+- A header row over one column names nothing, and `TASK` had stopped being true of a cell that now
+  holds the state as well.
+
+### Packed-left wrapping is a layout until the row runs out
+- **The header's three conditions sit on one line from 1360 down to 760 and break 2 + 1 at 640** -
+  intake and quota side by side, worktrees alone underneath. Two unequal columns, three labels that
+  no longer align, and no column to read down at the width where reading down matters most. The
+  label moves to the left of its value below 640.
+- The label column is `max-content` through a `subgrid` with a measured 82px literal behind it -
+  `WORKTREES` is 73px at `--t-label`. All three rows share the literal, so they align without
+  subgrid too; subgrid is what keeps it true if the type scale moves, which is the failure `fitRole`
+  already paid for once.

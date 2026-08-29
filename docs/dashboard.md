@@ -85,7 +85,27 @@ content, so the band read as a sparse row of unrelated numbers with no primary a
 air. Every fact it carried is still there; what changed is that they stopped being peers. The phase
 state is the headline in `--t-mono-xl`, which `tokens.css` describes as *"the one headline
 reading"* and which nothing consumed until now. The conditions - intake, quota, worktrees - pack
-left at content width under a hairline, which is also the whole of their phone layout.
+left at content width under a hairline.
+
+**THAT WAS ALSO CLAIMED TO BE THE WHOLE OF THEIR PHONE LAYOUT, AND IT WAS NOT.** Measured across
+eight widths on 2026-08-29: the three conditions sit on **one line from 1360 all the way down to
+760**, and at 640 they break **2 + 1** - intake and quota side by side, worktrees alone underneath.
+That is not a layout, it is where the row happened to run out. The two columns are different
+widths, the three labels stop aligning, and there is no column left to read down at the width where
+reading down matters most.
+
+**So below 640 the label moves to the left of its value.** Three rows, one condition each, labels
+in a column of their own, captions indented under their value rather than spanning back under the
+label - full width would save the worktrees caption a line and would also put a caption where the
+eye is hunting for the next label. It costs about 16px of height against the ragged version and
+reads like a readout instead of an accident. Above 640 nothing changed: packed-left wrapping is the
+right answer at every width where the row still fits on one line, which is every width above ~660.
+
+**The label column is `max-content` through a `subgrid`, with a measured literal behind it.**
+`WORKTREES` is 73px at `--t-label`, so the fallback track is 82px and all three rows share it -
+they align on the literal even where subgrid is unavailable. Subgrid is what keeps that true if the
+type scale ever moves, which is precisely the failure mode a lone literal has here and which
+`fitRole`'s hardcoded 5.9 already cost once.
 
 **One panel with internal hierarchy is not a bento.** The band rule governs panels *within* a band,
 full width or N equal columns; this is a single full-width panel and the rule is untouched.
@@ -170,11 +190,44 @@ toolbar indented under it, three rows for two things. There is still exactly **o
 element: eight pages teleport into it and a second target would be two answers to one question.
 
 **A LIST OF RECORDS IS STILL A TABLE ON A PHONE.** Six columns do not fit 375px, so `.tbl` gained
-**column priority**: `.p3` drops at 900, `.p2` at 640, and `.fold3` / `.fold2` are lines inside the
-surviving cell that appear only once their own column has gone. Nothing is lost, it relocates -
+**column priority**, one tier per rung: `.p4` drops at 1180, `.p3` at 900, `.p2` at 640, and
+`.fold4` / `.fold3` / `.fold2` are lines inside the surviving cell that appear only once their own
+column has gone. Nothing is lost, it relocates -
 and on the round board the row still links to the round's own page, which holds all of it either
 way. `display: none` on a `th`/`td` removes the column outright under `table-layout: fixed`, which
 is what makes this one global rule rather than a width recalculation per table.
+
+**DROPPING TWO COLUMNS AT 900 WAS NOT ENOUGH ON THE ROUND BOARD, AND THE TABLET IS WHERE THAT
+SHOWED.** The four that remain are `168 + 282 + 140` of **fixed** width, so on an 834px tablet the
+task column - the only flexible one - was left **162px**, which is about twenty characters of a
+sentence: the same reading the phone had, at more than twice the width. Narrowing the two widest is
+what actually hands the width over; `168 + 200 + 112` leaves the task 272px at 834. The phase
+cell's own sub line truncates at 200px where it did not at 282, which is the trade, and it carries
+a `title`. The alternative was dropping the progress bar, which is the round's only picture of
+itself.
+
+**And at 640 the state column was 156px of a 328px table - 48% for one word**, with about 70px of
+it empty, while the task itself had 158px. That width was measured twice and both measurements were
+right *about the pill*; what neither asked was whether the **column** was still worth its width
+once only two of them were left. It folds now: the pill moves into the task cell keeping its left
+edge, its dot, its tone and its link to the round, so scanning down for `waiting on you` is
+unchanged and the task takes all 328px. The rail moves with it - `--rail` is set on the row rather
+than the cell, so whichever cell is first can draw it. The header row goes too: `TASK` over one
+column names nothing, and that column no longer holds only the task.
+
+**THE CELL LEADS WITH THE TASK, WHICH IT DID NOT.** It opened with the tracker chip, and that chip
+falls back to the **worktree id** when the collector has no task id - see the finding below. The
+title is the line that tells one row from another, so it goes first, and everything else is one
+wrapping meta line under it: the chip, then whatever the dropped columns handed over. At 640 the
+title gets a two-line clamp, which is `FindingsPanel`'s - the only other place here that has to fit
+prose into a table cell.
+
+**An absent value arrives as nothing, not as a dash.** Under a column header `-` reads as *"no cost
+recorded"*; on an unlabelled meta line it is a dash between two chips, which is how a round with no
+pull request rendered `- $2.47` on a phone. `opened none` stays, because that is a claim rather
+than an absence. The items carry no separator at all - every one of them is self-labelling
+(`ship 4/5`, `took 2h`, `$8.28`), and a separator that has to hide together with its own neighbour
+is how the dash got there in the first place.
 
 **The four hand-rolled racks are panned instead, and that is repair rather than design.** Services
 floors at ~784px, CI at ~748px, Library at ~666px and the System timeline at 320px before its chart

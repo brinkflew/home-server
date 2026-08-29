@@ -1284,6 +1284,34 @@ signal read green.
   the bar renders only in flight, and the sub-line says which nothing it is.
 - The band was labelled `Fleet` directly under a sub-nav whose other segment is `Fleet`.
 
+### The fixture gave every round a distinct id and the live board gives them all one
+- The task chip fell back to the WORKTREE ID, which names a lane, and a worktree is reused - so ten
+  of eleven live rounds opened with the identical chip, above the one line that told them apart.
+- The same string was the `v-for` key and the tooltip id. Vue does not warn, and a list that never
+  reorders renders correctly anyway.
+- Every fixture round has a distinct worktree id and the live board has one. No screenshot at any
+  viewport could have shown either.
+
+### A class on a component is not a class on the element you meant
+- `class="fold3"` on a `ChipLink` lands on its root, where the component's own `.chip` is one class
+  more specific - so the fold never hid and the wide board printed the branch twice.
+- An EMPTY wrapper is still a flex item and still costs a gap; `display: contents` inside the rung
+  only, or it outranks the `display: none` that has to win above it.
+
+### A column priced at 48% of the table for one word, and the worst width was a laptop
+- The task column's narrowest reading was 104px at a 1000px WINDOW, not on a phone: six columns of
+  814px fixed width, with nothing on the ladder between 1180 and 900. A `.p4` tier on the 1180 rung.
+- Dropping columns at 900 left 590px fixed, so an 834px tablet gave the flexible column 162px; Time
+  leaves there too. The state column was 156px of 328 at 640, about 70px of it empty.
+- Both pill measurements were right ABOUT THE PILL; neither asked whether the COLUMN was worth it.
+- A header row over one column names nothing.
+
+### Packed-left wrapping is a layout until the row runs out
+- The header's three conditions hold one line from 1360 to 760 and break 2 + 1 at 640 - two unequal
+  columns and three labels that no longer align. Below 640 the label moves left of its value.
+- `max-content` through a `subgrid`, with a measured 82px literal behind it, because a lone literal
+  is the failure `fitRole` already paid for.
+
 
 ## Target architecture
 

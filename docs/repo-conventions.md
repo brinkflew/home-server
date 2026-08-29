@@ -144,7 +144,7 @@ inventing a fourth.
 
 | Rung | | What changes |
 |---|---|---|
-| **1180** | the fold | `Band` goes to one column. `Band.vue` states it and names the 1360x860 reference viewport. |
+| **1180** | the fold | `Band` goes to one column. `Band.vue` states it and names the 1360x860 reference viewport. `.tbl` drops its `.p4` columns. |
 | **900** | tablet | N-up tile grids fold; the four hand-rolled racks and the network drawing gain a scroller; `.tbl` drops its `.p3` columns; the nav becomes a drawer. |
 | **640** | phone | The header sticks and `--pad-page` tightens to 14px; `.tbl` drops its `.p2` columns. |
 
@@ -163,11 +163,23 @@ exceptions are chrome insets, not type: `--pad-chip` and `--pad-control` GROW un
 `@media (pointer: coarse)`. The tokens move rather than the call sites, which is one edit instead
 of forty.
 
-**Column priority is how a table survives a phone.** `.p3` drops at 900 and `.p2` at 640;
-`.fold3` / `.fold2` are lines inside the surviving cell that appear only once their own column has
-gone, so a fact relocates rather than disappearing. Put a fold OUTSIDE any clamped element -
-`FindingsPanel`'s `.msg` is a two-line clamp, and an id nested inside it spent one of the message's
-two lines.
+**Column priority is how a table survives a narrow window, and it is one tier per rung.** `.p4`
+drops at 1180, `.p3` at 900 and `.p2` at 640; `.fold4` / `.fold3` / `.fold2` are lines inside the
+surviving cell that appear only once their own column has gone, so a fact relocates rather than
+disappearing. Put a fold OUTSIDE any clamped element - `FindingsPanel`'s `.msg` is a two-line
+clamp, and an id nested inside it spent one of the message's two lines.
+
+**`.p4` is not a phone tier and that is the point.** The round board is the only six-column table
+here and carries 814px of FIXED width, which is more than the 1180 rung leaves the one flexible
+column it has: at a 1000px window the task title had **104px**, about thirteen characters, on an
+ordinary laptop. Nothing else needed it - the round page's five-column table still gives its
+flexible column 384px at 920 - so it is a tier on an existing rung rather than a re-rung of `.p3`.
+
+**A FOLD MUST BE A WRAPPER ELEMENT AND AN EMPTY WRAPPER MUST COST NOTHING.** A fold class put on a
+COMPONENT lands on that component's root, where its own scoped rule (`ChipLink`'s
+`.chip { display: inline-flex }`) is one class more specific than a bare `.fold4` - so the fold
+never hides. Wrap it; then give the wrapper `display: contents` inside the rung, or an empty one is
+still a flex item opening a gap between two visible things.
 
 **And `overflow-x: hidden` on `body` is refused.** It conceals the class of defect the ladder
 exists to remove, and conceals it worst on touch, where the scrollbar is an overlay and a page

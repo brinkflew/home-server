@@ -270,14 +270,32 @@ a:hover {
    illegibility - and the facts that column carried move into a line under the
    cell that survives, so nothing is lost, it relocates.
 
-   .p3 goes at the tablet rung and .p2 at the phone rung, cumulatively, since
-   640 is inside 900. .fold3 / .fold2 are the mirror: hidden until their own
-   column has gone. display:none on a th or td removes the column outright
-   under table-layout: fixed, which is what makes this one rule rather than a
-   width recalculation per table. */
+   ONE TIER PER RUNG: .p4 goes at 1180, .p3 at 900 and .p2 at 640,
+   cumulatively, since each rung is inside the one above it. .fold4 / .fold3 /
+   .fold2 are the mirror: hidden until their own column has gone. display:none
+   on a th or td removes the column outright under table-layout: fixed, which
+   is what makes this one rule rather than a width recalculation per table.
+
+   .p4 EXISTS BECAUSE ONE TABLE HAS SIX COLUMNS. The round board carries 814px
+   of FIXED width, which is more than the 1180 rung leaves for the one flexible
+   column it has: at a 1000px window the task title had 104px, about thirteen
+   characters, on an ordinary laptop and not on a phone at all. Nothing else
+   here needs it - the round page's own five-column table still gives its
+   flexible column 384px at 920 - so it is a tier rather than a re-rung. */
+.fold4,
 .fold3,
 .fold2 {
   display: none;
+}
+
+@media (max-width: 1180px) {
+  .tbl .p4 {
+    display: none;
+  }
+
+  .fold4 {
+    display: block;
+  }
 }
 
 @media (max-width: 900px) {

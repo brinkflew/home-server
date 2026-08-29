@@ -36,7 +36,7 @@ import { heartbeatTone, quotaTone } from "@/health";
 import { roundKey } from "@/api/round";
 import { byUrgency } from "@/fleet";
 import { boardRow } from "@/roundboard";
-import type { InstantSeries, Tone } from "@/types";
+import type { FleetRound, InstantSeries, Tone } from "@/types";
 import * as fmt from "@/format";
 
 const tip = useTooltip();
@@ -159,7 +159,21 @@ const board = computed(() => {
   };
   return [...(showAll.value ? fleet.rounds : fleet.openRounds)]
     .sort(byUrgency)
-    .map((r) => ({ ...boardRow(r, ctx), key: roundKey(r.worktree_id, r.started_at) }));
+    .map((r, i) => {
+      const key = roundKey(r.worktree_id, r.started_at);
+      // THE WORKTREE ID IS NOT A ROUND ID. It names the LANE, and a worktree is
+      // reused between changes by design - so on this host it is the identical
+      // string on ten open rounds out of eleven, and it was the v-for key and
+      // the per-row tooltip id. Vue does not warn about a duplicate key and a
+      // list that never reorders renders correctly anyway, which is why nothing
+      // caught it; a keyed diff over a list that DOES reorder may reuse the
+      // wrong node. `key` is the document name, which carries the start time.
+      //
+      // EVERY FIXTURE ROUND HAS A DISTINCT WORKTREE ID, so no screenshot and no
+      // shoot.mjs run could have shown this. The live board is the mirror of
+      // the fixture: one worktree, ten rounds.
+      return { ...boardRow(r, ctx), key, uid: key ?? `${r.worktree_id}-${i}` };
+    });
 });
 
 // --- tooltips ----------------------------------------------------------------
@@ -206,6 +220,20 @@ const costTip = computed(() => ({
   caveat:
     "conduct's own tally from the CLI's result event, not a price anybody invented - and it is reported, never retained. There is deliberately no dollar metric and no spend ceiling: the quota status is what paces the fleet, so this can be read and cannot become a second currency.",
 }));
+
+/**
+ * The one line that names this round.
+ *
+ * THE WORKTREE ID IS THE LAST FALLBACK AND IT USED TO BE THE FIRST THING IN THE
+ * CELL. The tracker chip read `#<task>` when the collector had a task id and the
+ * worktree id when it did not - and ten of the eleven live rounds have no task
+ * id, so the board opened every row with the same grey chip reading
+ * `upskald-ship`, above the summary that was the only line telling them apart.
+ * A fallback that is identical on every row is not an identifier.
+ */
+function taskName(r: FleetRound): string {
+  return r.summary ?? r.ref ?? r.worktree_id;
+}
 
 /** The rail, off the same tone the dot reads, so the two cannot drift. */
 function rail(tone: Tone): string {
@@ -332,26 +360,27 @@ function rail(tone: Tone): string {
       <table v-else-if="board.length" class="tbl">
         <thead>
           <tr>
-            <th class="c-state">State</th>
+            <th class="c-state p2">State</th>
             <th>Task</th>
             <th class="c-phase p2">Phase</th>
-            <th class="c-time p2" v-bind="tip.hover('ag-eta', etaTip)">Time</th>
-            <th class="c-cost r p3" v-bind="tip.hover('ag-cost', costTip)">Cost</th>
-            <th class="c-out p3">Outcome</th>
+            <th class="c-time p3" v-bind="tip.hover('ag-eta', etaTip)">Time</th>
+            <th class="c-cost r p4" v-bind="tip.hover('ag-cost', costTip)">Cost</th>
+            <th class="c-out p4">Outcome</th>
           </tr>
         </thead>
         <tbody>
           <tr
             v-for="row in board"
-            :key="row.r.worktree_id"
+            :key="row.uid"
             class="hov"
             :class="row.tone"
+            :style="{ '--rail': rail(row.tone) }"
           >
             <!-- THE WHOLE ROW LEADS TO THE ROUND. It used to open a full-width
                  sibling row carrying the approval card, the events and every
                  phase transcript - 7,500 bytes of prose inside a table. It is a
                  page now, and a page has a URL somebody can send themselves. -->
-            <td class="rail" :style="{ '--rail': rail(row.tone) }">
+            <td class="rail p2">
               <RouterLink v-if="row.key" :to="`/agents/rounds/${row.key}`" class="state">
                 <StatusDot :tone="row.tone" :live="row.waiting" :size="7" />
                 <StatePill :label="row.state" :tone="row.tone" size="sm" />
@@ -364,48 +393,88 @@ function rail(tone: Tone): string {
               </span>
             </td>
 
-            <td>
-              <!-- The tracker task this round is carrying. A disabled chip when
-                   ODOO_URL is unset, which is also the `npm run dev` case. -->
-              <ChipLink
-                :label="row.r.odoo_task ? `#${row.r.odoo_task}` : row.r.worktree_id"
-                :href="row.r.odoo_url"
-                title="open this task in the tracker"
-              />
-              <div class="tsummary truncate" :title="row.r.summary ?? row.r.ref ?? ''">
-                {{ row.r.summary ?? row.r.ref ?? "no branch recorded" }}
-              </div>
-
-              <!-- COLUMN PRIORITY. Below 900 the cost and outcome columns go;
-                   below 640 the phase and time columns go with them. What they
-                   carried arrives here instead, so a narrow board loses columns
-                   and never facts - and the row still leads to the round page,
-                   which holds all of it either way. These two blocks are
-                   display:none until their own column has actually gone. -->
-              <div class="fold3 fline">
-                <ChipLink
-                  v-if="row.r.pr_url"
-                  :label="row.r.pr_number === null ? 'pr' : `#${row.r.pr_number}`"
-                  :href="row.r.pr_url"
-                  :title="`the pull request this round opened (${row.r.pr_state})`"
-                />
-                <ChipLink
-                  v-else-if="row.branch"
-                  :label="row.branch"
-                  :href="row.r.branch_url"
-                  title="the branch this round pushed, before any pull request"
-                />
-                <span v-else-if="row.r.published && row.r.pr_state !== 'unknown'" class="mono sub">
-                  opened none
+            <!-- THE CELL LEADS WITH THE TASK, WHICH IT DID NOT. It opened
+                 with the tracker chip, and that chip falls back to the worktree
+                 id - see taskName. The title is the line that distinguishes one
+                 row from another, so it goes first and the chip joins the meta
+                 line under it. -->
+            <td class="task">
+              <!-- THE STATE, ONCE ITS OWN COLUMN HAS GONE. Below 640 a 156px
+                   column holding one word was 48% of a 328px table and left the
+                   task itself 158px - about twenty characters of a sentence,
+                   with 70px of the state column empty beside it. The column
+                   drops at the phone rung and the pill folds in here, at the
+                   same left edge it had, so scanning down for `waiting on you`
+                   is unchanged and the title gets the width back. The rail is
+                   set on the row rather than the cell so it can move with it. -->
+              <div class="fold2 tstate">
+                <RouterLink v-if="row.key" :to="`/agents/rounds/${row.key}`" class="state">
+                  <StatusDot :tone="row.tone" :live="row.waiting" :size="7" />
+                  <StatePill :label="row.state" :tone="row.tone" size="sm" />
+                </RouterLink>
+                <span v-else class="state" title="this round has no start time, so it has no document">
+                  <StatusDot :tone="row.tone" :live="row.waiting" :size="7" />
+                  <StatePill :label="row.state" :tone="row.tone" size="sm" />
                 </span>
-                <span v-else class="mono sub">{{ fmt.NO_DATA }}</span>
-                <span class="mono sub">{{
-                  row.r.cost_usd === null ? fmt.NO_DATA : `$${row.r.cost_usd.toFixed(2)}`
-                }}</span>
               </div>
 
-              <div class="fold2 mono sub truncate">
-                {{ row.phase }} - {{ row.elapsed }}
+              <div class="tsummary" :title="taskName(row.r)">{{ taskName(row.r) }}</div>
+
+              <!-- ONE META LINE, AND COLUMN PRIORITY FEEDS IT. Below 900 the
+                   cost and outcome columns go; below 640 the phase and time
+                   columns go with them, and what each carried arrives here as
+                   another item on this row. So a narrow board loses columns and
+                   never facts, and the row still leads to the round page, which
+                   holds all of it either way.
+
+                   AN ABSENT VALUE ARRIVES AS NOTHING, NOT AS A DASH. In a
+                   column under a header, `-` reads as "no cost recorded"; on an
+                   unlabelled line it is a dash between two chips, which is how
+                   a round with no pull request rendered `- $2.47`. `opened
+                   none` stays, because that is a claim rather than an absence.
+
+                   The items are separated by a gap and not by punctuation:
+                   every one of them is self-labelling (`ship 4/5`, `took 2h`,
+                   `$8.28`), and a separator that has to hide with its own
+                   neighbour is how the dash got there in the first place. -->
+              <div class="meta">
+                <ChipLink
+                  v-if="row.r.odoo_task !== null"
+                  :label="`#${row.r.odoo_task}`"
+                  :href="row.r.odoo_url"
+                  title="open this task in the tracker"
+                />
+                <!-- WRAPPED, BECAUSE A CLASS ON A COMPONENT LANDS ON ITS ROOT.
+                     `class="fold3"` on a ChipLink is `.fold3` against ChipLink's
+                     own scoped `.chip { display: inline-flex }`, which is one
+                     class more specific - so the chip stayed visible at every
+                     width and the wide board printed the branch twice, once
+                     here and once in the Outcome column it had not dropped. -->
+                <span class="fold4 fwrap">
+                  <ChipLink
+                    v-if="row.r.pr_url"
+                    :label="row.r.pr_number === null ? 'pr' : `#${row.r.pr_number}`"
+                    :href="row.r.pr_url"
+                    :title="`the pull request this round opened (${row.r.pr_state})`"
+                  />
+                  <ChipLink
+                    v-else-if="row.branch"
+                    :label="row.branch"
+                    :href="row.r.branch_url"
+                    title="the branch this round pushed, before any pull request"
+                  />
+                  <span
+                    v-else-if="row.r.published && row.r.pr_state !== 'unknown'"
+                    class="mono mline"
+                  >
+                    opened none
+                  </span>
+                </span>
+                <span class="fold2 mono mline">{{ row.phase }}</span>
+                <span class="fold3 mono mline">{{ row.elapsed }}</span>
+                <span v-if="row.r.cost_usd !== null" class="fold4 mono mline">
+                  ${{ row.r.cost_usd.toFixed(2) }}
+                </span>
               </div>
             </td>
 
@@ -451,7 +520,7 @@ function rail(tone: Tone): string {
                  This column used to hold the ETA alone and so read `-` on most
                  rows: the collector withholds an estimate below five samples of
                  any remaining phase. Elapsed is always knowable, so it leads. -->
-            <td class="mono p2" v-bind="tip.hover(`ag-eta-${row.r.worktree_id}`, etaTip)">
+            <td class="mono p3" v-bind="tip.hover(`ag-eta-${row.uid}`, etaTip)">
               {{ row.elapsed }}
               <div v-if="row.phaseClock" class="sub truncate">{{ row.phaseClock }}</div>
               <div v-else-if="row.eta !== fmt.NO_DATA" class="sub">{{ row.eta }} left</div>
@@ -461,11 +530,11 @@ function rail(tone: Tone): string {
                  today's five rounds span $2.47 to $17.94 and an expensive
                  failure is invisible in a daily sum. Display only, never a
                  series. -->
-            <td class="r mono p3">
+            <td class="r mono p4">
               {{ row.r.cost_usd === null ? fmt.NO_DATA : `$${row.r.cost_usd.toFixed(2)}` }}
             </td>
 
-            <td class="out p3">
+            <td class="out p4">
               <ChipLink
                 v-if="row.r.pr_url"
                 :label="row.r.pr_number === null ? 'pr' : `#${row.r.pr_number}`"
@@ -616,6 +685,32 @@ function rail(tone: Tone): string {
 
 /* --- the board ----------------------------------------------------------- */
 
+/* The title leads the cell, so it is the cell's own voice rather than a
+   caption under a chip: --fg-2 rather than --fg-4, at the body size. */
+.tsummary {
+  font: var(--t-ui-sm);
+  color: var(--fg-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ONE WRAPPING LINE THAT GAINS ITEMS AS COLUMNS LEAVE. 12px between items and
+   nothing drawn: the items are self-labelling and a drawn separator would have
+   to know which of its neighbours is currently displayed. */
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 12px;
+  margin-top: 6px;
+}
+
+.mline {
+  font: var(--t-mono-xs);
+  color: var(--fg-5);
+}
+
 /* The task column takes what is left, which at 1360 is around 430px - enough
    for the tracker chip and a one-line summary, and no more. It had 570 while
    the phase cell was clipping "opened 11h 00m ago - attempt 2 of 3" mid-word. */
@@ -659,12 +754,6 @@ a.state:hover {
   font: var(--t-mono-md);
   color: var(--fg-2);
   margin-bottom: 4px;
-}
-
-.tsummary {
-  margin-top: 3px;
-  font: var(--t-ui-sm);
-  color: var(--fg-4);
 }
 
 td .sub {
@@ -725,32 +814,139 @@ td.out {
   color: var(--fail-text);
 }
 
-/* The folded lines, which base.css reveals at their own rung. */
-.fline {
-  margin-top: 6px;
+/* --- the wrapper that must not cost a gap when it is empty -----------------
+   The pr/branch chip has to be wrapped in an element - a class on a ChipLink
+   loses to that component's own scoped `.chip` - but an empty wrapper is still
+   a flex item of .meta, and it opened 12px between two visible things on every
+   row whose round has no branch yet. `display: contents` makes the chip itself
+   the flex item and leaves nothing behind when there is no chip.
+
+   INSIDE THE RUNG ONLY. Above it, base.css's `.fold4 { display: none }` is
+   what has to win, and this selector is three classes to its one. */
+@media (max-width: 1180px) {
+  .meta .fwrap {
+    display: contents;
+  }
 }
 
-.fline .sub {
-  margin-top: 0;
-  margin-left: 7px;
-  vertical-align: middle;
+/* --- the tablet: the fixed columns have to give the task room --------------
+   DROPPING TWO COLUMNS AT 900 IS NOT ENOUGH ON ITS OWN. Four remained - 168 +
+   282 + 140 of FIXED width against one flexible one - so an 834px tablet left
+   the task column 162px, which is the same twenty characters of a sentence the
+   phone had, at more than twice the width. And it got worse below 834, with
+   nothing on the ladder between here and 640 to catch it.
+
+   SO TIME LEAVES AT THIS RUNG TOO, AND IT IS THE RIGHT ONE TO LOSE. It is the
+   narrowest column and the one most often empty - the ETA half is withheld
+   entirely below five samples of any remaining phase - and its other half,
+   elapsed, is one more item on the meta line. Phase stays: the progress bar is
+   the round's only picture of itself. 168 + 200 leaves the task 384px at 834
+   and 272px at 700, where it had 138.
+
+   The phase cell's own sub line truncates at 200px where it did not at 282.
+   That is the trade, and it carries a title attribute. */
+@media (max-width: 900px) {
+  .c-phase {
+    width: 200px;
+  }
+
 }
 
-/* Once state and task are the only two columns left, 168px is most of a phone -
-   but 104px was too far the other way: `waiting on you` is fourteen mono
-   characters and the pill ellipsed to `waitin...`, which is the one word on
-   the row that must survive.
+/* --- the phone: the state column folds into the task cell -------------------
+   IT USED TO BE 156px OF A 328px TABLE - 48% for one word, with about 70px of
+   it empty, while the task itself had 158px. That width was measured twice and
+   both measurements were right about the pill; what neither asked was whether
+   the COLUMN was worth its width once only two of them were left.
 
-   156px IS MEASURED, TWICE, AND THE SECOND MEASUREMENT IS THE POINT. 24px of
-   cell padding and 13px of dot and gap come off the top, leaving 111 for a
-   pill whose content needs 111.x - so at 148 it still ellipsed while
-   `scrollWidth` and `clientWidth` both reported 111 and agreed it fitted. The
-   pill is a flex item with the default `flex-shrink: 1`, so it had been
-   squeezed to exactly its share and the ellipsis fired on the fraction the
-   integer readings had rounded away. Guessed twice, then measured. */
+   The pill folds into the task cell rather than shrinking, so nothing is lost:
+   it keeps its left edge, its dot, its tone and its link to the round. What
+   goes is the column, and the task takes all 328px.
+
+   (The lesson that sized it at 156 stands and is recorded in docs/known-state:
+   a pill is a flex item with the default flex-shrink, so it ellipses on the
+   fraction two integer readings have already rounded away.) */
 @media (max-width: 640px) {
-  .c-state {
-    width: 156px;
+  /* The rail comes with it. --rail is set on the row, so both cells can read
+     it and only the one that is first draws it. */
+  .tbl td.task {
+    box-shadow: inset 2px 0 0 var(--rail, transparent);
+    padding-left: 12px;
+  }
+
+  .tstate {
+    margin-bottom: 7px;
+  }
+
+  /* A HEADER ROW OVER ONE COLUMN NAMES NOTHING. Five of the six columns are
+     gone by here and the sixth no longer holds only the task - the state pill
+     folded into it - so `TASK` is a label that has stopped being true as well
+     as a row of height nothing reads. */
+  .tbl thead {
+    display: none;
+  }
+
+  /* TWO LINES, NOT ONE. At 158px a title was ellipsed at about twenty
+     characters; at 300px it is ellipsed at forty, and a round's title is a
+     sentence. The clamp is FindingsPanel's, which is the only other place here
+     that has to fit prose into a table cell. */
+  .tsummary {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+}
+
+/* --- the conditions, on a phone -------------------------------------------
+   PACKED-LEFT WRAPPING IS RIGHT DOWN TO ABOUT 660px AND WRONG BELOW IT.
+   Measured across eight widths: the three sit on one line from 1360 all the
+   way to 760, and at 640 they break 2 + 1 - intake and quota side by side,
+   worktrees alone underneath. That is not a layout, it is where the row
+   happened to run out: the two columns are different widths, the three labels
+   stop aligning, and there is no column left to read down.
+
+   SO ON A PHONE THE LABEL MOVES TO THE LEFT OF ITS VALUE. Three rows, one
+   condition each, labels in a column of their own - which is what makes it
+   scannable at the width where scanning is hardest. It costs about 16px of
+   height against the ragged version and reads like a readout instead.
+
+   The caption stays INDENTED UNDER ITS VALUE rather than spanning back under
+   the label. Full width would save the worktrees caption a line, and it would
+   also put a caption where the eye is looking for the next label. */
+@media (max-width: 640px) {
+  .conds {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    column-gap: var(--gap);
+    row-gap: 14px;
+  }
+
+  .cond {
+    display: grid;
+    /* The fallback is a literal because a media query cannot read a token, and
+       82px is measured: WORKTREES, the longest of the three, is 73px at
+       --t-label. All three rows share it, so they align on it even where
+       subgrid is unavailable - subgrid is what keeps that true if the type
+       scale moves, which is the failure mode a lone literal has here. */
+    grid-template-columns: 82px 1fr;
+    grid-template-columns: subgrid;
+    grid-column: 1 / -1;
+    align-items: center;
+    column-gap: var(--gap);
+    row-gap: 4px;
+  }
+
+  .cond .label {
+    grid-area: 1 / 1;
+  }
+
+  .cond .cvalue {
+    grid-area: 1 / 2;
+  }
+
+  .cond .sub {
+    grid-area: 2 / 2;
   }
 }
 </style>
