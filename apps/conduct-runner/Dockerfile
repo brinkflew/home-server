@@ -82,6 +82,52 @@ ARG CLAUDE_CODE_VERSION=2.1.240
 RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
  && npm cache clean --force
 
+# CHROMIUM CANNOT READ AN RFC 5987 FILENAME UNDER THE C LOCALE, AND IT LOSES THE
+# NAME RATHER THAN FAILING. Measured in this image on 2026-08-29, against a
+# fourteen-line server and one anchor with no application involved:
+#
+#     Content-Disposition                                suggestedFilename()
+#     filename="plain.txt"                               "plain.txt"
+#     filename="two words.txt"                           "two words.txt"
+#     filename*=UTF-8''<any non-ASCII>                   "download"
+#     filename="..." AND filename*=UTF-8''<non-ASCII>    "download"
+#
+# The last row is the expensive one. A client that understands both parameters
+# must PREFER `filename*`, so emitting a lossy ASCII fallback beside it - which
+# is exactly what upskald's `_content_disposition` does, correctly - buys nothing
+# here: Chromium takes the starred parameter, fails to decode it, and falls back
+# to its own default string rather than to the ASCII neighbour. Set LANG and
+# every one of those rows passes.
+#
+# THIS WAS THE GATE, AND IT COST FIVE DAYS OF THEM. `conduct verify` exited 2 on
+# every round from 2026-08-24, always on `e2e-test` and always on the same single
+# assertion in upskald's `file-download.spec.ts`, which uploads a file whose name
+# carries an accent and asserts the name survives the round trip. It failed on
+# the unmodified BASE commit too, so `judge_base` correctly stopped blaming the
+# change - and `judge_autopublish`'s first clause is a gate that PASSED, so
+# autopublish was armed on 2026-08-25 and could never once fire. Every round
+# pushed a branch and asked a person, and paid for the whole suite twice on the
+# way. Odoo task 1572.
+#
+# IT LOOKED LIKE AN UPSKALD BUG FOR FIVE DAYS BECAUSE THE STRING IS AMBIGUOUS.
+# `download` is Chromium's last-resort default AND the literal fallback
+# `_content_disposition` emits when a name's ASCII fold comes out empty, so the
+# log could not tell "the browser got nothing" from "the api sent nothing", and
+# the trace does not capture download responses. What settled it was reading the
+# header off the wire - correct, both parameters, all the way through Vite's
+# proxy - and then losing the name anyway.
+#
+# EVERY OTHER RUNNER HERE ALREADY SETS IT. apps/github-runner/Dockerfile sets
+# LANG=C.UTF-8 and so do GitHub's hosted images, which is the whole reason CI is
+# green on the commits this gate refuses. This image was the only place a browser
+# ran under LANG unset.
+#
+# C.UTF-8 RATHER THAN A REAL LOCALE, matching the lane: it needs no locale
+# archive, it is what the environment being matched uses, and the suite pins
+# `locale: 'en-GB'` on the browser context itself, so nothing here decides what
+# language a page is rendered in.
+ENV LANG=C.UTF-8
+
 # BROWSER LIBRARIES, NOT BROWSER BINARIES. @playwright/test is pinned ^1.60.0 in
 # upskald's e2e/package.json, so a worktree can resolve a newer minor than this
 # image was built against and Playwright then hunts a browser revision that is

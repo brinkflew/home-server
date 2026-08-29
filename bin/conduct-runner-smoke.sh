@@ -274,6 +274,74 @@ else
 fi
 
 # ------------------------------------------------------------------------------
+say "A filename that is not ASCII, which is where the gate spent five days"
+# ------------------------------------------------------------------------------
+# THE ASSERTION IS THE BEHAVIOUR AND NOT THE VARIABLE. `test -n "$LANG"` would
+# have caught the cause, and it would also pass the day the value is wrong, the
+# locale is missing, or Chromium changes its mind - so this drives a real browser
+# over a real header and asks what name came back.
+#
+# What it is watching for: under LANG unset, Chromium in this image cannot decode
+# an RFC 5987 `filename*` parameter and answers its own default, "download". It
+# does not fall back to the ASCII `filename` beside it, because a client that
+# understands both MUST prefer the starred one - so a correctly built header is
+# exactly the case that loses. That is what made upskald's file-download spec
+# fail here and pass on GitHub Actions for five days, on the gate that decides
+# whether a round may publish. See apps/conduct-runner/Dockerfile's LANG block
+# and Odoo task 1572.
+#
+# The server is fourteen lines and no application is involved, which is the
+# point: this fails for the image or it does not fail at all.
+if runner bash -s <<'IN'; then
+set -e
+cd /tmp && mkdir -p pw && cd pw
+bun init -y >/dev/null 2>&1 || true
+bun add playwright@1 >/dev/null
+cat > dl.js <<'JS'
+const http = require("http");
+const { chromium } = require("playwright");
+const NAME = "r\u00e9sum\u00e9 1.txt";
+const STAR = "filename*=UTF-8\x27\x27r%C3%A9sum%C3%A9%201.txt";
+const server = http.createServer((req, res) => {
+  if (req.url.startsWith("/f")) {
+    res.writeHead(200, {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Content-Disposition": "attachment; filename=\"resume 1.txt\"; " + STAR,
+    });
+    res.end("disposition");
+    return;
+  }
+  res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+  res.end("<!doctype html><meta charset=utf-8><a id=a href=/f download>x</a>");
+});
+server.listen(9987, "127.0.0.1", async () => {
+  const browser = await chromium.launch();
+  try {
+    const context = await browser.newContext({ acceptDownloads: true, locale: "en-GB" });
+    const page = await context.newPage();
+    await page.goto("http://127.0.0.1:9987/");
+    const pending = page.waitForEvent("download");
+    await page.click("#a");
+    const got = (await pending).suggestedFilename();
+    if (got !== NAME) {
+      console.error("suggestedFilename was " + JSON.stringify(got) +
+                    ", wanted " + JSON.stringify(NAME) + "; LANG=" + JSON.stringify(process.env.LANG));
+      process.exit(1);
+    }
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
+JS
+node dl.js
+IN
+	ok "chromium kept a UTF-8 filename* through a download"
+else
+	bad "chromium lost a UTF-8 filename* - check LANG in the image"
+fi
+
+# ------------------------------------------------------------------------------
 say "Containment"
 # ------------------------------------------------------------------------------
 # A forbidden edge is proven BY IP from a throwaway container, never by name
