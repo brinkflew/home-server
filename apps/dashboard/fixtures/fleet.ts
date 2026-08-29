@@ -617,6 +617,14 @@ export function fleetDocument(): FleetDocument {
         { subject: "wt-77d3e0", value: "on", at: iso(20 * 60),
           note: "reading the diff" },
       ],
+      // A LIVE OVERRIDE OVER A REJECTED WINDOW, which is the combination worth
+      // pinning: fixtures/prometheus.ts holds quotaStatus at 2 deliberately, so
+      // this draws the case that surprises people. The warning hold is lifted
+      // AND the fleet is still stopped, because lifting it moves the level to
+      // `rejected` and no further - the floor that makes a blanket override
+      // safe. The value is the moment pacing comes back, not "on".
+      quota: { subject: "account", value: iso(-90 * 60), at: iso(5 * 3600),
+               note: "away until Monday" },
     },
     phase_stats: {
       plan: { median_seconds: 320, samples: 11 },
@@ -664,7 +672,7 @@ export function fleetUnreadable(): FleetDocument {
     // not offer one.
     control: {
       available: false, approve_available: false, restart_floor_sec: 600,
-      intake: [], holds: [],
+      intake: [], holds: [], quota: null,
     },
     phase_stats: {},
     totals: {

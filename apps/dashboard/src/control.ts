@@ -14,6 +14,7 @@
 // should not have been offered.
 // =============================================================================
 
+import { isoToUnix } from "./format";
 import type { FleetControl, FleetRound, Tone } from "./types";
 import type { ControlAction } from "./api/control";
 
@@ -112,6 +113,56 @@ export function intakeSwitch(control: FleetControl, project: string): IntakeSwit
     title: now.on
       ? "stop the fleet choosing its own work - a round already open still runs to its gate"
       : "let the fleet choose its own work",
+  };
+}
+
+/**
+ * The quota hold, as a control: whether the warning still stops the fleet, and
+ * the one command that changes it.
+ *
+ * IT IS A THRESHOLD AND NOT A SWITCH, which is the whole reason it cannot borrow
+ * `intakeSwitch`. conduct holds at `allowed_warning` by default; lifting it
+ * moves the level to `rejected` and no further, so a refusal is still a hold
+ * whatever anybody asked for. There is no "off".
+ *
+ * THE VALUE IS A DEADLINE AND A PAST ONE MEANS NOTHING IS IN FORCE. `quota_pace`
+ * writes the moment it happened rather than deleting the row - for the reason
+ * `release` is set rather than deleted, so the board can still say when the
+ * pacing came back - so "is an override live" is a comparison and never a
+ * presence test.
+ */
+export interface QuotaHold {
+  /** True while the warning hold is lifted. */
+  spending: boolean;
+  /** When it ends, or null when nothing is in force. */
+  until: string | null;
+  /** The chip: what pressing it will do, never what is true now. */
+  label: string;
+  action: ControlAction;
+  title: string;
+  /** When the row was last written, and why - null when there has never been one. */
+  at: string | null;
+  note: string | null;
+}
+
+export function quotaHold(control: FleetControl, nowUnix: number): QuotaHold {
+  const entry = control.quota ?? null;
+  const until = entry ? isoToUnix(entry.value) : Number.NaN;
+  // NaN FAILS THIS AND THAT IS THE SAFE DIRECTION. A value the browser cannot
+  // parse must read as "the default is in force", exactly as conduct's own
+  // override_until answers None to one - a page claiming the fleet is spending
+  // when it is holding sends somebody to lift a hold that is already lifted.
+  const spending = Number.isFinite(until) && until > nowUnix;
+  return {
+    spending,
+    until: spending && entry ? entry.value : null,
+    label: spending ? "pace" : "spend",
+    action: spending ? "quota_pace" : "quota_spend",
+    title: spending
+      ? "hold the fleet at the API's warning again, so what is left is left for your own sessions"
+      : "let the fleet run until the API refuses, for the life of this window only",
+    at: entry ? entry.at : null,
+    note: entry ? entry.note : null,
   };
 }
 

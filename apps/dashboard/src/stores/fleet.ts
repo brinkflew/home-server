@@ -50,6 +50,9 @@ const CONTROL_ABSENT: FleetControl = {
   restart_floor_sec: 600,
   intake: [],
   holds: [],
+  // NULL AND NOT AN EXPIRED STAMP. Nobody has lifted the warning hold, which is
+  // the ordinary state and is what quotaHold reads as "the default is in force".
+  quota: null,
 };
 
 /** Four missed writes, the same principle stores/media.ts derives its two

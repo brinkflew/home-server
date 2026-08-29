@@ -1279,6 +1279,30 @@ signal read green.
   a watcher, where nothing shows it. `shoot.mjs`'s `pageerror` line is why it was found at all.
 - `--z-scrim` and `--z-overlay` were declared for "a modal, a drawer" and had no consumer.
 
+### The gate that reserved two days of headroom for nobody
+- `QUOTA_HOLD_AT = allowed_warning` is right and its premise - that the headroom is being left for a
+  human - is false on a weekend. There was no way to say so: a bare literal, and `--force` bypasses
+  only the intake half.
+- A `quota:account` control row whose value is a STAMP, safe because `control_flag` defers on a
+  value it does not define. The expiry is DERIVED from the window's own `resets_at`, so it cannot be
+  left on; `rejected` still holds, which is the floor that makes lifting the warning defensible.
+- An unparseable value and a passed stamp both read as "the default is in force". Failing open would
+  be a hold nobody could restore.
+
+### A check that would have paged the phone about a fleet that was running
+- `agents.quota_headroom`'s warn says "the fleet is holding, which is what it is meant to do", and
+  `AgentCheckWarning` pages on any `agents.*` warn after 30m. The fourth arm is a NOTE - silent -
+  because deliberately not holding is not a fault either.
+- `AgentQuotaRejected`'s INFERENCE inverts and its expression must not: the description points at
+  the check rather than deciding it. Two sentences in `docs/observability.md` were already false.
+
+### The counted sentence moved, in the order its own comment demands
+- `marker.KEYS` is asserted against a set lifted from the READERS in the other repo, and the key must
+  be added there LAST - it failed until the readers existed, which is what it is for.
+- "five checks and fourteen series" lives in two files and has been wrong in both at once. Fifteen.
+- `_fleet_control` silently drops any control name it does not route, which is why `restart:*` has
+  never reached the board.
+
 ### `idle` drew the encoding that means "in progress, ratio unknown"
 - A bare `ProgressBar` track while nothing runs. The contract was right and the CALL SITE was wrong;
   the bar renders only in flight, and the sub-line says which nothing it is.

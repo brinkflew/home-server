@@ -532,7 +532,7 @@ that admission about `TasksMax` until a real gate run measured it at 325.
 ## The marker, and why it is not in `backup-state`
 
 conduct writes `~/.cache/home-server/conduct-state`, flat `key=value`, in the shape of
-`backup-state` and `metrics-state`. **Five** checks in `bin/verify-host.sh`, **fourteen** series in
+`backup-state` and `metrics-state`. **Five** checks in `bin/verify-host.sh`, **fifteen** series in
 `bin/collect-metrics.py` and one refusal in `bin/reboot-when-staged.sh` read it.
 
 That sentence said "twelve checks, twenty-two series" until 2026-08-23, and both numbers were wrong
@@ -582,6 +582,27 @@ window comes back, so nothing here estimates staleness: `conduct` holds while th
 `allowed_warning` or worse *and* the window has not yet rolled over, and stops holding the moment it
 has. `quota_read_at` is still written, because "no model phase has run in a week" is worth being
 able to see, but nothing grades it.
+
+**`allowed_warning` IS THE DEFAULT AND A PERSON CAN MOVE IT, SINCE 2026-08-29.** The argument for
+holding at the warning is that what is left is left for the human's own sessions - and on a weekend
+nobody is working, that reserves two days of fleet time for nobody. `quota_spend` writes a
+`quota:account` row into `state.control` whose value is the window's own `resets_at`, and
+`quota.hold_level()` reads it every cycle: while it is live the fleet holds at `rejected` instead.
+`quota_pace` restores the default by writing the moment it happened rather than deleting the row, so
+the board can still say when the pacing came back.
+
+**It cannot be left on, and that is the whole of why it is safe.** The expiry is *derived* from the
+reading rather than typed, so an override cannot outlive the window it was granted against and
+there is nothing anybody has to remember to undo - the same property every other hold here has. A
+value the code cannot parse, and a stamp that has passed, both read as "the default is in force":
+failing open would be a hold nobody could restore.
+
+**And `rejected` still holds, always.** Lifting the warning moves the level to a refusal and no
+further. That floor is what makes a blanket override defensible: spending the weekly window faster
+can put the five-hour one into `allowed_warning` too - which the override covers, correctly, since
+the same person is still away - and if it goes past that, the API refuses, `observe()` records it,
+and the fleet stops until that window clears on its own. `agents.quota_headroom` NOTEs while an
+override is live and still WARNs on a rejection, with a message that says which of the two it is.
 
 ## Two constraints the timing creates
 
@@ -1041,7 +1062,8 @@ of it is the useful part - every entry was a thing that would have failed silent
 - **The `settings.json` -> `deny.py` exec path**, tested in the smoke run and asserted on every
   phase as exit 79.
 - **`quota.refusal()` in the two dispatch paths**, which is what actually makes the fleet hold - a
-  hold in `poll.cycle` and a refusal in `conduct run`.
+  hold in `poll.cycle` and a refusal in `conduct run`. It reads the level itself rather than taking
+  one, so an override applies to every call site including ones added later.
 
 **Two things it did not name and should have.** `--verbose`, which is not optional: the CLI refuses
 `--output-format stream-json` under `--print` without it, so a model phase would have exited before

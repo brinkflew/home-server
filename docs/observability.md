@@ -418,11 +418,20 @@ rolled over or has not, and the API said when. `quota_read_at` is still recorded
 has run in a week" is worth being able to see - but it grades nothing.
 
 **`AgentQuotaRejected` fires on a rejection and not on the warning below it, and the gap is the
-design.** `conduct` holds the fleet at `allowed_warning`, so it cannot take the account to a
-rejection by itself; a rejection therefore means something else spent the window, almost always your
-own sessions. That also makes it the one alert here whose remedy is **not** to stop the fleet - the
-fleet has already stopped, and stopping it does not give the window back. What it tells you is that
-your next session will fail, which is worth knowing before you sit down to one.
+design.** `conduct` holds the fleet at `allowed_warning` *by default*, so ordinarily it cannot take
+the account to a rejection by itself; a rejection therefore means something else spent the window,
+almost always your own sessions. That also makes it the one alert here whose remedy is **not** to
+stop the fleet - the fleet has already stopped, and stopping it does not give the window back. What
+it tells you is that your next session will fail, which is worth knowing before you sit down to one.
+
+**The one case where that inference does not hold is an override, and the alert points at the check
+rather than deciding it.** A person can lift the warning hold for the life of one window
+(`quota_spend`, see `docs/agents.md`), which raises the level to `rejected` - and then a rejection
+*can* be the fleet's own doing and stopping it *is* a real remedy again.
+`home_server_agent_quota_override_timestamp_seconds` in the future is what says so, and
+`agents.quota_headroom`'s message names it. Deliberately **not** a second clause on the expression:
+a rejection is worth knowing about either way, and a rule that went silent while somebody was
+spending the window would go silent in exactly the state they would most want to be told about.
 
 **`agents.publish_configured` is named for what it can prove**, and its message says so. A file
 existing is not a write-capable deploy key and a row in Windmill's `variable` table is not an
@@ -439,20 +448,26 @@ which was every hour until the orchestrator shipped. A finding nobody can act on
 learns to skip a whole section, and this one would otherwise have had months to teach that.
 
 **The marker is a flat `key=value` file in `backup-state`'s exact shape**, holding a heartbeat, a
-phase flag and its start, the two quota percentages and when they were last read, token and run
-totals, and a worktree count. Three readers parse it: `bin/verify-host.sh`, `bin/collect-metrics.py`
+phase flag and its start, the rate-limit status with its window, its reset and when it was read,
+whether an override is lifting the hold, token and run totals, and a worktree count. (It held *two
+quota percentages* until 2026-08-23; this sentence said so until 2026-08-29, one paragraph away from
+the paragraph recording the move.) Three readers parse it: `bin/verify-host.sh`, `bin/collect-metrics.py`
 and `bin/reboot-when-staged.sh`. **The key set is a literal list in the collector**, so what a
 component nobody has written yet can mint is bounded by construction rather than by a promise.
 
-**The staleness arm of `agents.quota_headroom` is the one that matters, and it is not the obvious
-one.** A fleet pacing itself against a six-hour-old window reading spends the cap rather than
-respecting it, and every other signal reads healthy while it does - `conduct` is up, phases
-complete, and the percentage on screen is simply the last one it managed to see. So the age of the
-reading is graded before the reading is.
+**`agents.quota_headroom` had a staleness arm and no longer does**, which the paragraph above
+records: a percentage went out of date silently, and a status carries the moment its window rolls
+over. The age of the reading is still published and grades nothing. What the check grades instead is
+four states - no reading at all, `allowed`, a hold, and a hold somebody has deliberately lifted -
+and the fourth exists because the third's message says *"the fleet is holding, which is what it is
+meant to do"*, which `AgentCheckWarning` would otherwise page the phone with about a fleet
+dispatching all night.
 
 **There is no dollar metric and no daily spend ceiling, deliberately.** The quota is a subscription
 session key paced against a 5-hour window and a weekly cap, so a price per token would have to be
-invented and would measure nothing that can stop the fleet. Percentages are the currency.
+invented and would measure nothing that can stop the fleet. `home_server_agent_quota_status` is the
+currency - this sentence said *"percentages are the currency"* until 2026-08-29, eleven lines from
+the one recording that the percentage era ended.
 
 **That refusal stands, and 2026-08-28 tested it rather than reversing it.** `conduct.db`'s `run`
 table has carried `cost_usd` on every row since the orchestrator shipped - `total_cost_usd` from

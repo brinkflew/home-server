@@ -28,6 +28,7 @@ import { usePoll } from "@/composables/usePoll";
 import { useMetricsStale } from "@/composables/useStaleness";
 import { useTooltip } from "@/composables/useTooltip";
 import { useIntake } from "@/composables/useIntake";
+import { quotaSub, useQuotaHold } from "@/composables/useQuotaHold";
 import { useHostStore } from "@/stores/host";
 import { useFleetStore } from "@/stores/fleet";
 import { instant, value } from "@/api/prometheus";
@@ -119,6 +120,18 @@ const midPhase = computed(() => phase.value.state === "in flight");
 const intake = useIntake(midPhase);
 
 /**
+ * WHETHER THE WARNING STILL STOPS THE FLEET, which is a threshold and not a
+ * switch - see src/control.ts's quotaHold. conduct holds at `allowed_warning` by
+ * default so that what is left is left for this person's own sessions; lifting
+ * it says there are none to leave it for, and moves the level to `rejected` and
+ * no further.
+ */
+const spend = useQuotaHold();
+
+/** True while the API itself is refusing, which no override lifts. */
+const rejected = computed(() => quota.value.state === "rejected");
+
+/**
  * The line under the headline reading, and it is three different sentences.
  *
  * `idle` USED TO DRAW A BARE PROGRESS TRACK AND A DASH, which is the encoding
@@ -193,10 +206,13 @@ const quotaTip = computed(() => ({
   lines: [
     quota.value.state,
     quota.value.clears ?? "no reset time recorded",
+    spend.state.value.spending
+      ? "the warning hold is lifted for this window"
+      : "holding at the warning, which is the default",
     m.value?.quotaRead ? `read ${fmt.since(m.value.quotaRead)}` : "never read",
   ],
   caveat:
-    "A status, not a percentage - the account-wide numbers answer 403 to the only credential a headless host can hold. conduct holds the fleet at the warning, so a rejection means something else spent the window, and stopping the fleet does not give it back.",
+    "A status, not a percentage - the account-wide numbers answer 403 to the only credential a headless host can hold. conduct holds at the warning BY DEFAULT, so what is left is left for your own sessions and a rejection normally means something else spent it. `spend` lifts that for the life of this window only and cannot be left on; a rejection still holds either way, and stopping the fleet never gives a spent window back.",
 }));
 
 const etaTip = computed(() => ({
@@ -314,12 +330,28 @@ function rail(tone: Tone): string {
           }}</span>
         </div>
 
+        <!-- THE PILL STILL REPORTS WHAT THE API SAID, because that is the
+             reading and an override does not change it. What the chip changes is
+             whether the fleet STOPS on it, and the line underneath is where that
+             difference is stated - `clears in 2d` on its own read as a countdown
+             to when the fleet resumes, which is exactly what it meant until this
+             existed. -->
         <div class="cond" v-bind="tip.hover('ag-quota', quotaTip)">
           <span class="label">quota</span>
           <span class="cvalue">
             <StatePill :label="quota.state" :tone="quota.tone" size="sm" />
+            <ChipButton
+              :label="spend.state.value.label"
+              :disabled="spend.disabled.value"
+              :act="() => spend.toggle()"
+              :title="spend.state.value.title"
+              :pending="spend.askedFor.value !== null"
+            />
           </span>
-          <span class="mono sub">{{ quota.clears ?? "no window recorded" }}</span>
+          <span class="mono sub" :class="{ warnish: spend.state.value.spending }">{{
+            quotaSub(spend.state.value, quota.clears, rejected,
+                     spend.askedFor.value, midPhase)
+          }}</span>
         </div>
 
         <div class="cond" v-bind="tip.hover('ag-worktrees', worktreeTip)">

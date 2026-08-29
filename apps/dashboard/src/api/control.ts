@@ -28,7 +28,14 @@
 import { fetchText } from "./http";
 
 /** The actions `f/agents/control`'s schema declares. Kept in the same order. */
-export type ControlAction = "intake_on" | "intake_off" | "hold" | "release" | "restart";
+export type ControlAction =
+  | "intake_on"
+  | "intake_off"
+  | "hold"
+  | "release"
+  | "restart"
+  | "quota_spend"
+  | "quota_pace";
 
 export interface ControlRequest {
   action: ControlAction;

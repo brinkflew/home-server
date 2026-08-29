@@ -512,6 +512,16 @@ export interface FleetControl {
   restart_floor_sec: number;
   intake: FleetControlEntry[];
   holds: FleetControlEntry[];
+  /**
+   * The quota hold's override, or null when nobody has lifted it.
+   *
+   * ONE ENTRY AND NOT A LIST, because the row it comes from takes no subject:
+   * the quota is the ACCOUNT'S, and conduct's `last_quota` is global for the
+   * same reason. Its `value` is an ISO STAMP rather than "on"/"off" - the moment
+   * the fleet goes back to pacing itself at the warning - so a stamp in the past
+   * is an override that has ENDED and must not be drawn as one in force.
+   */
+  quota: FleetControlEntry | null;
 }
 
 /** A branch conduct pushed whose pull request has not opened yet. */

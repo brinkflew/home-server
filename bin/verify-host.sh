@@ -2321,6 +2321,15 @@ if [ -z "$GREENBOOT" ]; then
 	q_window=$(cget quota_window)
 	q_resets=$(cget quota_resets_at)
 	q_age=$(cage quota_read_at)
+	# A PERSON HAVING LIFTED THE WARNING HOLD, and the key is ABSENT unless one
+	# is live - conduct's override_until answers None for an expired stamp as
+	# well as for a missing row, so there is no "has it passed yet" to compute
+	# here. Its presence is the whole discriminator.
+	q_override=$(cget quota_override_until)
+	q_override_epoch=""
+	if [ -n "$q_override" ]; then
+		q_override_epoch=$(date -d "$q_override" +%s 2>/dev/null || true)
+	fi
 	# Cleared when the window the API named has already rolled over. Same rule
 	# conduct applies, restated here rather than inferred, because the two must
 	# agree about whether the fleet is holding.
@@ -2337,8 +2346,33 @@ if [ -z "$GREENBOOT" ]; then
 		*)
 			if [ "$q_cleared" = 1 ]; then
 				ok agents.quota_headroom "the ${q_window:-model} window reported $q_status but has since cleared${q_resets:+ (at $q_resets)} - the fleet is dispatching again"
+			# THE FOURTH ARM, AND IT EXISTS SO THIS STOPS SAYING SOMETHING FALSE.
+			# conduct holds at allowed_warning by default; a person can lift that
+			# to `rejected` for the life of one window, and the arm below would
+			# then WARN "the fleet is holding, which is what it is meant to do"
+			# about a fleet dispatching all night - a sentence AgentCheckWarning
+			# pages the phone with after thirty minutes.
+			#
+			# A NOTE RATHER THAN AN ok, AND SILENT EITHER WAY. Notes do not alert
+			# (== 2 is warn; a note is 1), so this pages nobody - but it is a
+			# state somebody chose and will want reminding of, which is more than
+			# `ok` says and less than a fault. Same posture as agents.intake:
+			# holding is not a fault, and neither is deliberately not holding.
+			#
+			# ONLY BELOW `rejected`. An override moves the level to `rejected`
+			# and no further, so a rejection is a genuine hold whatever anybody
+			# asked for, and it keeps the arm below.
+			elif [ -n "$q_override" ] && [ "$q_status" != "rejected" ]; then
+				note agents.quota_headroom "the ${q_window:-model} window reported $q_status, and the warning hold is lifted until $q_override - the fleet is dispatching on purpose and holds at a rejection either way; conduct control quota_pace restores it"
 			else
-				warn agents.quota_headroom "the ${q_window:-model} window reported $q_status${q_resets:+ and does not clear until $q_resets} - the fleet is holding, which is what it is meant to do; this is worth a look only if you did not expect the account to be near its limit"
+				# WHAT THE HOLD IS, AND WHOSE IT IS. The default sentence claims
+				# the fleet stopped itself; under a live override a rejection is
+				# the API refusing, which is a different thing to have found out.
+				if [ -n "$q_override" ]; then
+					warn agents.quota_headroom "the ${q_window:-model} window reported $q_status${q_resets:+ and does not clear until $q_resets} - the warning hold was lifted until $q_override, so this is the API refusing rather than the fleet pacing itself"
+				else
+					warn agents.quota_headroom "the ${q_window:-model} window reported $q_status${q_resets:+ and does not clear until $q_resets} - the fleet is holding, which is what it is meant to do; this is worth a look only if you did not expect the account to be near its limit"
+				fi
 			fi ;;
 	esac
 	# NUMERIC FOR THE STORE, THE WORD FOR THE PERSON, which is the same split
@@ -2455,6 +2489,9 @@ if [ -z "$GREENBOOT" ]; then
 	fact agents_quota_rank "${q_rank:-}" num
 	fact agents_quota_cleared "$q_cleared" num
 	fact agents_quota_age_s "${q_age:-}" num
+	# EMPTY WHEN THERE IS NO OVERRIDE, which `fact ... num` drops rather than
+	# writing as 0 - the same distinction q_rank already makes for "no reading".
+	fact agents_quota_override_at "${q_override_epoch:-}" num
 
 	# 10800s is twice the phase scope's own RuntimeMaxSec. Past that the scope
 	# should already have killed it, so this fires on the scope having failed

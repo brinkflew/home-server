@@ -3877,3 +3877,50 @@ three of them are the same mistake in different clothes.
   `WORKTREES` is 73px at `--t-label`. All three rows share the literal, so they align without
   subgrid too; subgrid is what keeps it true if the type scale moves, which is the failure `fitRole`
   already paid for once.
+
+### The gate that reserved two days of headroom for nobody
+- **`config.QUOTA_HOLD_AT = "allowed_warning"` is right and its premise is not always true.** The
+  fleet stops while there is headroom so that what is left is left for the human's own sessions -
+  and on a weekend nobody is working, that reserves two days of fleet time for nobody. Measured
+  2026-08-29: `select` recorded the warning at 11:17Z and every model phase after it was held, with
+  the seven-day window not clearing until the 31st.
+- **There was no way to say so.** `QUOTA_HOLD_AT` is a bare literal, not read from the environment,
+  so no `.env` change reaches it; and `conduct intake --force` bypasses only the intake half - the
+  dispatch loop's hold takes no `force`, so a hand-forced round stalls at its first model phase.
+- **The row is a STAMP and not `on`**, which is safe by `state.control`'s own rule: `control_flag`
+  answers None to a value it does not define, so no existing reader can mistake it for a switch. The
+  expiry is DERIVED from the reading's own `resets_at`, so an override cannot outlive the window it
+  was granted against and there is nothing to remember to undo.
+- **`rejected` still holds, and that floor is the whole argument.** Spending the weekly window
+  faster can warn the five-hour one too, which the override covers deliberately; past that the API
+  refuses, `observe()` records it, and the fleet stops until that window clears by itself.
+- **An unparseable value and a passed stamp both read as "the default is in force".** Failing open
+  would be a hold nobody could restore by fixing a row - and `quotaHold` was made to fail on a
+  planted presence test before it was trusted.
+
+### A check that would have paged the phone about a fleet that was running
+- **`agents.quota_headroom`'s warn arm says "the fleet is holding, which is what it is meant to
+  do"**, and `AgentCheckWarning` pages on any `agents.*` warn after 30 minutes. Lifting the hold
+  without a fourth arm would have alerted, hourly, with a sentence that was false - about a state
+  somebody had deliberately asked for.
+- The fourth arm is a **note**, which is silent in Prometheus (`== 2` is warn, a note is 1). Holding
+  is not a fault and neither is deliberately not holding, which is `agents.intake`'s own posture.
+- **`AgentQuotaRejected`'s inference inverts and its expression must not.** "a rejection means
+  something other than the fleet spent it" stops holding under an override - so the description
+  points at the check rather than deciding it, and no second clause was added: a rule that went
+  silent while somebody was spending the window would go silent in the one state they would most
+  want to be told about.
+- Two sentences in `docs/observability.md` were **already** false and sat in the paragraphs being
+  rewritten: "percentages are the currency" eleven lines from the note that the percentage era
+  ended, and the marker described as holding "the two quota percentages".
+
+### The counted sentence moved, in the order its own comment demands
+- `marker.KEYS` is asserted against a set lifted from the READERS in the other repository, and its
+  comment says a key must be added there LAST. Adding `quota_override_until` failed that test until
+  `cget quota_override_until` and `AGENT_STAMPS` existed, which is the whole of what it is for.
+- The paired count - "five checks and fourteen series" - lives in `conduct/marker.py` and in
+  `docs/agents.md`, and "has been wrong in both copies at once already". Fifteen now: one series,
+  no new check id, both halves moved together.
+- **`bin/collect-metrics.py`'s `_fleet_control` silently drops any control name it does not route**,
+  which is why `restart:*` has never reached the board. A `quota:` row would have been invisible to
+  the dashboard with every other layer working.

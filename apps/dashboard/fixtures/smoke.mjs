@@ -30,6 +30,7 @@ const {
   holdExpiresIn,
   intakeState,
   intakeSwitch,
+  quotaHold,
   roundControls,
   ASK_CEILING_S,
   HOLD_TIMEOUT_S,
@@ -213,6 +214,44 @@ check("allowed is green", quotaTone(0).tone, "ok");
 check("the warning is amber", quotaTone(1).tone, "warn");
 check("rejected is red", quotaTone(2).tone, "fail");
 check("an unrecognised status is not green", quotaTone(7).tone, "fail");
+
+// --- the quota hold, which is a THRESHOLD and not a switch -------------------
+//
+// THE CHIP'S LABEL AND THE COMMAND IT SENDS COME OFF ONE BRANCH, which is what
+// this asserts: a chip reading `spend` that sends `quota_pace` is the same class
+// of defect as one reading `arm` that disarms, with the added cost that nobody
+// would notice for two days.
+//
+// A PAST STAMP IS NOT AN OVERRIDE. `quota_pace` sets the value to the moment it
+// happened rather than deleting the row, so the board can still say when the
+// pacing came back - which means "is one live" is a comparison and never a
+// presence test. Getting that backwards would draw a fleet as spending its
+// headroom for ever after one override had ended.
+console.log("\n-- the quota hold --");
+const NOW = 1787_000_000;
+const held = (value) => ({
+  available: true, approve_available: true, restart_floor_sec: 600,
+  intake: [], holds: [],
+  quota: value === null ? null : { subject: "account", value, at: "x", note: null },
+});
+const stamp = (delta) =>
+  new Date((NOW + delta) * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+
+check("nobody has lifted it", quotaHold(held(null), NOW).spending, false);
+check("and the chip offers to", quotaHold(held(null), NOW).action, "quota_spend");
+check("a future stamp is live", quotaHold(held(stamp(3600)), NOW).spending, true);
+check("and the chip offers the other way",
+      quotaHold(held(stamp(3600)), NOW).action, "quota_pace");
+check("a stamp that has passed is not an override",
+      quotaHold(held(stamp(-60)), NOW).spending, false);
+check("nor is a value nothing can parse",
+      quotaHold(held("whenever"), NOW).spending, false);
+// The label and the action are one branch, so they can never disagree.
+for (const value of [null, stamp(3600), stamp(-60)]) {
+  const hold = quotaHold(held(value), NOW);
+  check(`label and action agree for ${value ?? "no row"}`,
+        hold.action, hold.label === "pace" ? "quota_pace" : "quota_spend");
+}
 
 check("a heartbeat nobody wrote is grey", heartbeatTone(Number.NaN, 600).tone, "off");
 check("a stale heartbeat is amber", heartbeatTone(900, 600).tone, "warn");

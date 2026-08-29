@@ -125,6 +125,28 @@ track and zero is a zero-width fill, deliberately - the call site was. The bar r
 phase is in flight, and the line under the reading says which nothing it is: `no phase running`
 against `no phase has started on this host`.
 
+**THE QUOTA CONDITION GAINED A CHIP ON 2026-08-29, AND IT IS A THRESHOLD RATHER THAN A SWITCH.**
+`conduct` holds the fleet at the API's `allowed_warning` so that what is left is left for your own
+sessions; `spend` says there are no sessions to leave it for, for the life of that window only.
+`src/composables/useQuotaHold.ts` is the `useIntake()` of it - one derivation behind the label, the
+command and the outstanding-ask memory, so a chip reading `spend` cannot send `quota_pace`.
+
+**The pill still reports what the API said, because that is the reading.** An override does not
+change the status; it changes whether the fleet *stops* on it. So the difference is stated in the
+line underneath, and that line had to change: `clears in 2d` on its own read as a countdown to when
+the fleet resumes, which is exactly what it meant until an override could exist. It now reads
+`spending the headroom - clears in 2d`, or - the combination that surprises people -
+`spending, but the API is refusing`, because lifting the warning moves the level to `rejected` and
+no further.
+
+**No absolute stamp anywhere in it.** The host runs UTC and the household does not, so a rendered
+`2026-08-31T14:00:00Z` is a number a person has to convert before it means anything. Every other
+clock on this page is a duration for the same reason.
+
+**That takes the header to two accent chips**, which is inside the *"more than three raspberry
+elements, remove two"* budget and worth restating rather than rediscovering: `disarm`, `spend`, and
+the active nav tab.
+
 **The intake switch is still drawn twice, deliberately, and the split made that cleaner rather than
 harder.** The board's tile answers *"is the fleet armed"*; the fleet view's panel answers *"who said
 so, and why"*, and only that one carries the note. `useIntake()` is new and is what keeps them one

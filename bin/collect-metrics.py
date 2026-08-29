@@ -1420,6 +1420,12 @@ AGENT_STAMPS = (("last_ok_at", "last_ok"), ("heartbeat_at", "heartbeat"),
                 # no staleness rule: the window either has rolled over or has not,
                 # and the API said when rather than leaving it to be estimated.
                 ("quota_resets_at", "quota_resets"),
+                # WHEN A PERSON'S SPEND OVERRIDE RUNS OUT, and ABSENT whenever
+                # the default is in force - which is the ordinary state. Its
+                # absence is the claim "the fleet is paced at the warning", so a
+                # zero here would say an override expired at the epoch rather
+                # than that there is none. Same family as the status above it.
+                ("quota_override_until", "quota_override"),
                 # WHEN THE FLEET LAST LOOKED FOR WORK TO DO, and it is a stamp
                 # rather than a number for the reason every other one here is:
                 # what matters is that it keeps advancing. An intake that has
@@ -1531,8 +1537,11 @@ def source_agents(m):
           "The API's own unified rate-limit status on the last model call: "
           "0 allowed, 1 allowed_warning, 2 rejected. ABSENT until a model phase "
           "has run, which is not the same as 0 and must not be drawn as healthy. "
-          "conduct holds the fleet at 1 or above until the window it named "
-          "clears, so a 2 here means something other than the fleet spent it.")
+          "conduct holds at 1 or above BY DEFAULT, so a 2 normally means "
+          "something other than the fleet spent it - unless "
+          "home_server_agent_quota_override_timestamp_seconds is in the future, "
+          "which is a person having lifted the warning hold for the life of one "
+          "window.")
 
     for key, suffix, help_text in AGENT_NUMBERS:
         m.add("home_server_agent_" + suffix, _marker_number(state.get(key)),
@@ -3369,6 +3378,12 @@ def _fleet_control(conn, env):
         "restart_floor_sec": FLEET_RESTART_FLOOR_SEC,
         "intake": [],
         "holds": [],
+        # THE QUOTA OVERRIDE, AND ITS VALUE IS A STAMP RATHER THAN on/off. It is
+        # the moment the fleet goes back to pacing itself at the warning, which
+        # is the only thing worth drawing: an override is interesting for how
+        # much longer it has, not for the fact that somebody once set one. null
+        # when nobody has, which the board must not draw as "expired".
+        "quota": None,
     }
     if not _fleet_has(conn, "control", "name"):
         # conduct and this file deploy separately, and the table arrives with a
@@ -3385,6 +3400,13 @@ def _fleet_control(conn, env):
             block["intake"].append(entry)
         elif name == "hold":
             block["holds"].append(entry)
+        elif name == "quota":
+            # ONE ROW, NOT A LIST, because state.quota_name() takes no subject -
+            # the quota is the ACCOUNT'S and last_quota is global for the same
+            # reason. `restart:*` still falls through here deliberately: it is a
+            # debounce stamp conduct reads back, and nothing on the board draws
+            # it.
+            block["quota"] = entry
     return block
 
 

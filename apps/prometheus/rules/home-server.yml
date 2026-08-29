@@ -604,16 +604,28 @@ groups:
 
       - alert: AgentQuotaRejected
         # FIRES ON A REJECTION AND NOT ON A WARNING, WHICH IS THE WHOLE POINT OF
-        # THE GAP. conduct holds the fleet at allowed_warning (1), so it can never
-        # take the account to a rejection by itself: a 2 here means the
-        # subscription ran out for some other reason - almost always your own
-        # sessions - and the fleet has already stopped on its own.
+        # THE GAP. conduct holds the fleet at allowed_warning (1) by default, so
+        # ORDINARILY it cannot take the account to a rejection by itself: a 2
+        # here means the subscription ran out for some other reason - almost
+        # always your own sessions - and the fleet has already stopped on its own.
         #
-        # SO THIS IS NOT A REMEDY ALERT ANY MORE. The previous version told you to
-        # stop conduct, which was right when nothing paced it and is wrong now:
-        # stopping the fleet does not give a rejected window back, and the fleet
-        # is not what is spending. What it tells you is that YOUR next session
-        # will fail, which is worth knowing before you sit down to one.
+        # THE ONE CASE WHERE THAT INFERENCE DOES NOT HOLD is a person having
+        # lifted the warning hold for the life of a window, which raises the
+        # level to `rejected` and lets the fleet spend the headroom deliberately.
+        # Then a 2 CAN be the fleet's own doing, and stopping it is a real remedy
+        # again. `home_server_agent_quota_override_timestamp_seconds` in the
+        # future is what says so, and agents.quota_headroom's message names it -
+        # which is why the description below points at that rather than trying to
+        # decide it here. Deliberately NOT a second clause on the expression: a
+        # rejection is worth knowing about either way, and one that fired only
+        # while nobody had asked for it would go silent in exactly the state
+        # somebody would most want to be told.
+        #
+        # SO THE REMEDY IS CONDITIONAL RATHER THAN ABSENT. Under the default,
+        # stopping conduct gives nothing back and the fleet has already stopped;
+        # under a live override, `conduct control quota_pace` is the thing to do.
+        # Either way it tells you YOUR next session will fail, which is worth
+        # knowing before you sit down to one.
         #
         # This was home_server_agent_quota_ratio > 0.9 until 2026-08-23, when the
         # source turned out to be unreachable from this host: /api/oauth/usage
@@ -642,9 +654,13 @@ groups:
         annotations:
           summary: "The subscription reported a rate-limit rejection"
           description: >-
-            The fleet shares one subscription with your own sessions, and it
-            holds at the warning below this one - so a rejection means something
-            other than the fleet spent the window. It clears on its own; see
+            The fleet shares one subscription with your own sessions and holds
+            at the warning below this one, so a rejection usually means
+            something other than the fleet spent the window. Check
+            agents.quota_headroom first: if somebody lifted the warning hold for
+            this window, the fleet has been spending it on purpose and
+            `conduct control quota_pace` restores the pacing. It clears on its
+            own either way; see
             home_server_agent_quota_resets_timestamp_seconds for when.
 
       - alert: AgentPhaseStuck
