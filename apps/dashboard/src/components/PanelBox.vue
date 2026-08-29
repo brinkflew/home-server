@@ -15,7 +15,7 @@ withDefaults(
     sunken?: boolean;
     padding?: string;
   }>(),
-  { label: "", stale: null, sunken: false, padding: "13px" },
+  { label: "", stale: null, sunken: false, padding: "var(--pad-panel)" },
 );
 </script>
 
@@ -35,15 +35,20 @@ withDefaults(
 </template>
 
 <style scoped>
+/* NO BORDER, and that is the design rather than an omission: the surface
+   steps are ~0.03 L apart, which is wide enough for a panel to separate from
+   the page on its own. A lifted fill plus a hairline is belt and braces, and
+   twenty bordered boxes on a near-black ground read as a wireframe. Only a
+   FLOATING surface - the tooltip, a graph node - draws an edge. */
 .panel {
-  background: var(--surface-raised);
-  border: 1px solid var(--line);
+  background: var(--surface-card);
+  border: 1px solid var(--border-card);
   border-radius: var(--r-md);
   min-width: 0;
 }
 
 .sunken {
-  background: var(--surface-sunken);
+  background: var(--surface-card-inset);
 }
 
 .head {
@@ -51,7 +56,7 @@ withDefaults(
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 11px;
+  margin-bottom: 12px;
 }
 
 .aside {
@@ -63,17 +68,10 @@ withDefaults(
   min-width: 0;
 }
 
-/* Dimmed, not hidden. The last known value is still the most useful thing on
-   screen; what changes is that it no longer claims to be current. */
-.dim {
-  opacity: 0.4;
-  filter: saturate(0.5);
-}
-
 .stale {
-  margin-top: 10px;
-  padding-top: 9px;
-  border-top: 1px solid var(--line);
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid var(--border-divider);
   font: var(--t-mono-sm);
   color: var(--warn);
 }

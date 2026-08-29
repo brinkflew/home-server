@@ -3723,3 +3723,43 @@ three of them are the same mistake in different clothes.
   files into `dist/` from the working tree and proves nothing about the image. **The check has to be
   made inside the image** - `podman run --rm --entrypoint ls <image> /srv/dist/favicon.svg ...` -
   and the local build passing is not evidence either way.
+
+### A number in one file that only means anything because of a number in another
+- **`fitRole`'s 5.9 was the per-character advance of Azeret Mono at 9.5px, hardcoded in
+  `src/graph.ts`, and moving the type scale invalidated it silently.** It truncates a network node's
+  role to fit a 150px box; at 11px Spline Sans Mono the advance is 6.6, so it kept cutting at the
+  OLD character count while each of those characters had grown, and the text ran to within 4px of
+  the box. Nothing failed, nothing warned, and the symptom - a label that overflows its box - is the
+  exact appearance the function exists to prevent. **The container NAME was never fitted at all**
+  and had simply been short enough: `windmill-worker-verify` drew 173px into a 150px box the moment
+  `--t-mono-md` went from 11px to 13px.
+- Both constants are now named for the token they belong to and both were **measured in the
+  browser** rather than derived, because the advance depends on the face as well as the size.
+- Same family as the collector metric and fact-key collision: two files that must agree, with
+  nothing between them that can say they do not.
+
+### A fixture whose clock moves is a fixture with no stable identity
+- **A round's key IS its start time**, so `fixtures/fleet.ts` stamping relative to `Date.now()` on
+  every request handed out a different key every second. Every deep link to
+  `/agents/rounds/<key>` therefore landed on "this round is not on the board", however fresh the
+  link was.
+- **Clicking a row always worked**, because the row and the lookup read the same document - so the
+  fault could only ever show on a hand-typed URL or a reload, which is the one path a click-through
+  review never takes. The anchor is at module load now, the same intent `fixtures/model.ts` records
+  for its seeded rng: a dev document that changes under you is one nobody can screenshot twice.
+
+### Three ways a shared class or a shared box was not shared at all
+- **`white-space: nowrap` on a chip defeats `table-layout: fixed`.** The recipe's own comment
+  promises an over-long cell will clip; it can only do that if something inside the cell can shrink,
+  and an inline-flex that refuses to wrap is not that. One long branch name widened the round board
+  and gave the whole page a horizontal scrollbar. `ChipLink` wraps its label in a shrinkable span.
+- **A page's toolbar text borrowed the class its panel footnotes use.** `CiPage`'s `.note` carries
+  `margin-top`, `padding-top` and a `border-top`, so `read only` teleported into the shell header
+  with a stray rule above it - correct-looking for a year at 10px, obvious the moment the type grew.
+  The two other pages that teleport the same string define `.note` as a plain dim line, so only one
+  of the four was wrong and nothing could have told you which.
+- **Everything in the shell header was shrinkable, so the wrong half gave way.** 13px type widened
+  seven tabs past what 1360 could hold beside the System page's toolbar, and the browser compressed
+  the mark and wrapped the OS line rather than the toolbar - a 75px header with a nav tab under it.
+  The nav is `flex: none` and the toolbar is the half that clips, because a page's own toolbar is
+  the half that may give way.

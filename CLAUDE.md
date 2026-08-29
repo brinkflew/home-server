@@ -1234,6 +1234,26 @@ signal read green.
   simply absent.
 - A local `npm run build` proves nothing about this: the check has to run inside the built image.
 
+### A number in one file that only means anything because of a number in another
+- `fitRole`'s 5.9 was Azeret Mono's advance at 9.5px, hardcoded in `graph.ts`; moving the type scale
+  invalidated it silently and the label overflowed the box the function exists to fit it to. The
+  node NAME was never fitted at all and had only ever been short enough.
+- Both constants are named for their token now, and both were measured in the browser.
+
+### A fixture whose clock moves is a fixture with no stable identity
+- A round's key IS its start time, so a per-request `Date.now()` handed out a different key every
+  second and every deep link landed on "not on the board".
+- Clicking a row always worked, because the row and the lookup read the same document - so it could
+  only show on a hand-typed URL or a reload.
+
+### Three ways a shared class or a shared box was not shared at all
+- `white-space: nowrap` on a chip defeats `table-layout: fixed`: the cell can only clip if something
+  inside it can shrink, and one branch name gave the page a horizontal scrollbar.
+- A page's toolbar text borrowed the class its panel footnotes use, so `read only` teleported into
+  the shell header carrying a border. Three other pages define the same name differently.
+- Everything in the shell header was shrinkable, so 13px type compressed the MARK and wrapped the OS
+  line rather than the toolbar. The nav is `flex: none`; the toolbar is the half that clips.
+
 
 ## Target architecture
 

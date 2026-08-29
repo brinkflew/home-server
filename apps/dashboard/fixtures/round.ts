@@ -1,15 +1,23 @@
 // =============================================================================
-// One round's detail document, for the panel that opens under a row
+// One round's detail document, for the page at /agents/rounds/<key>
 // -----------------------------------------------------------------------------
 // TYPED AGAINST src/types.ts, so a fixture that drifts from the contract
 // bin/collect-metrics.py writes is a COMPILE ERROR rather than a panel that
 // quietly renders nothing.
 //
-// THE ABSENT CASE IS THE ONE WORTH HAVING. A round can be on the board before
-// its document exists - the collector renders a few phase logs per pass so a
-// cold start converges - so `MISSING_ROUNDS` gives the dev server rounds that
-// answer 404, which is what puts the panel's "not yet" state on screen beside
-// real ones. It is the same trick MISSING_POSTERS plays for the poster tile.
+// THE ABSENT CASES ARE THE ONES WORTH HAVING, and there are two now that the
+// round is a route rather than an expander.
+//
+//   1. THE DOCUMENT IS NOT WRITTEN YET. A round can be on the board before its
+//      document exists - the collector renders a few phase logs per pass so a
+//      cold start converges - so `MISSING_ROUNDS` gives the dev server rounds
+//      that answer 404. Same trick MISSING_POSTERS plays for the poster tile.
+//
+//   2. THE ROUND IS NOT ON THE BOARD. Only a deep link can reach this: a round
+//      that has been swept, or a merged one the board hides. The server answers
+//      a document for ANY key it is asked for, so browsing to
+//      /agents/rounds/swept-round-20260101T000000Z puts that state on screen -
+//      the document renders and the header says why the row is absent.
 // =============================================================================
 
 import type { RoundDocument } from "../src/types";

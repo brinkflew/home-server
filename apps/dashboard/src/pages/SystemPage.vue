@@ -519,7 +519,7 @@ const jellyfinSessions = usePoll(
 <template>
   <div class="page">
     <Teleport defer to="#toolbar">
-      <span class="mono os">{{ osLine }}</span>
+      <span class="mono os truncate" :title="osLine">{{ osLine }}</span>
       <span v-if="staged" class="staged mono">{{ staged }} staged</span>
 
       <WindowPicker />
@@ -876,12 +876,18 @@ const jellyfinSessions = usePoll(
   gap: 12px;
 }
 
+/* CAPPED, because this is the longest thing any page teleports into the shell
+   header and the header has seven tabs, a picker and the verdict beside it. The
+   full string is on the title, and nobody reads a build id character by
+   character - they read whether it changed. */
 .os {
   font: var(--t-mono-sm);
   color: var(--fg-5);
+  max-width: 210px;
 }
 
 .staged {
+  flex: none;
   font: var(--t-mono-sm);
   color: var(--warn);
   padding: 4px 9px;

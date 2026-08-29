@@ -1,9 +1,15 @@
 /* ==========================================================================
-   Reset and the handful of global rules
+   Reset, page ground, and the utilities worth being global
    --------------------------------------------------------------------------
    Everything else is scoped to a component. This file exists for the things
-   that genuinely cannot be: the box model, the page background, focus, and
-   the two utility classes that would otherwise be repeated in forty places.
+   that genuinely cannot be: the box model, the page background, focus, links,
+   scrollbars, the four text utilities, and ONE table recipe.
+
+   The table recipe is here rather than in a component because a list of
+   records turns out to be most of this product - findings, drives,
+   filesystems, backups, published ports, applications, the round board - and
+   several divergent hand-rolled implementations is how a system stops looking
+   like one system.
    ========================================================================== */
 
 *,
@@ -22,36 +28,10 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  line-height: 1.45;
+  font: var(--t-ui);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   font-variant-numeric: tabular-nums;
-}
-
-/* Tabular figures everywhere a number lives, so a value that ticks does not
-   reflow the column it sits in. This is why the design puts every number in
-   Azeret Mono in the first place. */
-.mono {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-}
-
-/* The section label: 10px mono, wide tracking, uppercase, dim. It appears
-   above almost every panel in the design. */
-.label {
-  font: var(--t-label);
-  letter-spacing: var(--track-label);
-  text-transform: uppercase;
-  color: var(--fg-5);
-}
-
-.truncate {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
 }
 
 h1,
@@ -79,19 +59,151 @@ button {
   cursor: pointer;
 }
 
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+/* Links are the accent. Raspberry means "a person can act on this", and a link
+   is the purest case of it. The hover LIFTS rather than darkens, because
+   contrast runs the other way on a near-black ground. */
 a {
-  color: var(--ok);
+  color: var(--text-link);
   text-decoration: none;
+  transition: color var(--dur-fast) var(--ease-standard);
 }
 
 a:hover {
-  color: var(--ok-hover);
+  color: var(--text-link-hover);
 }
 
-/* Keyboard focus only. A mouse click on a panel header should not draw a
-   ring, but tabbing to it must. */
+/* --- The two numeric voices -----------------------------------------------
+   .mono is for anything you would copy, grep or type, and for any value
+   carrying a unit. .count is for a bare count. Both are tabular, so neither
+   reflows its column as it ticks; the difference is which voice the page
+   speaks in, and a page of bare counts should not sound like a config file. */
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.count {
+  font-family: var(--font-ui);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* The section label: sans, semibold, uppercase, tracked. It appears above
+   almost every panel in the design. */
+.label {
+  font: var(--t-label);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--text-label);
+}
+
+.truncate {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* Dimmed, not hidden. A stale panel's last known value is still the most
+   useful thing on screen; what changes is that it stops claiming to be
+   current. DESATURATING AS WELL AS DIMMING IS LOAD-BEARING - dimming alone
+   leaves a teal reading still looking healthy. */
+.dim {
+  opacity: 0.42;
+  filter: saturate(0.45);
+}
+
+/* --- Tables ---------------------------------------------------------------
+   A table is a table. A list of records with two or more attributes each is
+   NOT a grid of cards: a card grid makes the reader re-find every field in
+   every tile, in a different place each time because the values are different
+   lengths, where a column lets them scan one field down all of them and read
+   only the rows that matter.
+
+   One horizontal rule per row and nothing else. No vertical rules, no zebra,
+   no outer border - the panel's surface step already bounds it, and a ruled
+   grid on a near-black ground reads as a spreadsheet.
+
+   table-layout: fixed IS NOT COSMETIC. With auto layout, width:100% is a
+   FLOOR: the table grows past its container whenever a column's min-content
+   width exceeds its share, and one nowrap sentence in a cell (a .truncate div
+   with no max-width) is enough to do it. Fixed layout honours the th width
+   hints and makes an over-long cell clip, which is what every call site
+   already intends. */
+.tbl {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.tbl th {
+  font: var(--t-label);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--text-label);
+  padding: 0 12px 10px;
+  white-space: nowrap;
+}
+
+.tbl td {
+  padding: var(--pad-cell);
+  border-top: 1px solid var(--border-table);
+  vertical-align: middle;
+  overflow-wrap: anywhere;
+}
+
+.tbl tbody tr:first-child td {
+  border-top: 1px solid var(--border-divider);
+}
+
+.tbl th:first-child,
+.tbl td:first-child {
+  padding-left: 2px;
+}
+
+.tbl th:last-child,
+.tbl td:last-child {
+  padding-right: 2px;
+}
+
+.tbl .r {
+  text-align: right;
+}
+
+.tbl .tight td {
+  padding: var(--pad-cell-tight);
+}
+
+/* Rows are hoverable only where a row leads somewhere or carries a tooltip. */
+.tbl tbody tr.hov:hover {
+  background: var(--fill);
+}
+
+/* The severity rail: a 2px inside edge on the first cell, so the colour reads
+   down the left of the table without a coloured wash on every row. It
+   overrides the flush first-column padding - the cell's content has to clear
+   the rail, not sit on it. */
+.tbl td.rail {
+  box-shadow: inset 2px 0 0 var(--rail, transparent);
+}
+
+.tbl td.rail:first-child {
+  padding-left: 12px;
+}
+
+/* Keyboard focus only, and it is the accent. A mouse click on a panel header
+   must not draw a ring; tabbing to it must. Focus is the accent and nothing
+   else, so a keyboard ring can never be mistaken for a health reading. */
 :focus-visible {
-  outline: 2px solid var(--ok);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
   border-radius: var(--r-xs);
 }
@@ -100,7 +212,7 @@ a:hover {
    single most obvious tell that a dark UI was not finished. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: oklch(1 0 0 / 0.14) transparent;
+  scrollbar-color: oklch(1 0 0 / 0.16) transparent;
 }
 
 *::-webkit-scrollbar {
@@ -113,10 +225,10 @@ a:hover {
 }
 
 *::-webkit-scrollbar-thumb {
-  background: oklch(1 0 0 / 0.14);
+  background: oklch(1 0 0 / 0.16);
   border-radius: 5px;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: oklch(1 0 0 / 0.22);
+  background: oklch(1 0 0 / 0.24);
 }

@@ -254,10 +254,36 @@ export function spokePath(n: PlacedNode, railYValue: number, hub = false): strin
   return `M ${x} ${y} V ${railYValue}`;
 }
 
-/** Fit a role line to the box. Measured rather than guessed: Azeret Mono at
- *  9.5px is about 5.9px a character, and a role that overflows its box reads as
- *  a rendering bug rather than as a truncation. */
+/**
+ * Fit a line of mono text to a node box, by measuring rather than guessing.
+ *
+ * THE ADVANCE IS TIED TO A TYPE ROLE AND MOVES WITH IT. This was one hardcoded
+ * 5.9, for Azeret Mono at 9.5px, and it was silently wrong the moment the type
+ * scale moved to Spline Sans Mono with an 11px floor: the role kept truncating
+ * at the old CHARACTER count while each of those characters had grown, so the
+ * text ran to within 4px of a 150px box. A label that overflows its box reads
+ * as a rendering bug rather than as a truncation, which is the whole reason
+ * this function exists.
+ *
+ * Both numbers are measured in the browser at the sizes tokens.css sets:
+ * --t-mono-xs is 11px and --t-mono-md is 13px, and Spline Sans Mono advances
+ * 0.6em, so 6.6 and 7.8. THE NAME NEEDS FITTING TOO - `windmill-worker-verify`
+ * is 22 characters and drew 173px into a 150px box.
+ */
+const ADV_ROLE = 6.6; // --t-mono-xs, 11px
+const ADV_NAME = 7.8; // --t-mono-md, 13px
+
+function fit(text: string, budget: number, advance: number): string {
+  const max = Math.floor(budget / advance);
+  return text.length <= max ? text : `${text.slice(0, Math.max(1, max - 1))}.`;
+}
+
+/** The role line, which is inset 9px on both sides of the box. */
 export function fitRole(role: string, width = NODE_W): string {
-  const max = Math.floor((width - 18) / 5.9);
-  return role.length <= max ? role : `${role.slice(0, max - 1)}.`;
+  return fit(role, width - 18, ADV_ROLE);
+}
+
+/** The name, which is inset 20px on the left for the status dot and 9px right. */
+export function fitName(name: string, width = NODE_W): string {
+  return fit(name, width - 29, ADV_NAME);
 }

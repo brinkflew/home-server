@@ -536,14 +536,17 @@ function onLeave(): void {
           vector-effect="non-scaling-stroke"
         />
 
-        <!-- The cursor, drawn last so it sits over the lines it is reading. -->
+        <!-- The cursor, drawn last so it sits over the lines it is reading.
+             IT IS THE ACCENT, not a grey: the crosshair is a place a PERSON
+             put the pointer, and everything else on this chart is something
+             the machine measured. The series dots keep their own tones. -->
         <g v-if="cursor">
           <line
             :x1="cursor.x"
             y1="0"
             :x2="cursor.x"
             :y2="height"
-            stroke="var(--fg-5)"
+            stroke="var(--accent)"
             stroke-width="1"
             vector-effect="non-scaling-stroke"
           />
@@ -727,9 +730,12 @@ function onLeave(): void {
   z-index: 1;
 }
 
+/* The instant the reader chose, so it is the accent - the same hue as the
+   rule it sits above. The VALUES below stay in the ink ramp: they are
+   measurements, and the reader picked the moment, not the number. */
 .r-time {
   font: var(--t-mono-xs);
-  color: var(--fg-5);
+  color: var(--accent);
 }
 
 .r-row {

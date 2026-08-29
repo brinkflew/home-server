@@ -394,7 +394,7 @@ const sliceTip = computed(() => ({
 <template>
   <div class="page">
     <Teleport defer to="#toolbar">
-      <span class="mono note">read only</span>
+      <span class="mono tnote">read only</span>
       <WindowPicker />
     </Teleport>
 
@@ -776,6 +776,15 @@ const sliceTip = computed(() => ({
   padding-top: 9px;
   border-top: 1px solid var(--line);
   font: var(--t-mono-xs);
+  color: var(--fg-5);
+}
+
+/* THE TOOLBAR LINE IS NOT A PANEL FOOTNOTE, and it borrowed `.note` from one -
+   so "read only" was teleported into the shell header carrying a top border
+   and 10px of margin, which drew a stray rule above it and made this page's
+   header a pixel taller than every other. */
+.tnote {
+  font: var(--t-mono-sm);
   color: var(--fg-5);
 }
 

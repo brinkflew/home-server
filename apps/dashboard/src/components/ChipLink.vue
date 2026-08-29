@@ -50,7 +50,7 @@ withDefaults(
     <!-- For a leading status dot. The service strip needs one; the action chips
          in the Library table do not. -->
     <slot name="lead" />
-    {{ label }}
+    <span class="ctext">{{ label }}</span>
     <!-- Inline SVG, not a unicode arrow: the ASCII lint covers every .vue file. -->
     <svg class="out" width="7" height="7" viewBox="0 0 10 10" fill="none" stroke="currentColor" aria-hidden="true">
       <path d="M3.5 1.5h5v5" stroke-width="1.3" />
@@ -61,7 +61,7 @@ withDefaults(
 
   <span v-else class="chip mono disabled" :title="title || 'not reachable from here'" aria-disabled="true">
     <slot name="lead" />
-    {{ label }}
+    <span class="ctext">{{ label }}</span>
   </span>
 </template>
 
@@ -70,24 +70,38 @@ withDefaults(
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 7px;
-  font: var(--t-mono-xs);
+  padding: var(--pad-chip);
+  font: var(--t-mono-sm);
   color: var(--fg-4);
   background: var(--surface-chip);
   border: 1px solid var(--line);
   border-radius: var(--r-xs);
   white-space: nowrap;
+  max-width: 100%;
+  transition: color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard);
 }
 
+/* A CHIP THAT LEADS SOMEWHERE PICKS UP THE ACCENT ON HOVER, whatever the row's
+   health is. It used to go teal when `tone` was `ok`, which said "healthy" and
+   "you can click this" in one colour - the exact conflation the accent split
+   exists to end. The lead dot still carries the reading. */
 a.chip:hover {
-  color: var(--fg);
+  color: var(--accent);
   background: var(--fill-hover);
-  border-color: var(--line-strong);
+  border-color: var(--accent-edge);
 }
 
-a.chip.ok:hover {
-  color: var(--ok);
-  border-color: var(--ok-edge);
+/* THE LABEL IS THE PART THAT MAY SHRINK. A branch name is arbitrarily long
+   and lands in a 132px column; without this the chip refuses to narrow, the
+   fixed table layout has nothing to clip, and the whole page grows a
+   horizontal scrollbar. The arrow keeps its size - a truncated chip must still
+   read as a link. */
+.ctext {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .out {

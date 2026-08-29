@@ -18,6 +18,80 @@ cd apps/dashboard && npm run dev                             # fixtures, no serv
 Library landed 2026-08-17** and needed a data layer before they needed a design. **Network split out
 of Services on 2026-08-18**, and needed a measurement that did not exist - see below.
 
+**The token layer was rebuilt on 2026-08-29, and Agents was rebuilt on top of it.** The design
+system at claude.ai/design project `60a0f67c-53ab-4a0a-92c0-fdbf0761934d` is this dashboard's own
+language revised - it read the codebase, so its arguments name this application rather than
+dashboards in general - and four of them moved real code:
+
+- **Dense became legible.** The first pass had transcribed a 9.5px floor and a 22px ceiling
+  verbatim, and both were judged wrong: 9.5px is below what any screen carries, and a 22px ceiling
+  *"left a page with no voice at all - every line the same size, so nothing told you where you
+  were."* The scale is 11px to 32px, and `--t-ui` went 12px to 13px.
+- **A BAND IS EITHER FULL WIDTH OR N EQUAL COLUMNS.** This replaced a bento, and the System page is
+  the one it names: a 12-column grid running 7/5 then 4/4/4, *"every panel a different width for
+  reasons that were true of its content and invisible to a reader, so the page had no organisation
+  to learn."* `Band.vue` makes the rule structural rather than a convention. **A band that wants a
+  grid AND a full-width panel under it is two bands.**
+- **A LIST OF RECORDS IS A TABLE, NEVER A GRID OF CARDS.** One global `.tbl` in `base.css`: one
+  horizontal rule per row, no vertical rules, no zebra, no outer border, and severity as a 2px
+  inside edge on the first cell (`td.rail` with `--rail`), so the colour reads down the left
+  without a wash on every row. `table-layout: fixed` is in that recipe and is not cosmetic - with
+  auto layout `width: 100%` is a FLOOR, and one nowrap cell grows the table past its container.
+- **The panel lost its border.** `--border-card` is `transparent` on purpose: the surface steps are
+  about 0.03 L apart, which is enough to separate a panel from the page on its own, and *"twenty
+  bordered boxes on a near-black ground read as a wireframe."*
+
+**Two numeric voices, split by KIND rather than by "is it a number".** `.mono` is for anything you
+would copy, grep or type and for any value carrying a unit; `.count` is for a bare count. The old
+rule put `12 units` and `/var/mnt/media` in the same voice, which made a page of counts read like a
+config file. Both are tabular, so neither reflows its column as it ticks - which was the only real
+argument for mono here and holds either way. The sweep is scoped to Agents; the other six pages keep
+`.mono` until each has its own pass.
+
+**The Agents page became three views behind one nav tab.** `AgentsPage.vue` had reached 1,476 lines
+and nine panels, plus `RoundDetail.vue`'s 365 in an expander under the board, and it answered at
+least three different questions at once. A person watching for a gate to answer had to scroll past
+four panels about the machinery to reach it.
+
+| Route | Answers |
+|---|---|
+| `/agents/rounds` | is the fleet working, and does it need me? |
+| `/agents/rounds/<key>` | what did this round do? |
+| `/agents/fleet` | what is the machinery doing, and what does it cost? |
+
+`router.ts` gained its first nested record for it, and `pages/agents/AgentsLayout.vue` carries the
+sub-navigation and the toolbar note. **The sub-nav is `WindowPicker`'s own box**, because a
+segmented control already means "pick one of these" here and a second segmented idiom that looked
+slightly different would be a new thing to learn for nothing. It is in the page body rather than a
+second row of tabs in `NavBar`, which every one of the other six pages would have paid for in
+height.
+
+**Splitting the page cannot restart a freshness clock, and that is why it was safe.** All three
+stores are instantiated in `App.vue` for the reason its own comment gives - `usePoll` resets
+`lastOk` on unmount - so moving between these three views does not touch `fleet.json`'s clock.
+The **Prometheus** polls are per view and deliberately so: `useMetricsStale()` reads the host store
+rather than those polls, so each view asks for only the numbers it draws. The single page fetched
+24 instant queries and 5 ranges on every poll; the board now asks for 8, the fleet view for 15 and
+3. **Three of the old queries were fetched and drawn nowhere at all** - `markerPresent`, `lastOk`
+and `slicePids` - and are not carried over.
+
+**`WindowPicker` moved to `/agents/fleet` alone.** It is the only one of the three with a chart on a
+time axis, and on the single page it sat above five panels that ignored it - *"a picker that changes
+nothing on screen is a lie about a control."*
+
+**The intake switch is still drawn twice, deliberately, and the split made that cleaner rather than
+harder.** The board's tile answers *"is the fleet armed"*; the fleet view's panel answers *"who said
+so, and why"*, and only that one carries the note. `useIntake()` is new and is what keeps them one
+derivation: the state word, the tone, the chip's label, the command it sends and whether an ask is
+still outstanding all come off it, so a chip reading `arm` on one view cannot send `intake_off` from
+the other. `src/roundboard.ts` does the same job for the row: the board and the round page both
+need to say how far a round has got and how long it has been going, and two copies of *"elapsed
+leads, the estimate is usually absent"* would be two copies of a rule already got wrong once.
+
+**The design project's `templates/dashboard-page/` is STALE against its own README** and should not
+be followed. It still shows a 12-column bento with bespoke spans and still says *"nothing above
+22px"* - both of which the README explicitly replaced. The README and `tokens/` are authoritative.
+
 **It READS, and since 2026-08-28 it can ask the fleet for three things.** The design has restart,
 pull, approve and terminate buttons, and no container here can have them: `container_t ->
 unconfined_t : unix_stream_socket connectto` is DENY and is not fixable by relabelling. Nothing here
@@ -417,15 +491,36 @@ is that a Prometheus range query returns *nothing* for a timestamp where the ser
 and `polyline` cannot express a break - it would draw a straight line across an outage, which reads
 as "steady" when it means "absent". Lines are built as a `path` with a fresh `M` after every gap.
 
-**Fonts are vendored, not fetched.** `@fontsource/*` self-hosts Geist and Azeret Mono in the bundle,
-for the reason `apps/jellyfin/custom.css` records at length about the sixteen `@import` URLs it used
-to carry.
+**Fonts are vendored, not fetched.** `@fontsource-variable/*` self-hosts Spline Sans and Spline Sans
+Mono in the bundle, for the reason `apps/jellyfin/custom.css` records at length about the sixteen
+`@import` URLs it used to carry. They replaced Geist and Azeret Mono on 2026-08-29, and the reason
+is in the design system's own README: the mono is the sans's metric sibling, so a label and its
+value sit on the same x-height, and every size and leading in `tokens.css` was chosen against those
+metrics. **The family name carries `Variable`** - fontsource's variable packages declare
+`Spline Sans Variable`, so a stack naming plain `Spline Sans` matches nothing and falls silently
+through to `system-ui` with no error anywhere. `wght.css` rather than `index.css`, because the mono
+ships an italic axis this design never sets and `index.css` would pull both: four woff2 files,
+latin and latin-ext, one per face rather than three.
 
-**Every row opens now, and what it opens onto is a document of its own.** The state cell is a
-button; opening it draws a full-width sibling row - not a child, because `.row` IS the grid and
-anything inside it becomes an eighth cell and shifts the seven beside it. One at a time, which is
-`useTooltip`'s rule and for its reason. It still carries `run.error` and `chain.closed_why`, both
-**displayed and never parsed**, and below them `RoundDetail.vue` draws the round's own document.
+**A round is a page now, and the expander is gone.** It was a full-width sibling row - not a child,
+because `.row` WAS the grid and anything inside it became an eighth cell and shifted the seven
+beside it - and inside that row sat the approval card, the phase transcripts and the event log. The
+card alone is around 7,500 bytes of prose, which is the text somebody is actually approving, and it
+was rendering inside a table row. `/agents/rounds/<key>` is what replaced it, and being a route
+gives it the one thing an expander could never have: **a URL a person can send themselves before
+they answer a gate.** It still carries `run.error` and `chain.closed_why`, both **displayed and
+never parsed**. The whole row is the link; the key is `roundKey()`'s, which is the collector's own
+filename key.
+
+**A deep link makes three absences reachable that the expander could not**, and they are three
+different sentences. `fleet.json` has not been read yet, which is *"reading"* and not *"absent"*.
+The round is not on the board at all - swept, or a merged round the board hides - in which case the
+document still renders and the header says why the row is missing. And the document itself 404s,
+which is *"not yet"*, unchanged. `fixtures/fleet.ts` had to gain a **clock anchored at module load**
+for the second of those to be testable: a round's key is its start time, so a fixture re-stamped on
+every fetch handed out a different key every second, and every deep link in dev landed on *"not on
+the board"* however fresh it was. Clicking a row always worked, because the row and the lookup read
+the same document - so the fault only ever showed on a hand-typed URL or a reload.
 
 **The refusal this replaced was right when it was written, and is amended rather than contradicted.**
 It read: *"it names the gate log rather than linking it: the log is ten megabytes on the host,
@@ -442,16 +537,16 @@ what makes the redaction affordable, `DOCKER_VOLUME_CACHE` appearing 3,920 times
 because reading the code is not evidence. **An unreadable `.env` skips the render entirely**: a
 redactor built from an empty environment looks exactly like one that found nothing to redact.
 
-**The gate used to be "did this round fail", and lifting it was the point.** Keying the expander on
+**The gate used to be "did this round fail", and lifting it was the point.** Keying the opener on
 `roundState(r).tone` was right while the panel held only a failure sentence - conduct writes
 `closed_why` on every round it closes, "reached the publish path" included, so keying on that field
-would have put an expander on every finished row opening onto a reason nothing had gone wrong. The
-panel now holds the approval card, the events and the transcripts, and **a round that went well is
+would have put an opener on every finished row leading to a reason nothing had gone wrong. The
+page now holds the approval card, the events and the transcripts, and **a round that went well is
 exactly the one whose work somebody wants to read before approving it**. `roundError` still keys on
 the tone, so the sentences appear only where there are sentences; the two sources also overlap -
 `closed_why` is built as `"the flow failed: <the refusal>"` - and `roundError` prints it once.
 
-**A round's document is fetched when its row is opened, and it is the only non-polled read here.**
+**A round's document is fetched when its page is opened, and it is the only non-polled read here.**
 ~400 KB each and forty on the board: polling would be sixteen megabytes a tick to render a panel
 that is usually closed, and `usePoll` could not do it anyway - it fires on construction, so a handle
 per row would fetch every round the moment the board rendered. **A 404 is the ordinary state**, not
@@ -523,13 +618,26 @@ unit grid, so every edge lands on a whole pixel when it halves to 16. It is draw
 out a unicode glyph and an icon package would be a dependency carrying two icons. 20px against the
 11px wordmark is the design's own small lockup, so nothing in the header's metrics moved.
 
-**`--brand` is not a fourth status colour and it is not an interaction colour.** Teal still means
-healthy and still means focus. The mark is the ONE element allowed a colour of its own, and the
-reason is the placeholder's: a logo painted in the status colour reads as a reading. It has exactly
-two consumers - `NavBar.vue`'s `.glyph`, and `public/favicon.svg`, which carries the hex literally
-because a favicon is fetched by the browser outside the page and can resolve no custom property.
-`tokens.css` and the SVG's own header each name the other, because that duplication is the drift to
-watch: change one and re-cut the other.
+**`--brand` became `--accent` on 2026-08-29, and that reversed the paragraph that stood here for a
+day.** It said the mark was the ONE element allowed a colour of its own, that teal still meant
+healthy AND still meant focus, and that `--brand` had exactly two consumers. The design system the
+dashboard was rebuilt on rejects the middle clause outright, and its argument is about this
+codebase rather than about dashboards in general: teal did two jobs here, so *"this container is
+fine"* and *"you can click this"* were the same colour, and a reader had no way to tell a health
+reading from an affordance. The split is by **who is speaking**. Teal says the machine measured
+something. Raspberry says a person can act - links, focus, the active tab, the selected filter, the
+window picker's pick, the chart crosshair and its readout, and the mark.
+
+**The mark's own hue did not move**, so no raster was re-cut: `#df5d8c` and `#962558` are the same
+values under the new names. What changed is that the mark stopped being the only consumer.
+`public/favicon.svg` still carries them as hex literals, because a favicon is fetched by the
+browser outside the page and can resolve no custom property, and `tokens.css` and the SVG's own
+header still each name the other - that duplication is the drift to watch: change one and re-cut
+the other.
+
+**The rule that survived is the one about quantity.** One point of emphasis per view, inherited
+verbatim: if a screen has more than three raspberry elements, remove two. Teal is still never
+sprinkled; it simply no longer means two things at once.
 
 **There was no favicon at all before this.** `index.html` carried no `<link rel="icon">`, so a
 browser's `/favicon.ico` fell through the container Caddyfile's `try_files` and was answered with

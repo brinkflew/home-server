@@ -16,6 +16,14 @@
  * twenty. A `fail` keeps its tint - a failure should still be loud - and that
  * is the whole of the difference.
  *
+ * AND IT IS A TABLE, since 2026-08-29. A finding is a record with three
+ * attributes, and this was a two-column grid of tinted boxes: the id landed in
+ * a different place in every box because the message above it was a different
+ * length, so there was no way to run an eye down the ids. A column gives that
+ * back, and the rail carries the severity down the left without washing every
+ * row. `td.rail` and the `--rail` custom property are the one global recipe in
+ * base.css.
+ *
  * SCOPED TO A SECTION, AND SHOWING PASSES, FOR THE TWO FLEET PAGES. That is
  * still one surface rather than the two that disagreed: same tone function, same
  * layout, same rule about `note`. What changes is the question. The System page
@@ -68,6 +76,18 @@ const problems = computed(() => {
   );
 });
 
+/**
+ * The rail, off the SAME status the dot reads, so the two cannot drift. --off
+ * for a `note`, which is the unlit LED: a check that could not run must not
+ * borrow the colour of one that ran and complained.
+ */
+function railFor(status: string): string {
+  if (status === "fail") return "var(--fail)";
+  if (status === "warn") return "var(--warn)";
+  if (status === "pass") return "var(--ok)";
+  return "var(--off)";
+}
+
 /** "14 checks, 2 not passing" for a section; the whole battery otherwise. */
 const tally = computed(() => {
   if (!host.doc) return null;
@@ -87,15 +107,26 @@ const tally = computed(() => {
       <span v-else-if="host.statusNeverRun">the check battery has never run here</span>
     </template>
 
-    <ul v-if="problems.length" class="findings">
-      <li v-for="c in problems" :key="c.id" class="finding" :class="c.status">
-        <StatusDot :tone="checkTone(c.status)" :live="c.status === 'fail'" :size="6" />
-        <div class="body">
-          <p class="msg" :title="c.message">{{ c.message }}</p>
-          <p class="fid mono">{{ c.id }}</p>
-        </div>
-      </li>
-    </ul>
+    <div v-if="problems.length" class="scroll">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th class="rail-head" />
+            <th class="id-head">Check</th>
+            <th>Finding</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="c in problems" :key="c.id" class="finding" :class="c.status">
+            <td class="rail" :style="{ '--rail': railFor(c.status) }">
+              <StatusDot :tone="checkTone(c.status)" :live="c.status === 'fail'" :size="6" />
+            </td>
+            <td class="fid mono">{{ c.id }}</td>
+            <td class="msg" :title="c.message">{{ c.message }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
     <p v-else-if="section && !tally" class="empty mono">
       this section is absent from the battery's last run - not passing, unmeasured
     </p>
@@ -108,63 +139,43 @@ const tally = computed(() => {
 </template>
 
 <style scoped>
-/* Columns rather than one tall list: this panel now holds every finding, and
-   twenty rows down the top of the page would push the charts off the screen. */
-.findings {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
-  gap: 5px 10px;
-  max-height: 240px;
+/* Capped and scrolled rather than unbounded: with `all` set this panel holds
+   every check in a section, and nineteen rows at the top of the page would
+   push everything else off the screen. */
+.scroll {
+  max-height: 300px;
   overflow-y: auto;
 }
 
-.finding {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 7px 10px;
-  border-radius: var(--r-xs);
-  /* The severity, as a rule rather than a wash. --off for a `note`, which is
-     the unlit LED: a check that could not run must not borrow the colour of
-     one that ran and complained. */
-  border-left: 2px solid var(--off);
-  background: var(--fill);
-  min-width: 0;
+.rail-head {
+  width: 30px;
 }
 
-.finding > :deep(.dot) {
-  margin-top: 4px;
+.id-head {
+  width: 232px;
 }
 
-.finding.warn {
-  border-left-color: var(--warn);
-}
-
+/* Only `fail` takes a tint. An amber wash reads well on three rows and becomes
+   a wall at twenty, which is why the rail is carrying the other two. */
 .finding.fail {
-  border-left-color: var(--fail);
   background: var(--fail-tint);
 }
 
-.body {
-  min-width: 0;
+.fid {
+  font: var(--t-mono-sm);
+  color: var(--fg-4);
 }
 
 /* Two lines, not one. A finding's message is the half worth reading, and the
-   strip used to cut most of them mid-sentence to keep a single baseline. */
+   strip this replaced cut most of them mid-sentence to keep a single baseline. */
 .msg {
-  font: var(--t-ui-md);
+  font: var(--t-ui-sm);
   color: var(--fg-2);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-}
-
-.fid {
-  font: var(--t-mono-sm);
-  color: var(--fg-5);
-  margin-top: 2px;
 }
 
 .empty {
@@ -174,9 +185,9 @@ const tally = computed(() => {
 }
 
 .note {
-  margin-top: 10px;
-  padding-top: 9px;
-  border-top: 1px solid var(--line);
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid var(--border-divider);
   font: var(--t-mono-xs);
   color: var(--fg-5);
 }

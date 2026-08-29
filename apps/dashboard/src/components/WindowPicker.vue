@@ -30,8 +30,8 @@ const { windows, active, setWindow } = useTimeWindow();
 </template>
 
 <style scoped>
-/* Byte-identical to the copies this replaced in SystemPage.vue and
-   ServicesPage.vue, which were themselves byte-identical to each other. */
+/* Lifted from the copies this replaced in SystemPage.vue and ServicesPage.vue,
+   which were themselves byte-identical to each other. */
 .picker {
   display: flex;
   gap: 2px;
@@ -44,16 +44,22 @@ const { windows, active, setWindow } = useTimeWindow();
 .pick {
   padding: 5px 11px;
   border-radius: var(--r-xs);
-  font: var(--t-mono-md);
+  font: var(--t-mono-sm);
   color: var(--fg-5);
+  transition: background var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
 }
 
 .pick:hover {
+  background: var(--fill);
   color: var(--fg);
 }
 
+/* The pick is a choice a PERSON made, which is the accent's one job. A wash
+   plus a weight step, so the selected state is never colour alone. */
 .pick.on {
-  background: oklch(1 0 0 / 0.09);
-  color: var(--fg);
+  background: var(--accent-tint);
+  color: var(--accent);
+  font: var(--t-mono-md);
 }
 </style>

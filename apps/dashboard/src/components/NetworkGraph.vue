@@ -31,7 +31,7 @@
 import { computed, ref } from "vue";
 import { NETWORKS } from "@/topology";
 import { PATHS, segmentsFor, tracePaths } from "@/paths";
-import { LABEL_GUTTER, fitRole, flowDuration, intensity, layout, spokePath, type PlacedNode } from "@/graph";
+import { LABEL_GUTTER, fitName, fitRole, flowDuration, intensity, layout, spokePath, type PlacedNode } from "@/graph";
 import { useTooltip } from "@/composables/useTooltip";
 import * as fmt from "@/format";
 import type { Tone } from "@/types";
@@ -332,7 +332,7 @@ const summary = computed(() => {
           vector-effect="non-scaling-stroke"
         />
         <circle :cx="n.x + 11" :cy="n.y + 13" r="3" :fill="`var(--${tone(n.name)})`" />
-        <text :x="n.x + 20" :y="n.y + 16" class="node-name">{{ n.name }}</text>
+        <text :x="n.x + 20" :y="n.y + 16" class="node-name">{{ fitName(n.name) }}</text>
         <text :x="n.x + 9" :y="n.y + 27" class="node-role">{{ fitRole(n.role) }}</text>
 
         <!-- the pod, nested: drawn inside because that is what makes the

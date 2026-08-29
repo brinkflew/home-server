@@ -103,3 +103,34 @@ associated with YAML and `*.ign` with JSON instead.
 **No SOPS extension, deliberately.** The transparent-decrypt ones add a path by which a plaintext
 secret can be written to disk in a public repository. `sops secrets/env.sops.env` opens it in
 `$EDITOR` and re-encrypts on save without plaintext ever touching the disk.
+
+## The dashboard's three global conventions
+
+`apps/dashboard/` scopes almost everything to a component. Three things cannot be scoped, and they
+are worth knowing before writing a panel.
+
+**A LIST OF RECORDS IS A TABLE, NEVER A GRID OF CARDS**, and there is exactly one recipe for it:
+`.tbl` in `src/styles/base.css`. One horizontal rule per row and nothing else - no vertical rules,
+no zebra, no outer border, because the panel's surface step already bounds it and a ruled grid on a
+near-black ground reads as a spreadsheet. Severity is `td.rail` with a `--rail` custom property: a
+2px inside edge on the first cell, so the colour reads down the left without a coloured wash on
+every row. A card grid makes the reader re-find every field in every tile, in a different place each
+time because the values are different lengths; a column lets them scan one field down all of them.
+
+**`table-layout: fixed` is part of that recipe and is not cosmetic.** With auto layout `width: 100%`
+is a FLOOR: the table grows past its container whenever a column's min-content width exceeds its
+share, and one nowrap element in a cell is enough to do it. A chip is exactly that, which is why
+`ChipLink` wraps its label in a shrinkable span - without it a long branch name widened the round
+board and gave the whole page a horizontal scrollbar.
+
+**TWO NUMERIC VOICES, AND THE SPLIT IS BY KIND RATHER THAN BY "IS IT A NUMBER".** `.mono` is for
+anything you would copy, grep or type, and for any value carrying a unit: an id, a path, a unit
+name, an image tag, a timestamp, `4.1 MB/s`, `41.2%`. `.count` is for a bare count: `12 units`,
+`6 restarts`, `2 of 8`. The old rule - every number in the mono face, no exceptions - put `12 units`
+and `/var/mnt/media` in the same voice, which made a page of counts read like a config file. Both
+set `tabular-nums`, so neither reflows its column as it ticks.
+
+**A BAND IS EITHER FULL WIDTH OR N EQUAL COLUMNS**, and `Band.vue` is the component that makes it
+structural. A band that needs a grid AND a full-width panel under it is two bands, not a special
+case. Two rhythms carry it: `--gap` between panels inside a band, `--gap-lg` between bands, which is
+what makes a page read as bands rather than as one long stack.

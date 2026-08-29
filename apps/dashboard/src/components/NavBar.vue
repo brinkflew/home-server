@@ -95,8 +95,8 @@ const age = computed(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 22px;
-  padding: 15px var(--pad-page);
+  gap: 18px;
+  padding: 14px var(--pad-page);
   border-bottom: 1px solid var(--line);
 }
 
@@ -104,12 +104,25 @@ const age = computed(() => {
 .right {
   display: flex;
   align-items: center;
-  gap: 22px;
+  gap: 18px;
   min-width: 0;
 }
 
+/* THE NAV NEVER COMPRESSES AND THE TOOLBAR ALWAYS CAN. The type going from
+   12px to 13px widened the tabs, and the System page teleports the most into
+   this bar - an OS line, a staged chip and a window picker. With everything
+   shrinkable the mark lost its wordmark and the OS line wrapped, which took
+   the whole header to 75px and put a tab under it. A page's own toolbar is the
+   half that may give way, so it is the half that shrinks. */
+.left {
+  flex: none;
+}
+
 .right {
-  gap: 10px;
+  gap: 9px;
+  flex: 1 1 auto;
+  justify-content: flex-end;
+  overflow: hidden;
 }
 
 .mark {
@@ -120,15 +133,15 @@ const age = computed(() => {
   flex: none;
 }
 
-/* 20px against the 11px wordmark at 0.16em is the design's own small lockup,
-   so replacing the placeholder square shifts none of the header's metrics.
-   The colour is --brand rather than --ok deliberately - a mark in the status
-   colour, beside the verdict pill, reads as a second status light. */
+/* 20px against the 11px wordmark at 0.16em is the design's own small lockup.
+   The colour is --accent rather than --ok deliberately - a mark in the status
+   colour, beside the verdict pill, reads as a second status light. It is one
+   consumer of the accent among several now, not a colour of its own. */
 .glyph {
   width: 20px;
   height: 20px;
   flex: none;
-  color: var(--brand);
+  color: var(--accent);
 }
 
 .word {
@@ -142,27 +155,36 @@ const age = computed(() => {
 }
 
 .tab {
-  padding: 6px 12px;
+  padding: 6px 11px;
   border-radius: var(--r-sm);
   font: var(--t-ui);
   color: var(--fg-4);
+  transition: background var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
 }
 
+/* Hover LIGHTENS AND MOVES NOTHING. No transform, no shadow, no scale: this
+   is read from across a room, where a 2px scale is invisible and a reflow is
+   not. */
 .tab:hover {
-  background: oklch(1 0 0 / 0.05);
+  background: var(--fill);
   color: var(--fg);
 }
 
+/* The active tab is a choice a person made, so it is the accent - a wash plus
+   a WEIGHT STEP, which is what keeps the state from being colour-only. */
 .tab.router-link-active {
-  background: oklch(1 0 0 / 0.07);
-  color: var(--fg);
-  font-weight: 500;
+  background: var(--accent-tint);
+  color: var(--accent);
+  font: var(--t-ui-md);
 }
 
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 9px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .verdict {

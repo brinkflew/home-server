@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory } from "vue-router";
 
 /**
- * Seven routes, all seven built.
+ * Seven nav entries, and the last one is three views.
  *
  * `/` lands on Home now. It used to land on System, because Home was the stub and
  * sending someone to a page that says "not built" would have been a strange front
@@ -50,10 +50,37 @@ export const router = createRouter({
       name: "ci",
       component: () => import("@/pages/CiPage.vue"),
     },
+    // AGENTS IS NESTED, AND IT IS THE ONLY SECTION THAT IS. One page had grown
+    // to nine panels answering three different questions - is the fleet
+    // working, what did this round do, and what is the machinery costing. The
+    // parent carries the sub-navigation and the toolbar note; the children are
+    // the three answers. See pages/agents/AgentsLayout.vue.
+    //
+    // A ROUND'S KEY IS THE COLLECTOR'S OWN FILENAME KEY, built by roundKey() in
+    // src/api/round.ts from the worktree id and the round's start. It is
+    // deliberately NOT carried in fleet.json: the two would then be a pair that
+    // can disagree, and the pair that disagreed last time cost a blank board.
     {
       path: "/agents",
-      name: "agents",
-      component: () => import("@/pages/AgentsPage.vue"),
+      component: () => import("@/pages/agents/AgentsLayout.vue"),
+      children: [
+        { path: "", redirect: "/agents/rounds" },
+        {
+          path: "rounds",
+          name: "agents",
+          component: () => import("@/pages/agents/RoundsPage.vue"),
+        },
+        {
+          path: "rounds/:key",
+          name: "agents-round",
+          component: () => import("@/pages/agents/RoundPage.vue"),
+        },
+        {
+          path: "fleet",
+          name: "agents-fleet",
+          component: () => import("@/pages/agents/FleetPage.vue"),
+        },
+      ],
     },
     { path: "/:pathMatch(.*)*", redirect: "/home" },
   ],

@@ -24,19 +24,21 @@ withDefaults(defineProps<{ label: string; tone: Tone; size?: "sm" | "md" }>(), {
   white-space: nowrap;
 }
 
+/* THE FLOOR IS 11px. `sm` used to be 9px, which is below what a screen
+   carries; the two sizes are now the two bottom mono roles rather than one
+   role and an override. */
 .md {
-  padding: 2px 7px;
-  font: var(--t-mono-xs);
+  padding: var(--pad-chip);
+  font: var(--t-mono-sm);
 }
 
 .sm {
-  padding: 1px 5px;
+  padding: 2px 6px;
   font: var(--t-mono-xs);
-  font-size: 9px;
 }
 
 /* The tint/edge pairs exist in tokens.css precisely so a coloured chip does not
-   have to invent an opacity. `off` has neither, so it borrows the neutral fill. */
+   have to invent an opacity - `off` included, since 2026-08-29. */
 .ok {
   color: var(--ok);
   background: var(--ok-tint);
@@ -57,7 +59,7 @@ withDefaults(defineProps<{ label: string; tone: Tone; size?: "sm" | "md" }>(), {
 
 .off {
   color: var(--fg-5);
-  background: var(--fill);
-  border: 1px solid var(--line);
+  background: var(--off-tint);
+  border: 1px solid var(--off-edge);
 }
 </style>

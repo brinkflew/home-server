@@ -27,8 +27,23 @@ import type { FleetDocument } from "../src/types";
 /** conduct's five phases, so every fixture round shares one denominator. */
 const PHASES = ["plan", "dev", "verify", "review", "ship"];
 
+/**
+ * A STABLE CLOCK, ANCHORED WHEN THIS MODULE LOADS RATHER THAN PER REQUEST.
+ *
+ * A ROUND'S KEY IS ITS START TIME, so a document re-stamped on every fetch
+ * hands out a different key every second - and /agents/rounds/<key> then always
+ * lands on "this round is not on the board", however fresh the link. Clicking a
+ * row still worked, because the row and the lookup read the same document, so
+ * the fault only ever showed on a deep link or a reload.
+ *
+ * Anchoring here is also the same intent as model.ts's seeded rng: a dev
+ * document that changes under you is one nobody can screenshot twice. Ages
+ * still advance, because the page measures them against its own clock.
+ */
+const ANCHOR = Date.now();
+
 const iso = (secondsAgo: number): string =>
-  new Date(Date.now() - secondsAgo * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+  new Date(ANCHOR - secondsAgo * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
 
 export function fleetDocument(): FleetDocument {
   return {

@@ -1,130 +1,296 @@
 /* ==========================================================================
    The design system, as tokens
    --------------------------------------------------------------------------
-   Lifted from the design document rather than re-derived, so that a change
-   there is a change here and not a reinterpretation. Three rules from its
-   own brief govern everything below:
+   Lifted from the Home Server design system rather than re-derived, so that a
+   change there is a change here and not a reinterpretation. It is a revision
+   of this dashboard's own earlier language - it read this codebase - and the
+   three things it changed are the three things below.
 
-     1. Geist for labels and prose, Azeret Mono for EVERY number, id and
-        path. Nothing above 22px.
-     2. Status has three colours only - teal healthy, amber degraded, red
-        failing. Everything else is grey. A fourth status colour would make
-        the first three mean less.
-     3. One accent, teal, reserved for healthy state and focus. It is not a
-        brand colour to sprinkle. THE MARK IS THE ONE EXCEPTION and it is
-        raspberry rather than teal - see --brand below. A logo painted in the
-        status colour reads as a status, which is the one thing a logo must
-        not do; it is an exception to which colour, not to the rule that teal
-        is never sprinkled.
+     1. DENSE BECAME LEGIBLE. The first pass transcribed a 9.5px floor and a
+        22px ceiling verbatim. Both were wrong for a panel read across a room:
+        9.5px is below what any screen carries, and a 22px ceiling left a page
+        with no voice at all - every line the same size, so nothing told you
+        where you were. The scale is 11px to 32px.
+
+     2. THE ACCENT SPLIT IN TWO. Teal used to mark healthy state AND mark
+        interaction, so "this container is fine" and "you can click this" were
+        the same colour, and the mark in the header read as a status light.
+        Teal now says the machine measured something; raspberry says a person
+        can act. See the two blocks below.
+
+     3. THE PANEL LOST ITS BORDER. The surface steps are ~0.03 L apart, which
+        is wide enough for two adjacent surfaces to separate on their own; a
+        lifted fill plus a hairline is belt and braces, and twenty bordered
+        boxes on a near-black ground read as a wireframe.
 
    THERE IS NO LIGHT THEME, and that is a decision. This is one operator on
-   one machine, the design commits to a green-leaning near black, and a
-   second palette would be a second set of contrast ratios nobody checks.
+   one machine, watched in a dim room; a second palette is a second set of
+   contrast ratios nobody checks.
    ========================================================================== */
 
 :root {
   color-scheme: dark;
 
-  /* --- Ground ---------------------------------------------------------
-     Five surfaces, and they are ordered: the page is darkest, panels sit
-     above it, a row sits above a panel. Anything that needs to read as
-     "inset" goes DOWN the scale rather than gaining a border. */
-  --bg: oklch(0.125 0.006 168);
-  --surface-sunken: oklch(0.155 0.008 168);
-  --surface: oklch(0.175 0.008 168);
-  --surface-raised: oklch(0.195 0.009 168);
-  --surface-high: oklch(0.225 0.009 168);
-  --surface-chip: oklch(0.245 0.01 168);
+  /* --- Ground -----------------------------------------------------------
+     Seven surfaces, and they are ORDERED: the page is darkest, a panel sits
+     above it, a row sits above a panel, a chip above that. Anything that has
+     to read as inset goes DOWN the scale rather than gaining a border.
 
-  --row: linear-gradient(oklch(0.205 0.009 168), oklch(0.185 0.008 168));
-  --field: oklch(0.185 0.008 168);
+     All on hue 195, so the near black leans teal and the greys never go
+     lilac against it. */
+  --bg: oklch(0.128 0.007 195);              /* the page */
+  --surface-sunken: oklch(0.16 0.008 195);   /* inset: a poster, a lane */
+  --surface: oklch(0.19 0.008 195);          /* a sunken strip */
+  --surface-raised: oklch(0.222 0.009 195);  /* THE PANEL FILL. Lifted enough
+                                                to need no border of its own. */
+  --surface-row: oklch(0.252 0.009 195);     /* a row inside a panel */
+  --surface-high: oklch(0.268 0.01 195);     /* floaters, graph nodes */
+  --surface-chip: oklch(0.29 0.01 195);      /* a chip on a panel */
 
-  /* --- Hairlines and overlays -----------------------------------------
-     White at very low alpha rather than a lighter grey, so a border keeps
-     working whatever surface it lands on. */
-  --line: oklch(1 0 0 / 0.07);
-  --line-strong: oklch(1 0 0 / 0.12);
-  --line-faint: oklch(1 0 0 / 0.045);
+  --row: linear-gradient(oklch(0.205 0.009 195), oklch(0.185 0.008 195));
+  --field: oklch(0.185 0.008 195);
+
+  /* --- Hairlines and overlay fills --------------------------------------
+     White at very low alpha, never a lighter grey, so one border token keeps
+     working on whichever surface it lands on. */
+  --line: oklch(1 0 0 / 0.055);        /* a divider inside a panel */
+  --line-strong: oklch(1 0 0 / 0.1);   /* a floater edge */
+  --line-faint: oklch(1 0 0 / 0.035);  /* a table rule, a chart gridline */
   --fill: oklch(1 0 0 / 0.06);
   --fill-hover: oklch(1 0 0 / 0.11);
+  --fill-active: oklch(1 0 0 / 0.16);
   --track: oklch(1 0 0 / 0.09);
 
-  /* --- Text -----------------------------------------------------------
-     Six steps. --fg-dim is the floor: anything quieter stops being
-     readable on --bg and should be removed rather than dimmed further. */
-  --fg: oklch(0.96 0.004 168);
-  --fg-2: oklch(0.9 0.004 168);
-  --fg-3: oklch(0.8 0.008 168);
-  --fg-4: oklch(0.66 0.008 168);
-  --fg-5: oklch(0.58 0.008 168);
-  --fg-dim: oklch(0.52 0.008 168);
+  /* --- Text -------------------------------------------------------------
+     Six steps, measured on --bg. --fg-dim is the floor and is NOT body text:
+     at 3.65:1 it is the hint tier - an age, a caveat, a unit. Anything
+     quieter than it should be deleted rather than dimmed further. */
+  --fg: oklch(0.96 0.004 195);      /* 18.0:1  AAA */
+  --fg-2: oklch(0.9 0.004 195);     /* 15.0:1  AAA */
+  --fg-3: oklch(0.8 0.008 195);     /* 10.8:1  AAA */
+  --fg-4: oklch(0.66 0.008 195);    /*  6.5:1  AAA */
+  --fg-5: oklch(0.645 0.008 195);   /* label / tally ink - AA on the panel */
+  --fg-dim: oklch(0.575 0.008 195); /* the hint tier: an age, a unit, a tick */
 
-  /* --- Status: exactly three ------------------------------------------
-     `ok` doubles as the accent because in this design healthy IS the
-     brand. `off` is the unlit LED and the "not measured" state - grey,
-     never green, because an unrun check must not read as a passing one. */
-  --ok: #00b3a4;
-  --ok-hover: oklch(0.8 0.1 183);
-  --ok-tint: oklch(0.68 0.11 183 / 0.14);
-  --ok-tint-strong: oklch(0.68 0.11 183 / 0.3);
-  --ok-edge: oklch(0.68 0.11 183 / 0.32);
+  /* --- Status: exactly three -------------------------------------------
+     A fourth status colour would make the first three mean less. Everything
+     that is not one of these three is grey. */
+  --ok: oklch(0.7 0.105 190);                /* 7.9:1 */
+  --ok-hover: oklch(0.8 0.098 190);
+  --ok-tint: oklch(0.7 0.105 190 / 0.14);
+  --ok-tint-strong: oklch(0.7 0.105 190 / 0.3);
+  --ok-edge: oklch(0.7 0.105 190 / 0.32);
 
-  --warn: oklch(0.8 0.14 78);
+  --warn: oklch(0.8 0.14 78);                /* 10.6:1 */
   --warn-tint: oklch(0.8 0.14 78 / 0.08);
   --warn-edge: oklch(0.8 0.14 78 / 0.24);
 
-  --fail: oklch(0.66 0.17 22);
-  --fail-text: oklch(0.82 0.12 22);
+  --fail: oklch(0.66 0.17 22);               /* 6.0:1, fills and rules */
+  --fail-text: oklch(0.82 0.12 22);          /* 10.6:1, text only */
   --fail-tint: oklch(0.66 0.17 22 / 0.1);
   --fail-edge: oklch(0.66 0.17 22 / 0.28);
 
-  --off: oklch(0.3 0.008 168);
+  /* The unlit LED. GREY IS NEVER GREEN: no health check defined, no history,
+     a check that did not run. An unrun check must never borrow the colour of
+     a passing one, so absence gets its own value and it is neutral. It has a
+     tint pair of its own so a neutral chip need not invent an opacity. */
+  --off: oklch(0.3 0.008 195);
+  --off-tint: oklch(1 0 0 / 0.06);
+  --off-edge: oklch(1 0 0 / 0.07);
 
-  /* --- Brand: the mark, and only the mark ------------------------------
-     Raspberry, lifted verbatim from the design project along with the
-     geometry it colours. It is NOT a fourth status colour and it is NOT an
-     interaction colour - rule 2 above still holds and teal is still what a
-     person clicks. It exists because the mark used to be a square filled
-     with --ok, sitting in the same header as the teal verdict pill, where it
-     read as a health indicator rather than a logo.
+  /* --- Accent: raspberry, and it is interaction only --------------------
+     THE ACCENT IS NOT A STATUS. It marks what a PERSON can do: links, focus,
+     the active tab, the selected filter, the window picker's pick, the chart
+     crosshair and its readout, and the mark. Teal marks what the MACHINE
+     reports, and the two must never be the same colour again.
 
-     EXACTLY TWO CONSUMERS: NavBar.vue's .glyph, and public/favicon.svg -
-     which carries the hex literally, because it is loaded by the browser
-     outside this stylesheet and cannot resolve a variable. CHANGE ONE AND
-     RE-CUT THE OTHER; favicon.svg's own header carries the commands. */
-  --brand: oklch(0.655 0.168 0);
-  --brand-deep: oklch(0.46 0.155 358);
+     ONE POINT OF EMPHASIS PER VIEW: if a screen has more than three
+     raspberry elements, remove two.
 
-  /* --- Type ------------------------------------------------------------ */
-  --font-ui: "Geist", system-ui, -apple-system, sans-serif;
-  --font-mono: "Azeret Mono", ui-monospace, "SF Mono", Menlo, monospace;
+     public/favicon.svg CARRIES --accent AND --accent-deep AS HEX LITERALS,
+     because a favicon is loaded by the browser outside this stylesheet and
+     resolves no custom property. CHANGE EITHER AND RE-CUT THE RASTERS; that
+     file's own header carries the commands. */
+  --accent: oklch(0.655 0.168 0);            /* #df5d8c - 5.8:1  AA */
+  --accent-hover: oklch(0.755 0.135 2);      /* 8.7:1 */
+  --accent-deep: oklch(0.46 0.155 358);      /* #962558 - solid fills */
+  --accent-tint: oklch(0.655 0.168 0 / 0.12);
+  --accent-tint-strong: oklch(0.655 0.168 0 / 0.22);
+  --accent-edge: oklch(0.655 0.168 0 / 0.34);
 
-  --t-label: 500 10px/1.2 var(--font-mono);
-  --t-mono-xs: 400 9.5px/1.3 var(--font-mono);
-  --t-mono-sm: 400 10px/1.4 var(--font-mono);
-  --t-mono: 400 10.5px/1.45 var(--font-mono);
-  --t-mono-md: 500 11px/1.3 var(--font-mono);
-  --t-mono-lg: 500 14px/1.2 var(--font-mono);
-  --t-mono-xl: 500 15px/1.2 var(--font-mono);
-  --t-ui-sm: 400 11px/1.4 var(--font-ui);
-  --t-ui: 400 12px/1.45 var(--font-ui);
-  --t-ui-md: 500 12px/1.35 var(--font-ui);
-  --t-ui-lg: 500 14px/1.3 var(--font-ui);
-  --track-label: 0.12em;
+  /* Focus is the accent and nothing else, so a keyboard ring can never be
+     mistaken for a health reading. */
+  --focus: var(--accent);
 
-  /* --- Geometry -------------------------------------------------------- */
-  --r-lg: 12px;
-  --r-md: 10px;
-  --r-sm: 7px;
-  --r-xs: 5px;
-  --r-dot: 3px;
+  /* --- Semantic aliases -------------------------------------------------
+     Roles, so a component says what a colour is FOR rather than which step
+     it sits on. Reach for these first; the ramps above are for the case a
+     role does not cover. */
+  --text-body: var(--fg-2);
+  --text-strong: var(--fg);
+  --text-muted: var(--fg-4);
+  --text-label: var(--fg-5);
+  --text-hint: var(--fg-dim);
+  --text-value: var(--fg);
+  --text-link: var(--accent);
+  --text-link-hover: var(--accent-hover);
 
-  --pad-page: 22px;
-  --gap: 10px;
-  --gap-sm: 6px;
-  --gap-lg: 16px;
+  --surface-page: var(--bg);
+  --surface-card: var(--surface-raised);
+  --surface-card-inset: var(--surface-sunken);
+  --surface-float: var(--surface-high);
+  --surface-table-row: var(--surface-row);
 
-  --shadow-node: 0 2px 10px oklch(0 0 0 / 0.35);
+  /* THE PANEL HAS NO BORDER. Its surface step is the edge. Only a floating
+     surface - a tooltip, a menu, a graph node - draws one. */
+  --border-card: transparent;
+  --border-float: var(--line-strong);
+  --border-divider: var(--line);
+  --border-table: var(--line-faint);
+
+  /* --- Type ------------------------------------------------------------
+     THE FLOOR IS 11px AND THE CEILING IS 32px.
+
+     TWO NUMERIC VOICES, AND THE SPLIT IS BY KIND RATHER THAN BY "IS IT A
+     NUMBER". The old rule - every number in the mono face, no exceptions -
+     put `12 units` and `/var/mnt/media` in the same voice, which made a page
+     of counts read like a config file.
+
+       MONO for anything you would copy, grep or type, and any value carrying
+       a unit: `torrent-pod.service`, `/var/mnt/media`, `4.1 MB/s`, `41.2%`.
+
+       SANS (.count) for a bare count: `12 units`, `6 restarts`, `2 of 8`.
+       Spline Sans has tabular figures and `tabular-nums` is set on body, so
+       a ticking count still does not reflow its column - which was the only
+       real argument for mono here.
+
+     THE FAMILY NAMES CARRY "Variable" and that is not cosmetic: fontsource's
+     variable packages declare `Spline Sans Variable`, so a stack naming
+     plain "Spline Sans" matches nothing and falls silently through to
+     system-ui. Both names are listed so a static install would also work.
+
+     Every role is a single `font:` shorthand, so a call site cannot set
+     three of weight/size/leading/family and drift on the fourth. */
+  --font-ui: "Spline Sans Variable", "Spline Sans", system-ui, -apple-system, sans-serif;
+  --font-mono: "Spline Sans Mono Variable", "Spline Sans Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --t-display: 500 32px/1.15 var(--font-ui); /* the page title. The ceiling. */
+  --t-page: 500 24px/1.2 var(--font-ui);     /* a section title */
+  --t-ui-xl: 500 18px/1.3 var(--font-ui);    /* a panel title */
+  --t-ui-lg: 500 15px/1.35 var(--font-ui);   /* a card title, a row title */
+  --t-ui-md: 500 13px/1.45 var(--font-ui);   /* emphasised body */
+  --t-ui: 400 13px/1.55 var(--font-ui);      /* body. The default. */
+  --t-ui-sm: 400 12px/1.5 var(--font-ui);    /* secondary, helper */
+  --t-ui-xs: 400 11px/1.45 var(--font-ui);   /* the floor. A caption. */
+
+  /* The section label. Sans now, not mono: at 11px the mono caps read as a
+     filename, and the sans needs less tracking to stay legible - 0.08em
+     rather than 0.12em. Authored in sentence case and uppercased by CSS, so
+     the source string stays readable and searchable. */
+  --t-label: 600 11px/1.2 var(--font-ui);
+  --track-label: 0.08em;
+
+  /* Bare counts. Same sizes as the prose roles they sit beside, so a count
+     and its label share a baseline without a second scale. */
+  --t-count-lg: 500 24px/1.2 var(--font-ui); /* a stat block */
+  --t-count: 500 15px/1.3 var(--font-ui);    /* a table cell, a tally */
+  --t-count-sm: 500 13px/1.3 var(--font-ui);
+
+  --t-mono-xl: 500 20px/1.2 var(--font-mono);  /* the one headline reading */
+  --t-mono-lg: 500 16px/1.25 var(--font-mono); /* a panel's own value */
+  --t-mono-md: 500 13px/1.4 var(--font-mono);  /* a cell, a chip, a pill */
+  --t-mono: 400 12.5px/1.55 var(--font-mono);  /* mono prose, a tooltip line */
+  --t-mono-sm: 400 12px/1.5 var(--font-mono);  /* a caption, an age */
+  --t-mono-xs: 400 11px/1.4 var(--font-mono);  /* the floor. An axis tick. */
+
+  /* --- Geometry ---------------------------------------------------------
+     Radii are tied to SIZE rather than importance, and the vocabulary is
+     closed. A 12px radius on a 20px chip is a lozenge.
+
+     SPACING IS ONE STEP MORE GENEROUS THROUGHOUT. A row was 9px/11px, which
+     put twelve rack rows in the height of eight and made the table a wall.
+     Rhythm lands on a rung, always; chrome - the inset that sets a row's or
+     a control's own height - may sit off the ladder, because a row is sized
+     by what it holds. */
+  --r-lg: 12px;   /* a page-level container, a modal */
+  --r-md: 10px;   /* the panel. The most common radius in the product. */
+  --r-sm: 7px;    /* a control: tab, button, field, segmented picker */
+  --r-xs: 5px;    /* a chip, a pill, a poster tile */
+  --r-dot: 3px;   /* a square LED; round dots use 999px */
+  --r-pill: 999px;
+
+  --pad-page: 24px;
+  --gap-sm: 8px;
+  --gap: 12px;
+  --gap-lg: 20px;
+
+  --pad-panel: 16px;
+  --pad-panel-sm: 13px;
+  --pad-row: 12px 14px;       /* a standalone row, a notice */
+  --pad-cell: 11px 12px;      /* a table cell */
+  --pad-cell-tight: 8px 12px; /* a table of one-line values */
+  --pad-chip: 3px 8px;
+  --pad-control: 7px 13px;
+
+  --space-section: var(--gap-lg);
+  --space-panel: var(--gap);
+  --space-inline: var(--gap-sm);
+
+  /* --- Elevation --------------------------------------------------------
+     INVERTED FROM THE LIGHT-THEME CONVENTION: on a near-black ground a fan
+     of soft drop shadows reads as noise, so a surface resting in normal flow
+     carries NO shadow at all and its surface step is the whole edge. Only a
+     floater gets a shadow, and it gets exactly one.
+
+     A lifted surface is never bevelled: no inset highlight, no simulated
+     top-lit rim. It steps its border instead. */
+  --shadow-flat: none;
+  --shadow-raised: none;
+  --shadow-node: 0 2px 10px oklch(0 0 0 / 0.35);   /* a graph node, a tooltip */
+  --shadow-overlay: 0 1px 2px oklch(0 0 0 / 0.4), 0 10px 24px -6px oklch(0 0 0 / 0.55);
+  --shadow-popover: var(--shadow-overlay);
+  --shadow-modal: 0 24px 60px -12px oklch(0 0 0 / 0.7);
+
+  /* Glow, not shadow: the rack LED and the event tick. The one place colour
+     is allowed to bleed past its own shape, reserved for something that
+     genuinely is a light. */
+  --glow-led: 0 0 7px currentColor;
+
+  /* Six tiers, evenly spaced by ten from 30. The even spacing is the point:
+     an inserted tier lands between two rungs on a number that needs no
+     explanation. `popover` ABOVE `overlay` is load-bearing - a picker opened
+     from a floating panel has to clear the surface it was opened from.
+
+     Below 20 is deliberately not part of the ladder: at or under that a
+     z-index orders an element against its own siblings, which is a local
+     concern and never a cross-component one. */
+  --z-sticky: 30;   /* the shell header */
+  --z-scrim: 40;
+  --z-overlay: 50;  /* a modal, a drawer */
+  --z-popover: 60;  /* a menu, a picker */
+  --z-toast: 70;
+  --z-tooltip: 80;
+
+  /* --- Motion -----------------------------------------------------------
+     Transitions are a register apart from the loops below: --dur-fast for a
+     state flip the eye should barely follow, --dur-base for the default,
+     --dur-slow for a surface travelling far enough that the eye wants to
+     follow it. ease-standard is the only curve safe on a colour; ease-spring
+     overshoots and is for geometry only, never a fill. */
+  --dur-fast: 150ms;
+  --dur-base: 200ms;
+  --dur-slow: 300ms;
+
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* The loops are deliberately off that ladder: they run for seconds and
+     repeat, and putting a 1.6s breath on the same scale as a 150ms hover
+     would claim the two are comparable decisions. */
+  --loop-pulse: 1.6s;
+  --loop-sweep: 2s;
+  --loop-caret: 1s;
 
   /* Width of the travelling band in @keyframes sweep. Read by both the
      animation and the background-size that paints it. */
@@ -132,10 +298,11 @@
 }
 
 /* --------------------------------------------------------------------------
-   Motion. The brief: "live means motion that carries data". These three are
+   Motion. The brief: "live means motion that carries data". These five are
    the whole vocabulary - a breathing dot for something in progress, a sweep
-   for a live axis, a caret for a stream. Nothing else animates, so when
-   something moves it means something.
+   for a live axis, a caret for a stream, flow for traffic at a rate, a fade
+   for a poster arriving over its own placeholder. Nothing else animates, so
+   when something moves it means something.
 
    All of it is switched off under prefers-reduced-motion. The information is
    in the colour and the number; the motion is emphasis, so losing it costs
@@ -189,6 +356,15 @@
 @keyframes flow {
   to {
     stroke-dashoffset: -16;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
   }
 }
 

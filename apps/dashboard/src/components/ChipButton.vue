@@ -132,13 +132,17 @@ async function press(): Promise<void> {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 7px;
-  font: var(--t-mono-xs);
+  padding: var(--pad-chip);
+  font: var(--t-mono-sm);
   color: var(--fg-4);
   background: var(--surface-chip);
   border: 1px solid var(--line);
   border-radius: var(--r-xs);
   white-space: nowrap;
+  max-width: 100%;
+  transition: color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard);
 }
 
 button.chip {
@@ -147,9 +151,13 @@ button.chip {
 }
 
 button.chip:hover:not(:disabled) {
-  color: var(--fg);
+  color: var(--accent);
   background: var(--fill-hover);
-  border-color: var(--line-strong);
+  border-color: var(--accent-edge);
+}
+
+button.chip:active:not(:disabled) {
+  background: var(--fill-active);
 }
 
 button.chip.busy {

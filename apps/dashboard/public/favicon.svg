@@ -9,17 +9,21 @@
 
        (An XML comment may not contain two dashes in a row, so the custom
        properties below are named without their leading pair. They are the
-       `brand` and `brand-deep` properties in src/styles/tokens.css.)
+       `accent` and `accent-deep` properties in src/styles/tokens.css.)
 
        THE COLOUR IS A LITERAL HEX AND THAT IS NOT AN OVERSIGHT. A favicon is
        fetched by the browser on its own, outside the page, so it can resolve no
        custom property: a var() here would simply not paint. The two values
-       below are `brand` and `brand-deep`, and tokens.css says the same thing
+       below are `accent` and `accent-deep`, and tokens.css says the same thing
        from the other end. CHANGE ONE AND RE-CUT THE OTHER.
 
-       The mark is RASPBERRY, not the teal that is everywhere else in this UI,
-       and that is the point. Teal means healthy. A logo in the status colour is
-       a logo that reads as a reading.
+       The mark is RASPBERRY rather than teal, and that is the point. Teal says
+       the machine measured something and found it healthy; raspberry says a
+       person can act. A logo in the status colour reads as a reading.
+
+       THE VALUES DID NOT CHANGE when the token was renamed from `brand` to
+       `accent` on 2026-08-29, so no raster was re-cut. What changed is that the
+       mark stopped being the only thing allowed this colour.
 
        TRANSLATED UP BY 0.6. The ink spans y 3.8 to 29.4, so its optical centre
        is 16.6 rather than 16, which is invisible at 20px beside the wordmark
