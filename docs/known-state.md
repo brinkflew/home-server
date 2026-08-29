@@ -366,7 +366,10 @@ nothing points at is one nobody reads.
   base commit** - including the very commit that added the test - and whose subject is a
   `Content-Disposition` filename that a diff of one file under `api/tests/` cannot reach. The
   approval card said the phase failed. It did not; the fleet runner and GitHub Actions disagree
-  about that test, and nothing in this design can say so. **CLOSED 2026-08-24, and the sentence that
+  about that test, and nothing in this design can say so. **WHY they disagreed was answered on
+  2026-08-29 and it was the runner's fault, not upskald's** - see "A browser under the C locale
+  keeps only the names it could have guessed" at the end of this file. The base comparison was
+  still the right thing to build: it is what stopped five days of rounds being blamed for it. **CLOSED 2026-08-24, and the sentence that
   used to end this entry was wrong.** It said a recorded base result was "only cheap as a by-product
   of something already running", which assumed the gate would have to run on every dispatch. It does
   not: the base is measured only when the head gate has ALREADY failed, and it rebuilds the same
@@ -3971,3 +3974,54 @@ three of them are the same mistake in different clothes.
 - **It opens no blind spot**: a phase that never ends is `agents.phase_stuck`'s finding, graded past
   10800s against a scope whose `RuntimeMaxSec` is 5400. Proved by exercising all six arms in
   isolation, including a marker with the key absent, which fails safe to the warn.
+
+### A browser under the C locale keeps only the names it could have guessed
+- **`conduct verify` exited 2 on every round from 2026-08-24 to 2026-08-29**, always on `e2e-test`
+  and always on one assertion in upskald's `file-download.spec.ts`, which uploads a file whose name
+  carries an accent and asserts the name survives the round trip. Nothing else in `make check` ever
+  failed - ruff, eslint, stylelint, zizmor, shellcheck, vulture, knip, the type checks, the unit
+  suites and `verify-site` were clean in all seven logs.
+- **It failed on the unmodified BASE too** - four `base_gate` rows, all `e2e-test`, exit 2 - so
+  `judge_base` correctly stopped blaming the change. But `judge_autopublish`'s first clause is a
+  gate that PASSED, so autopublish was armed on 2026-08-25 and could never once fire: every round
+  pushed a branch, asked a person, and paid for the whole suite TWICE on the way, 28m40s of it.
+- **The cause was `LANG` unset in `apps/conduct-runner/Dockerfile`**, the only place here where a
+  browser ran under the C locale. Chromium cannot then decode an RFC 5987 `filename*` parameter and
+  answers its own default, `download`. `apps/github-runner/Dockerfile` sets `LANG=C.UTF-8` and so do
+  GitHub's hosted images, which is the whole reason CI was green on the commits the gate refused.
+- **A correctly built header is exactly the case that loses.** A client understanding both
+  parameters must PREFER `filename*`, so the lossy ASCII `filename` beside it is not a fallback
+  Chromium takes - it goes to its own default instead. An ASCII name survives quoted, bare, or with
+  spaces in it; a non-ASCII one never does.
+- **The string is ambiguous, and that is what cost five days.** `download` is Chromium's last-resort
+  default AND the literal fallback upskald's `_content_disposition` emits when a name's ASCII fold
+  comes out empty. The log cannot separate "the browser got nothing" from "the api sent nothing",
+  and the Playwright trace does not capture download responses.
+- **Reading the header off the wire did not settle it either.** `page.request.get` is a Node-side
+  client sharing the cookie jar, and it returned a perfect header - both parameters, through Vite's
+  proxy - while the browser beside it still lost the name. What settled it was a fourteen-line
+  server and one anchor with no application in the picture at all, which reproduced in thirty
+  seconds and bisected the header forms in one run.
+- **A page-scoped CDP session sees none of it**, because the anchor carries `target="_blank"` and
+  the download happens in a popup. `Network.responseReceived` and `Page.downloadWillBegin` both
+  stayed silent on a run that downloaded a file.
+- **The single-spec reproduction has a trap of its own**: the Download button stays disabled until a
+  background job marks the row `verified`, so on a cold worker the spec times out on the CLICK and
+  never reaches the assertion. That is a different failure that reads like the same one, and it is
+  what a one-spec run gets that the full suite does not.
+- **The smoke leg asserts the behaviour and not the variable.** `test -n "$LANG"` would also pass
+  the day the value is wrong, the locale is missing, or Chromium changes its mind, so
+  `bin/conduct-runner-smoke.sh` drives a real browser over a real header. Proved to FAIL on the
+  unfixed image before it was trusted - and its first version failed there for the wrong reason,
+  because `bun init` writes `"type": "module"` and a `.js` file is then an ES module with no
+  `require`. A check that fails on a good image proves nothing.
+- **`/etc/mime.types` is the mirror image and turned out not to matter.** It is absent from
+  `node:24-trixie-slim`, present in the runner because the apt layer pulls `media-types`, and
+  absent from the Fedora lane - and `mimetypes.guess_extension("text/plain")` is `.txt` in all
+  three, so `_rename_to_mime_extension` never diverged. Measured rather than assumed, after being
+  written down as a suspect.
+- **conduct also started `redis:7-alpine` where upskald had moved to `valkey/valkey:8-alpine`** on
+  2026-08-28. It worked, and that is the objection: a gate running against a different datastore
+  from the pull request is the same shape as the locale, correct until the day it is not. The alias
+  moved with the image, because `podman.run_datastore`'s argument for aliases is that the gate
+  addresses these by the bare names the compose file uses.

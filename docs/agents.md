@@ -12,7 +12,7 @@ reverse by accident.
 ```
 tier 0  systemd --user, unconfined_t   home-server-conduct.service   may fork podman
 tier 1  container_t, uid0 -> core      conduct-runner (--rm)         the gate, and later `claude -p`
-tier 2  container_t, uid0 -> core      db / redis / mailpit          stock images, no bind mounts
+tier 2  container_t, uid0 -> core      db / valkey / mailpit         stock images, no bind mounts
         container_t, uid0 -> core      windmill-{db,server,worker}   the control plane
 ```
 
@@ -150,7 +150,7 @@ git"* - would be false.
 
 ```
 podman network create --opt isolate=true net-conduct-<id>
-podman run -d <id>-{db,redis,mailpit}    --network-alias db|redis|mailpit
+podman run -d <id>-{db,valkey,mailpit}   --network-alias db|valkey|mailpit
                                           --no-healthcheck  --label io.home-server.ephemeral
                                           --cgroup-parent=app-agents.slice
 git clone --local --no-hardlinks mirrors/<project>.git worktrees/<id>
@@ -1553,10 +1553,10 @@ being asked should not have to work out which measurement did it.
 and an invented one is not; making an honest concern cost the run its autonomy teaches it to report
 none, which destroys the one field the verdict exists for.
 
-**A base-red run does not qualify**, and that is worth restating because it makes the feature look
-inert: upskald's `main` fails `e2e-test` in this runner today, so almost nothing will publish itself
-until that is fixed. The branch is still pushed and a person is still asked; all that changes is who
-opens the pull request.
+**A base-red run does not qualify**, which made the feature look inert for four days: upskald's
+`main` failed `e2e-test` in this runner from 2026-08-25 to 2026-08-29, so nothing could publish
+itself. The branch was still pushed and a person was still asked; all that changed was who opened
+the pull request. The cause was the runner's own locale, not upskald - see `docs/known-state.md`.
 
 ### `stop_after_if` is the mechanism, and it was the third one tried
 
@@ -2241,10 +2241,18 @@ after the fact - and a ship phase that iterates will make more of them than a `p
 evening of it left three: `agents/upskald-ship-` at `e4aba978`, `a11d5439` and `53bc4298`, of which
 only the last became a pull request.
 
-**Why `file-download.spec.ts` disagrees between the runner and GitHub Actions is unanswered.** The
-base-gate comparison makes it stop costing a refusal, and deliberately does not diagnose it: it is
-an upskald question about a suite that passes in one container and fails in another, and the fleet's
-job was to stop reporting it as somebody's broken change.
+**Why `file-download.spec.ts` disagreed between the runner and GitHub Actions was answered on
+2026-08-29, and the guess in this paragraph was wrong.** It said "an upskald question about a suite
+that passes in one container and fails in another"; it was a question about the container. The
+runner image set no `LANG`, and Chromium under the C locale cannot decode an RFC 5987 `filename*`
+parameter - it answers its own default, `download`, and does not fall back to the ASCII `filename`
+beside it, because a client understanding both must prefer the starred one. Every other runner here
+already set `LANG=C.UTF-8`, which is why CI was green on the identical commits. `docs/known-state.md`
+carries the measurement and the two blind alleys that made it take five days.
+
+The base-gate comparison is what kept five days of rounds from being blamed for it, and deliberately
+did not diagnose it. That deferral was right; leaving the diagnosis undone for five days after the
+comparison landed was not, because the one thing it blocked was autopublish.
 
 **The Windmill run form renders `task` as a single-line input.** Whether Windmill has a textarea
 format is unmeasured, and guessing a schema key is how the `continue_on_disapprove_timeout` drift

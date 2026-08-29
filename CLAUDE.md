@@ -1359,6 +1359,17 @@ signal read green.
 - `max-content` through a `subgrid`, with a measured 82px literal behind it, because a lone literal
   is the failure `fitRole` already paid for.
 
+### A browser under the C locale keeps only the names it could have guessed
+- **`LANG` unset made the gate red on every round for five days.** Chromium cannot decode an RFC
+  5987 `filename*` under the C locale and answers its own default, `download` - and a correctly
+  built header is the case that LOSES, because a client understanding both parameters must prefer
+  the starred one over the ASCII fallback beside it. Every other runner here already set it.
+- **`download` is also upskald's own empty-fold fallback**, so the log could not say which end lost
+  the name; the trace does not capture download responses, and a page-scoped CDP session sees
+  nothing because the anchor is `target="_blank"`. Fourteen lines of server settled it.
+- It failed on the BASE too, so `judge_base` never blamed the change - and autopublish, whose first
+  clause is a gate that PASSED, was armed on 2026-08-25 and could never fire.
+- The datastore drift beside it: `redis:7-alpine` against the pull request's Valkey 8.
 
 ## Target architecture
 
