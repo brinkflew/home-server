@@ -2461,16 +2461,37 @@ if [ -z "$GREENBOOT" ]; then
 	# INTAKE_SEC (900s), but a look is SKIPPED while anything is in flight - and a
 	# round is most of an hour - so one missed cadence is the normal state of a
 	# working fleet. An hour without a look, on the other hand, means either a
-	# very long round or a pass that is no longer running, and both are worth a
-	# sentence.
+	# very long round or a pass that is no longer running.
+	#
+	# THIS SAID "AND BOTH ARE WORTH A SENTENCE" AND WARNED ON BOTH, which was
+	# right while a round was most of an hour and stopped being right on
+	# 2026-08-29. The quota override lets the fleet run continuously for the life
+	# of a window - two days, in the first use of it - so "a very long round" went
+	# from an occasional state to the intended one, and a warn on it pages the
+	# phone through AgentCheckWarning every thirty minutes for a fleet that is
+	# working exactly as asked. That is how a reader learns to skip a section.
+	#
+	# THE MARKER ALREADY TELLS THEM APART and this was not reading it. A look is
+	# skipped precisely BECAUSE something is in flight, so `phase_in_flight` is
+	# not a second opinion about the same question - it is the cause. Busy is a
+	# NOTE naming the phase; a stale look with nothing running is still the warn,
+	# because that one is the fleet silently sitting idle.
+	#
+	# IT OPENS NO BLIND SPOT. A phase that never ends cannot mask this for ever:
+	# agents.phase_stuck grades a phase past 10800s against a scope whose
+	# RuntimeMaxSec is 5400, so a wedged phase is already somebody else's finding.
 	intake_at=$(cget intake_last_at)
 	intake_age=$(cage intake_last_at)
 	intake_why=$(cget intake_last_why)
+	intake_busy=$(cget phase_in_flight)
+	intake_phase=$(cget phase_label)
 	fact agents_intake_age "${intake_age:-}"
 	if [ -z "$intake_at" ]; then
 		note agents.intake "no project has \`intake\` armed - conduct records no look at all in that state, whether it has never chosen work or was paused deliberately - so the fleet takes the work it is given and chooses none"
+	elif [ -n "$intake_age" ] && [ "$intake_age" -gt 3600 ] && [ "$intake_busy" = 1 ]; then
+		note agents.intake "conduct last looked for work ${intake_age}s ago and the cadence is 900s, because a look is skipped while a phase runs and one has been running throughout: ${intake_phase:-a phase in flight}. agents.phase_stuck is what grades a phase that never ends"
 	elif [ -n "$intake_age" ] && [ "$intake_age" -gt 3600 ]; then
-		warn agents.intake "conduct last looked for work ${intake_age}s ago and the cadence is 900s - either a round has been running for over an hour, or the intake pass has stopped and the fleet will now sit idle looking exactly as it would with an empty backlog${intake_why:+ (last reason: $intake_why)}"
+		warn agents.intake "conduct last looked for work ${intake_age}s ago, the cadence is 900s and NOTHING is in flight - so the intake pass has stopped and the fleet will now sit idle looking exactly as it would with an empty backlog${intake_why:+ (last reason: $intake_why)}"
 	elif [ -n "$intake_why" ]; then
 		# HOLDING IS NOT A FAULT AND MUST NOT READ AS ONE. Every reason conduct
 		# writes here is a decision it was told to make - the Review cap, the

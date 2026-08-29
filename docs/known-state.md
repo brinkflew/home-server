@@ -3958,3 +3958,16 @@ three of them are the same mistake in different clothes.
 - **A per-app query was added to the tuple and the call site kept its own hardcoded one**, so
   `includeEpisode` was declared and never asked for - the constant was correct in the file it was
   written in and reached nothing.
+
+### The intake check's premise moved the day the fleet could run for two days
+- **`agents.intake` warned on "either a very long round or a pass that has stopped"**, and its own
+  comment said "both are worth a sentence" - correct while a round was most of an hour. The quota
+  override makes continuous running the INTENDED state for the life of a window, so that warn pages
+  the phone through `AgentCheckWarning` every thirty minutes about a fleet working exactly as asked.
+- **The marker already told them apart and the check was not reading it.** A look is skipped
+  *because* something is in flight, so `phase_in_flight` is the cause rather than a second opinion.
+  Busy is a note naming the phase; a stale look with nothing running stays the warn, because that
+  one is the fleet silently sitting idle.
+- **It opens no blind spot**: a phase that never ends is `agents.phase_stuck`'s finding, graded past
+  10800s against a scope whose `RuntimeMaxSec` is 5400. Proved by exercising all six arms in
+  isolation, including a marker with the key absent, which fails safe to the warn.

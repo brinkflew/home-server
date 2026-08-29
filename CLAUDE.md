@@ -1279,6 +1279,13 @@ signal read green.
   a watcher, where nothing shows it. `shoot.mjs`'s `pageerror` line is why it was found at all.
 - `--z-scrim` and `--z-overlay` were declared for "a modal, a drawer" and had no consumer.
 
+### The intake check's premise moved the day the fleet could run for two days
+- `agents.intake` warned on "a very long round OR a stopped pass" and said both were worth a
+  sentence - true while a round was an hour, false once an override lets the fleet run for two days.
+- The marker's `phase_in_flight` is the CAUSE of the skipped look, not a second opinion. Busy is a
+  note; stale with nothing running is still the warn. `agents.phase_stuck` covers a phase that
+  never ends, so no blind spot.
+
 ### A permanent FAIL on a value this repository publishes in git
 - `secrets.rendered_documents` treated every `.env` value of 12+ characters as a credential, so
   `AGENTS_REPO_SLUG` failed it for ever - while `.env.sample` publishes it under "NOT A SECRET".
