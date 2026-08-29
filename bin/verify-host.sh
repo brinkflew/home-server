@@ -1626,19 +1626,55 @@ if [ -z "$GREENBOOT" ]; then
 	# A FAIL RATHER THAN A WARN, and here rather than in Agents, where the
 	# charter is WARN-or-NOTE. The file is already being served; there is no
 	# version of this worth deferring.
+	# A VALUE THIS REPOSITORY ALREADY PUBLISHES IS NOT A SECRET, AND THIS FIRED
+	# ON ONE FOR A DAY. Every .env pair of twelve characters or more was treated
+	# as a credential, so `AGENTS_REPO_SLUG` FAILed the check permanently -
+	# and .env.sample carries that variable, in this public repository, under a
+	# comment reading "NOT A SECRET, and it is in secrets/env.sops.env only
+	# because that is where .env is rendered from".
+	#
+	# REDACTING IT WOULD HAVE BEEN THE WRONG FIX. The slug is in every pull
+	# request URL the board already renders as a link, and in the approval card's
+	# own first line; a redaction pass that removed it would break the link and
+	# hide something the same page shows two panels away.
+	#
+	# SO THE EXEMPTION IS DERIVED RATHER THAN LISTED. A value is skipped only
+	# when .env.sample carries it IDENTICALLY - which means this repository has
+	# already committed it to a public remote, and there is nothing left for this
+	# check to protect. No second list to maintain, and exempting one is a
+	# deliberate act with an obvious meaning: publish the value in the file whose
+	# whole job is documenting the variable.
+	#
+	# IT FAILS SAFE. .env.sample carries a placeholder or an empty value for
+	# everything else - DOMAIN is `DOMAIN=` there - so every real credential is
+	# still compared, and a variable whose sample value merely LOOKS similar does
+	# not match, because the test is equality and not a prefix.
 	rdoc_dir="${DOCKER_VOLUME_CACHE:-/var/home-server/cache}/dashboard"
 	rdoc_n=$(find "$rdoc_dir" -maxdepth 1 -name 'round-*.json' -type f 2>/dev/null | wc -l)
+	rdoc_sample="$repo/.env.sample"
+	[ -f "$rdoc_sample" ] || rdoc_sample=/dev/null
 	if [ ! -f "$repo/.env" ]; then
 		note secrets.rendered_documents "no .env, so what the render should have hidden cannot be known"
 	elif [ "${rdoc_n:-0}" -eq 0 ]; then
 		note secrets.rendered_documents "no rendered round documents to check"
 	else
-		rdoc_leaked=$(awk -F= '/^[A-Za-z_][A-Za-z0-9_]*=/ {
+		rdoc_leaked=$(awk -F= '
+			# The first file is .env.sample: what this repository publishes.
+			FNR == NR {
+				if ($0 ~ /^[A-Za-z_][A-Za-z0-9_]*=/) {
+					k = substr($0, 1, index($0, "=") - 1)
+					v = substr($0, index($0, "=") + 1)
+					gsub(/^"|"$/, "", v)
+					if (v != "") published[k] = v
+				}
+				next
+			}
+			/^[A-Za-z_][A-Za-z0-9_]*=/ {
 				k = substr($0, 1, index($0, "=") - 1)
 				v = substr($0, index($0, "=") + 1)
 				gsub(/^"|"$/, "", v)
-				if (length(v) >= 12) print k "\t" v
-			}' "$repo/.env" 2>/dev/null |
+				if (length(v) >= 12 && published[k] != v) print k "\t" v
+			}' "$rdoc_sample" "$repo/.env" 2>/dev/null |
 			while IFS="$(printf '\t')" read -r rdoc_k rdoc_v; do
 				[ -n "$rdoc_v" ] || continue
 				if grep -R -F -q -- "$rdoc_v" "$rdoc_dir"/round-*.json 2>/dev/null; then
@@ -1649,7 +1685,11 @@ if [ -z "$GREENBOOT" ]; then
 		if [ -n "$rdoc_leaked" ]; then
 			bad secrets.rendered_documents "a rendered round document contains the value of: $rdoc_leaked - these files are served to the browser, so the redaction pass in bin/collect-metrics.py is not covering what reaches it. Names only here on purpose: status.json is itself readable by the dashboard"
 		else
-			ok secrets.rendered_documents "$rdoc_n round document(s) served, and no .env value survives into any of them"
+			# THE EXEMPTED COUNT IS PRINTED, because a check that quietly stops
+			# looking at something is one nobody can audit. Names, never values -
+			# the same rule the FAIL arm follows and for the same reason.
+			rdoc_pub=$(awk -F= 'FNR == NR { if ($0 ~ /^[A-Za-z_][A-Za-z0-9_]*=/) { k = substr($0, 1, index($0, "=") - 1); v = substr($0, index($0, "=") + 1); gsub(/^"|"$/, "", v); if (v != "") published[k] = v } next } /^[A-Za-z_][A-Za-z0-9_]*=/ { k = substr($0, 1, index($0, "=") - 1); v = substr($0, index($0, "=") + 1); gsub(/^"|"$/, "", v); if (length(v) >= 12 && published[k] == v) print k }' "$rdoc_sample" "$repo/.env" 2>/dev/null | paste -sd" " -)
+			ok secrets.rendered_documents "$rdoc_n round document(s) served, and no .env value survives into any of them${rdoc_pub:+ (not checked, because .env.sample publishes the same value: $rdoc_pub)}"
 		fi
 	fi
 

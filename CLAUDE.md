@@ -1279,6 +1279,22 @@ signal read green.
   a watcher, where nothing shows it. `shoot.mjs`'s `pageerror` line is why it was found at all.
 - `--z-scrim` and `--z-overlay` were declared for "a modal, a drawer" and had no consumer.
 
+### A permanent FAIL on a value this repository publishes in git
+- `secrets.rendered_documents` treated every `.env` value of 12+ characters as a credential, so
+  `AGENTS_REPO_SLUG` failed it for ever - while `.env.sample` publishes it under "NOT A SECRET".
+- Redacting was the wrong fix: the slug is in every PR URL the board links to. The exemption is
+  DERIVED - a value `.env.sample` carries identically is already on a public remote - so no second
+  list. Proved against a planted token, an empty-placeholder DOMAIN and a prefix-only near-match.
+
+### A stalled download is silent, blocking, and nothing could clear it
+- Ten episodes at "no connections" for 225-243h, each blocking every alternative release with
+  "already meets cutoff". `search-missing.py` names them and never acts, because clearing DELETES a
+  partial - right for a timer, and it left no way to act at all. `bin/clear-stalled.py` is the
+  person-shaped half.
+- `trackedDownloadStatus` was `ok` on all ten; the download client's MESSAGE is what named them.
+- `blocklist=true` is the flag the job does not work without, or the next search re-grabs the same
+  dead release. `%.0f%%` drew 99.8% as "100%", which reads as a completed file awaiting import.
+
 ### The gate that reserved two days of headroom for nobody
 - `QUOTA_HOLD_AT = allowed_warning` is right and its premise - that the headroom is being left for a
   human - is false on a weekend. There was no way to say so: a bare literal, and `--force` bypasses

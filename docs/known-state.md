@@ -3924,3 +3924,37 @@ three of them are the same mistake in different clothes.
 - **`bin/collect-metrics.py`'s `_fleet_control` silently drops any control name it does not route**,
   which is why `restart:*` has never reached the board. A `quota:` row would have been invisible to
   the dashboard with every other layer working.
+
+### A permanent FAIL on a value this repository publishes in git
+- **`secrets.rendered_documents` treated every `.env` value of twelve characters or more as a
+  credential**, so `AGENTS_REPO_SLUG` failed it for as long as a round document existed - while
+  `.env.sample` carries that variable, in this public repository, under a comment reading "NOT A
+  SECRET". A FAIL nobody can act on is how a reader learns to skip a section.
+- **Redacting it would have been the wrong fix.** The slug is in the approval card's first line and
+  in every pull request URL the board renders as a link, so a redaction pass that removed it would
+  break the link and hide what the same page shows two panels away.
+- **The exemption is DERIVED, not listed**: a value is skipped only when `.env.sample` carries it
+  identically, which means it is already on a public remote and there is nothing left to protect.
+  Exempting one is then a deliberate act with an obvious meaning, and there is no second list.
+- **Proved against a planted corpus before it was trusted**: the slug exempt, a planted
+  `ghp_...` token still caught, `DOMAIN` still checked because its sample value is empty, and a
+  sample value that is a PREFIX of the real one still caught - the test is equality.
+
+### A stalled download is silent, blocking, and nothing could clear it
+- Ten Sex and the City S03 episodes sat at "stalled with no connections" for 225-243 hours, one
+  release group, each blocking every alternative release for its episode with "already meets
+  cutoff". `bin/search-missing.py` named them nightly and deliberately never acted, because clearing
+  one DELETES a partial download - which is right for a timer and left no way to act at all.
+- **`trackedDownloadStatus` was `ok` on all ten** while `status` was `warning`. The *arr's own
+  judgement did not call them stalled; the download client's message did. A predicate reading only
+  the first would have found nothing, which is why `stalled()` takes either.
+- **`blocklist=true` is the flag the job does not work without.** A removal alone leaves the same
+  dead release as the best candidate, so the next search grabs it again and the queue is stalled by
+  morning.
+- **Two defects in the first report, both found by running it.** `includeSeries` made the series
+  title win the fallback chain, so ten entries printed as ten identical lines; and `%.0f%%` printed
+  a download stalled at 99.8% as "100%", which reads as a completed file waiting on import rather
+  than a dead swarm one piece short. Those want opposite decisions.
+- **A per-app query was added to the tuple and the call site kept its own hardcoded one**, so
+  `includeEpisode` was declared and never asked for - the constant was correct in the file it was
+  written in and reached nothing.
