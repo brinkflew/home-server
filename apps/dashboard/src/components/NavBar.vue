@@ -56,7 +56,16 @@ const age = computed(() => {
   <header class="bar">
     <div class="left">
       <RouterLink to="/home" class="mark" aria-label="home server">
-        <span class="glyph" />
+        <!-- Design option 1c, "pitch and units": the house reduced to its roof
+             pitch over two rack units. Inline SVG rather than an <img> or an
+             icon package, which is what ChipLink and PosterTile already do. The
+             geometry sits on a 32 unit grid so every edge lands on a whole
+             pixel when it halves to 16. -->
+        <svg class="glyph" viewBox="0 0 32 32" fill="none" stroke="currentColor" aria-hidden="true">
+          <path d="M4.6 16.6L16 6L27.4 16.6" stroke-width="4.4" stroke-linecap="round" stroke-linejoin="round" />
+          <path d="M8.2 22.8H23.8" stroke-width="3.4" stroke-linecap="round" />
+          <path d="M8.2 27.7H15.8" stroke-width="3.4" stroke-linecap="round" />
+        </svg>
         <span class="word mono">HOMESERVER</span>
       </RouterLink>
 
@@ -111,11 +120,15 @@ const age = computed(() => {
   flex: none;
 }
 
+/* 20px against the 11px wordmark at 0.16em is the design's own small lockup,
+   so replacing the placeholder square shifts none of the header's metrics.
+   The colour is --brand rather than --ok deliberately - a mark in the status
+   colour, beside the verdict pill, reads as a second status light. */
 .glyph {
   width: 20px;
   height: 20px;
-  border-radius: 6px;
-  background: var(--ok);
+  flex: none;
+  color: var(--brand);
 }
 
 .word {

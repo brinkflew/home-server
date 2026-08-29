@@ -4,6 +4,18 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#050706" />
+
+    <!-- These live in public/, which vite copies to the dist root verbatim.
+         The SVG is what every current browser will actually use; the .ico is
+         for the ones that will not take one, and it is also what stops a bare
+         /favicon.ico request falling through the container Caddyfile's
+         try_files and being answered with this file as text/html. -->
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+
     <title>home server</title>
   </head>
   <body>

@@ -11,7 +11,11 @@
         failing. Everything else is grey. A fourth status colour would make
         the first three mean less.
      3. One accent, teal, reserved for healthy state and focus. It is not a
-        brand colour to sprinkle.
+        brand colour to sprinkle. THE MARK IS THE ONE EXCEPTION and it is
+        raspberry rather than teal - see --brand below. A logo painted in the
+        status colour reads as a status, which is the one thing a logo must
+        not do; it is an exception to which colour, not to the rule that teal
+        is never sprinkled.
 
    THERE IS NO LIGHT THEME, and that is a decision. This is one operator on
    one machine, the design commits to a green-leaning near black, and a
@@ -75,6 +79,21 @@
   --fail-edge: oklch(0.66 0.17 22 / 0.28);
 
   --off: oklch(0.3 0.008 168);
+
+  /* --- Brand: the mark, and only the mark ------------------------------
+     Raspberry, lifted verbatim from the design project along with the
+     geometry it colours. It is NOT a fourth status colour and it is NOT an
+     interaction colour - rule 2 above still holds and teal is still what a
+     person clicks. It exists because the mark used to be a square filled
+     with --ok, sitting in the same header as the teal verdict pill, where it
+     read as a health indicator rather than a logo.
+
+     EXACTLY TWO CONSUMERS: NavBar.vue's .glyph, and public/favicon.svg -
+     which carries the hex literally, because it is loaded by the browser
+     outside this stylesheet and cannot resolve a variable. CHANGE ONE AND
+     RE-CUT THE OTHER; favicon.svg's own header carries the commands. */
+  --brand: oklch(0.655 0.168 0);
+  --brand-deep: oklch(0.46 0.155 358);
 
   /* --- Type ------------------------------------------------------------ */
   --font-ui: "Geist", system-ui, -apple-system, sans-serif;

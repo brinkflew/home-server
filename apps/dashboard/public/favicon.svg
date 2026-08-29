@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- ==========================================================================
+       The HOMESERVER mark, and THE SOURCE every other icon here is cut from
+       ==========================================================================
+       Design option 1c, "pitch and units": the house reduced to its roof pitch
+       over two rack units, so the units read as the subject rather than the
+       contents. The same three paths as NavBar.vue's .glyph, on the same 32
+       unit grid, so every edge lands on a whole pixel when it halves to 16.
+
+       (An XML comment may not contain two dashes in a row, so the custom
+       properties below are named without their leading pair. They are the
+       `brand` and `brand-deep` properties in src/styles/tokens.css.)
+
+       THE COLOUR IS A LITERAL HEX AND THAT IS NOT AN OVERSIGHT. A favicon is
+       fetched by the browser on its own, outside the page, so it can resolve no
+       custom property: a var() here would simply not paint. The two values
+       below are `brand` and `brand-deep`, and tokens.css says the same thing
+       from the other end. CHANGE ONE AND RE-CUT THE OTHER.
+
+       The mark is RASPBERRY, not the teal that is everywhere else in this UI,
+       and that is the point. Teal means healthy. A logo in the status colour is
+       a logo that reads as a reading.
+
+       TRANSLATED UP BY 0.6. The ink spans y 3.8 to 29.4, so its optical centre
+       is 16.6 rather than 16, which is invisible at 20px beside the wordmark
+       and sits visibly low once the mark is alone in a padded 180px square.
+       Corrected here, once, so the tab and the home screen cannot disagree.
+
+       Regenerate the rasters from this file, from apps/dashboard/. THE DENSITY
+       IS LOAD BEARING: this file's intrinsic size is 32 pixels, so without it
+       magick rasterises 32 pixels and then ENLARGES them, and every icon ships
+       visibly blurred with nothing anywhere to say so. 3072 is the default 96
+       dpi scaled to 1024, so every target below is a downscale. Rendering is
+       librsvg, via magick's svg delegate, which is what draws the round caps
+       correctly; magick's own MSVG renderer does not.
+
+         magick -background none -density 3072 public/favicon.svg \
+           -define icon:auto-resize=48,32,16 -strip -depth 8 public/favicon.ico
+         magick -background none -density 3072 public/favicon.svg -resize 128x128 \
+           -background '#050706' -gravity center -extent 180x180 -strip -depth 8 \
+           public/apple-touch-icon.png
+         magick -background none -density 3072 public/favicon.svg -resize 136x136 \
+           -background '#050706' -gravity center -extent 192x192 -strip -depth 8 \
+           public/icon-192.png
+         magick -background none -density 3072 public/favicon.svg -resize 364x364 \
+           -background '#050706' -gravity center -extent 512x512 -strip -depth 8 \
+           public/icon-512.png
+
+       #050706 is the `bg` property. The rasters are opaque because iOS
+       composites a transparent touch icon unpredictably, and square because iOS
+       applies its own corner mask: rounding them here would round them twice.
+       ========================================================================== -->
+  <style>
+    .mark { stroke: #df5d8c; }
+    @media (prefers-color-scheme: light) {
+      .mark { stroke: #962558; }
+    }
+  </style>
+  <g class="mark" transform="translate(0 -0.6)" fill="none" stroke-linecap="round">
+    <path d="M4.6 16.6L16 6L27.4 16.6" stroke-width="4.4" stroke-linejoin="round" />
+    <path d="M8.2 22.8H23.8" stroke-width="3.4" />
+    <path d="M8.2 27.7H15.8" stroke-width="3.4" />
+  </g>
+</svg>

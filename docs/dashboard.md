@@ -513,3 +513,34 @@ literally `attempt  of 3`.
 `--t-micro` are in no stylesheet, so every declaration naming one was invalid-at-computed-value-time
 and the sub-lines silently inherited the row's font and colour. The scale is `--fg` through
 `--fg-dim` and `--t-mono-xs`. Nothing failed and nothing warned; the page just quietly looked wrong.
+
+**The mark is design option 1c, and it is raspberry rather than teal, 2026-08-29.** The header
+carried a placeholder until then - a 20x20 rounded square filled with `var(--ok)`, sitting in the
+same bar as the teal verdict pill, where it read as a second status light rather than a logo. What
+replaced it is the house reduced to its roof pitch over two rack units: three stroked paths on a 32
+unit grid, so every edge lands on a whole pixel when it halves to 16. It is drawn inline in
+`NavBar.vue`, the way `ChipLink` and `PosterTile` already draw theirs, because the ASCII lint rules
+out a unicode glyph and an icon package would be a dependency carrying two icons. 20px against the
+11px wordmark is the design's own small lockup, so nothing in the header's metrics moved.
+
+**`--brand` is not a fourth status colour and it is not an interaction colour.** Teal still means
+healthy and still means focus. The mark is the ONE element allowed a colour of its own, and the
+reason is the placeholder's: a logo painted in the status colour reads as a reading. It has exactly
+two consumers - `NavBar.vue`'s `.glyph`, and `public/favicon.svg`, which carries the hex literally
+because a favicon is fetched by the browser outside the page and can resolve no custom property.
+`tokens.css` and the SVG's own header each name the other, because that duplication is the drift to
+watch: change one and re-cut the other.
+
+**There was no favicon at all before this.** `index.html` carried no `<link rel="icon">`, so a
+browser's `/favicon.ico` fell through the container Caddyfile's `try_files` and was answered with
+the SPA shell as `text/html` - a 200, which is why it never looked like a fault.
+`apps/dashboard/public/` is new and is vite's static root: copied to the `dist` root verbatim and
+unfingerprinted, so the icons land in the Caddyfile's `@entry` bucket at `no-cache`, which is right
+for files that are not content-addressed. It holds the first binary assets this repository has ever
+tracked, and the ASCII lint's `grep -I` skips them exactly as its own comment anticipated.
+
+**Every raster is cut from `favicon.svg` and nothing else.** One source, four outputs - the `.ico`
+at 16/32/48, a 180px opaque touch icon, and 192/512 for the manifest - with the commands recorded in
+the SVG's header so a colour change is a re-cut rather than a redraw. The touch icon is opaque
+because iOS composites transparency unpredictably, and square because iOS applies its own corner
+mask; rounding it here would round it twice.

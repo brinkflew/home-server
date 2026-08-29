@@ -1215,6 +1215,25 @@ signal read green.
 - The collector deletes for the first time, `--print` had to be taught to a source that writes, and
   `phaseClock` read the first running run in the document rather than the row's own.
 
+### The comment style this repository is written in is invalid in the file that needed it most
+- An XML comment may not contain two dashes in a row, and both halves of the house style do: the
+  `-----` rules, and every custom property a comment would cite. librsvg calls the result `unable to
+  read image data`, which reads as a corrupt file rather than a comment.
+- `favicon.svg` therefore hardcodes a hex that no `git grep` for the token will find, which is why it
+  and `tokens.css` name each other explicitly.
+
+### An icon that renders perfectly and ships blurred
+- `magick` rasterises an SVG at its INTRINSIC size and enlarges, so a 32px source written to a 512px
+  PNG exits 0, has the right dimensions and is soft. `-density` is the fix.
+- Two SVG renderers ship in one binary; MSVG does not draw round caps faithfully, so a host without
+  librsvg cuts a different icon from the same source, silently.
+
+### A directory added to an app does not reach its image
+- `apps/dashboard/Dockerfile`'s `COPY` list is exhaustive, so a new `public/` needs its own line.
+  Without it the build succeeds, `vue-tsc` passes, the container reports healthy and the assets are
+  simply absent.
+- A local `npm run build` proves nothing about this: the check has to run inside the built image.
+
 
 ## Target architecture
 

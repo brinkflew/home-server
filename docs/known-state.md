@@ -3686,3 +3686,40 @@ three of them are the same mistake in different clothes.
 - **`phaseClock` read the first globally-running run in the document**, not the row's own, so with
   two rounds in flight every row would have shown one clock. It read correctly only because this
   fleet runs one round at a time - a claim nothing could contradict.
+
+### The comment style this repository is written in is invalid in the file that needed it most
+- **An XML comment may not contain two dashes in a row, and BOTH halves of the house style do.**
+  The `=====`/`-----` rules that open every file here, and every custom property name that would be
+  cited in one - `--brand`, `--bg`, `var(--ok)` - are all `--`. Writing `apps/dashboard/public/favicon.svg`
+  in the idiom of its neighbours produced a file no renderer would open.
+- **The error names the wrong thing entirely.** librsvg reports `unable to read image data ... error/svg.c/RenderRSVGImage`,
+  followed by `no decode delegate for this image format`, which reads as a corrupt file, a missing
+  delegate or an unsupported format - three plausible wrong diagnoses, and the actual cause is a
+  comment. `python3 -c "import xml.dom.minidom; ..."` says it in one line and is the cheap check.
+- The resolution is not to abandon the documentation: the rules are `=` only, and the properties are
+  named without their leading pair with one line saying why. **A `git grep` for `--brand` therefore
+  does not find the file that hardcodes it**, which is the whole reason `tokens.css` names
+  `favicon.svg` explicitly and `favicon.svg` names `tokens.css` back.
+
+### An icon that renders perfectly and ships blurred
+- **`magick` rasterises an SVG at its INTRINSIC size and then enlarges it.** `favicon.svg` declares
+  32x32, so `magick favicon.svg -resize 512x512` renders 32 pixels and scales them up 16x. It exits
+  0, writes a valid PNG of exactly the right dimensions, and the only symptom is that the icon looks
+  soft - at a size nobody inspects at 100%. `-density 3072` (96 dpi scaled to 1024) renders at 1024
+  first, so every target is a downscale.
+- **Two SVG renderers ship in one binary and only one draws this mark.** `magick -list format` shows
+  `SVG` bound to RSVG 2.60.0 here; the fallback is MSVG, ImageMagick's own, which does not draw
+  `stroke-linecap="round"` faithfully. A host without librsvg produces a different icon from the
+  same source, silently.
+- The 16-bit sRGB default also tripled every file for an icon that is two flat colours; `-strip
+  -depth 8` took the 512 from 39 KB to 15 KB with no visible difference.
+
+### A directory added to an app does not reach its image
+- **`apps/dashboard/Dockerfile`'s `COPY` list is exhaustive and enumerates every path**, so adding
+  `apps/dashboard/public/` without adding `COPY public/ ./public/` ships an image with no icons in
+  it. The build succeeds, `vue-tsc` passes, the container starts, `Notify=healthy` fires, and the
+  page is correct in every respect except the one asset it was changed for.
+- It is the same shape as the lane's tool-cache seed guard: the local `npm run build` writes the
+  files into `dist/` from the working tree and proves nothing about the image. **The check has to be
+  made inside the image** - `podman run --rm --entrypoint ls <image> /srv/dist/favicon.svg ...` -
+  and the local build passing is not evidence either way.

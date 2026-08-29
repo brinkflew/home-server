@@ -32,6 +32,13 @@ COPY tsconfig.json tsconfig.app.json tsconfig.node.json vite.config.ts env.d.ts 
 COPY fixtures/ ./fixtures/
 COPY src/ ./src/
 
+# THE COPY LIST ABOVE IS EXHAUSTIVE, so an asset directory that is not named
+# here is simply absent from the bundle - and nothing says so. The build still
+# succeeds, vue-tsc still passes, the container still reports healthy, and the
+# only symptom is a tab with no icon. public/ is vite's static root: it is
+# copied to the dist root verbatim, without fingerprinting.
+COPY public/ ./public/
+
 # vue-tsc runs first (it is `npm run build`), so a type error fails the image
 # build rather than shipping. There is no test suite here; this is the check.
 RUN npm run build
