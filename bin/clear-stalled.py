@@ -240,15 +240,19 @@ def main():
     env = load_env()
 
     plan = []
-    for container, port, var, _kind in APPS:
+    for container, port, var, query in APPS:
         key = env.get(var, "")
         if not key:
             print("clear-stalled: %s is not set in %s" % (var, ENV_FILE),
                   file=sys.stderr)
             return 1
         try:
-            queue = api(container, port, key, "queue?pageSize=200"
-                        "&includeMovie=true&includeSeries=true")
+            # THE QUERY COMES OFF APPS, and it did not until 2026-08-29:
+            # the tuple grew a per-app query and this call site kept its own
+            # hardcoded one, so `includeEpisode` was declared and never asked
+            # for. Every line still read "Sex and the City" and the constant
+            # looked correct in the file it was written in.
+            queue = api(container, port, key, query)
         except ArrError as exc:
             print("clear-stalled: %s" % exc, file=sys.stderr)
             return 1
