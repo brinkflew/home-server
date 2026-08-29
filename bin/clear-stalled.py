@@ -68,10 +68,16 @@ import time
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENV_FILE = os.path.join(REPO, ".env")
 
-# (container, port, key variable, what it holds), so one loop covers both.
+# (container, port, key variable, the queue query), so one loop covers both.
+#
+# THE QUERY IS PER APP BECAUSE THE EXPANSIONS ARE. `includeEpisode` is what puts
+# S03E04 on the line, and it is the only thing that tells ten queue entries for
+# one series apart - the first version of this asked for `includeSeries` on both
+# and printed "Sex and the City" ten times, which is a list nobody can act on.
 APPS = (
-    ("radarr", 7878, "RADARR_API_KEY", "movie"),
-    ("sonarr", 8989, "SONARR_API_KEY", "series"),
+    ("radarr", 7878, "RADARR_API_KEY", "queue?pageSize=200&includeMovie=true"),
+    ("sonarr", 8989, "SONARR_API_KEY",
+     "queue?pageSize=200&includeSeries=true&includeEpisode=true"),
 )
 
 # How long an item may sit before it is called stalled rather than slow. The
@@ -172,12 +178,23 @@ def stalled(queue, now, hours):
         warned = row.get("trackedDownloadStatus") in ("warning", "error")
         if not warned and "stall" not in reason.lower():
             continue
-        title = (row.get("movie") or {}).get("title") \
-            or (row.get("series") or {}).get("title") \
-            or row.get("title") or "?"
+        # WHAT IDENTIFIES A QUEUE ENTRY IS THE RELEASE, NOT THE SERIES. Ten
+        # entries can share one series and one movie can be queued twice; the
+        # release name is the only field unique to the row, and it is also what
+        # `blocklist=true` is about to act on. The series or film is prefixed
+        # only when the API expanded it, because that is the half a person
+        # recognises.
+        owner = (row.get("movie") or {}).get("title") \
+            or (row.get("series") or {}).get("title") or ""
+        ep = row.get("episode") or {}
+        if ep.get("seasonNumber") is not None:
+            owner = "%s S%02dE%02d" % (owner, ep.get("seasonNumber") or 0,
+                                       ep.get("episodeNumber") or 0)
+        release = row.get("title") or ""
         found.append({
             "id": row.get("id"),
-            "title": title,
+            "title": (owner.strip() or release or "?"),
+            "release": release,
             "hours": (now - added) / 3600.0,
             "reason": reason or row.get("trackedDownloadStatus", ""),
             "size": row.get("size") or 0,
@@ -246,10 +263,18 @@ def main():
     for container, _port, _key, item in plan:
         done = item["size"] - item["left"]
         pct = (100.0 * done / item["size"]) if item["size"] else 0.0
-        print("%-7s %-7s %s (%.0fh, %.0f%% of %.1f GB): %s"
+        # ONE DECIMAL, AND IT NEVER ROUNDS UP TO 100. `%.0f` printed a download
+        # stalled at 99.8% as "100%", which reads as a COMPLETED file waiting on
+        # import rather than a dead swarm one piece short - and those want
+        # opposite decisions. A percentage that rounds across the one boundary
+        # that changes the answer is worse than no percentage.
+        if pct >= 99.95 and item["left"] > 0:
+            pct = 99.9
+        print("%-7s %-7s %-26s %5.0fh %5.1f%% of %5.1f GB  %s"
               % ("WOULD" if not args.commit else "clear", container,
-                 item["title"][:64], item["hours"], pct,
-                 item["size"] / 1e9, item["reason"]))
+                 item["title"][:26], item["hours"], pct,
+                 item["size"] / 1e9, item["reason"][:44]))
+        print("        %s" % item["release"][:100])
 
     if not args.commit:
         print("\n%d stalled item(s). Nothing was changed - pass --commit to "
