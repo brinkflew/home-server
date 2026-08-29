@@ -297,7 +297,11 @@ set -e
 cd /tmp && mkdir -p pw && cd pw
 bun init -y >/dev/null 2>&1 || true
 bun add playwright@1 >/dev/null
-cat > dl.js <<'JS'
+# .cjs, NOT .js: `bun init` writes a package.json carrying "type": "module", so
+# a .js file here is an ES module and `require` is not defined in it. The leg
+# above escapes that only by being a `node -e` string, which defaults to
+# CommonJS. Caught by this check failing on an image whose LANG was irrelevant.
+cat > dl.cjs <<'JS'
 const http = require("http");
 const { chromium } = require("playwright");
 const NAME = "r\u00e9sum\u00e9 1.txt";
@@ -334,7 +338,7 @@ server.listen(9987, "127.0.0.1", async () => {
   }
 });
 JS
-node dl.js
+node dl.cjs
 IN
 	ok "chromium kept a UTF-8 filename* through a download"
 else
