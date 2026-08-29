@@ -144,6 +144,12 @@ ssh home.local 'cd /var/home-server && git pull && ./bin/render-env.sh &&
 - **The creation rule is matched against the file sops reads, not the one it writes.** Seeding
   `secrets/env.sops.env` from `.env` therefore matches as `.env`, which is why `.sops.yaml` covers
   both names. Without that it fails with an unhelpful "no matching creation rules found".
+- **The SAME message means "your path did not resolve".** `sops secrets/env.sops.env` from anywhere
+  but the repo root - a leftover `ssh` session especially, where the checkout is `/var/home-server` -
+  makes sops treat it as a file to CREATE, go looking for a creation rule, and report *"config file
+  not found, or has no creation rules, and no keys provided through command line options"*. Nothing
+  is wrong with the config or the key: DECRYPTING works from any directory, because the recipients
+  are in the file. `cd` to the repo, or give an absolute path.
 - **Variable names stay legible and empty values stay unencrypted.** That is deliberate: a diff
   should still show which credential changed. It does mean the file publishes the shape of the
   stack, which `stacks/` and `.env.sample` already do in full.
