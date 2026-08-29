@@ -4302,15 +4302,36 @@ def _round_within(started_at, window):
     return end is None or text < end
 
 
-def _round_settled(row):
+def _round_settled(conn, window):
     """Is there anything left that could still change this round's record?
 
-    An open round obviously changes. So does a closed one whose publication is
-    still open - pr_url and closed_at land later, and a document rendered before
-    they did would say "not published" for ever, which is the exact claim
-    docs/known-state.md records as having to be outranked by `unknown`.
+    IT READS THE WINDOW AND THE JOB, NOT THE ROUND ROW, and the first draft got
+    that wrong in a way nothing caught. It asked `row.get("closed_at")` and
+    `row.get("waiting_on")` - but those keys are added by `source_fleet`'s own
+    loop, not by `_fleet_derive_rounds`, which is what this source calls. So
+    they were absent on every row, every round read unsettled, nothing was ever
+    fresh, and the per-run budget was re-spent on the NEWEST rounds every pass
+    while the older ones were never reached. Measured: five consecutive passes
+    with `pending` frozen at 35.
+
+    A LATER ROUND ON THE SAME WORKTREE CLOSES THE WINDOW, so no further phase
+    can join this one - that is what `window[2]` being set means. Until then the
+    round is still collecting. And an open notice or publication means the
+    record is still moving even though the phases have stopped: `pr_url` and
+    `closed_at` land later, and a document rendered before they did would say
+    "not published" permanently, which known-state records as the claim that has
+    to be outranked.
     """
-    return bool(row.get("closed_at")) and row.get("waiting_on") != "person"
+    if window[2] is None:
+        return False
+    job = _round_job(conn, window)
+    if not job:
+        return True
+    if _fleet_rows(conn, "SELECT 1 FROM notice WHERE flow_job_id = ?"
+                         " AND closed_at IS NULL LIMIT 1", (job,)):
+        return False
+    return not _fleet_rows(conn, "SELECT 1 FROM publication WHERE job_id = ?"
+                                 " AND closed_at IS NULL LIMIT 1", (job,))
 
 
 def source_round_detail(m):
@@ -4465,6 +4486,7 @@ def _round_document(conn, row, window, index, spoken_for, pairs, budget):
     """
     key = _round_key(row)
     path = _round_path(key)
+    settled = _round_settled(conn, window)
     runs = [r for r in _fleet_rows(conn, """
         SELECT %s FROM run WHERE worktree_id IN (?, ?) ORDER BY id
     """ % _round_run_columns(conn), (window[0], window[0] + FLEET_VERIFY_SUFFIX))
@@ -4488,13 +4510,12 @@ def _round_document(conn, row, window, index, spoken_for, pairs, budget):
             logs[run["id"]] = found
             claimed.add(found)
 
-    if _ROUND_DRY_RUN[0] or not _round_fresh(path, logs.values(),
-                                             _round_settled(row)):
+    if _ROUND_DRY_RUN[0] or not _round_fresh(path, logs.values(), settled):
         phases, short = _round_phases(runs, logs, pairs, budget)
         doc = Document()
-        doc.set("round", _round_summary(conn, row, window))
+        doc.set("round", _round_summary(conn, row, window, settled))
         doc.set("events", _round_events(conn, row, window, runs))
-        doc.set("report", _round_report(conn, row, window, pairs))
+        doc.set("report", _round_report(conn, row, window, pairs, settled))
         doc.set("phases", phases)
         doc.note("conduct_db", True)
         body = doc.render(now())
@@ -4612,7 +4633,7 @@ def _round_phases(runs, logs, pairs, budget):
     return phases, short
 
 
-def _round_summary(conn, row, window):
+def _round_summary(conn, row, window, settled):
     """Who this round is, so the panel need not be handed a fleet row too."""
     return {
         "key": _round_key(row),
@@ -4629,7 +4650,7 @@ def _round_summary(conn, row, window):
         "phase": row.get("phase"),
         "waiting_on": row.get("waiting_on"),
         "flow_job_id": _round_job(conn, window),
-        "settled": _round_settled(row),
+        "settled": settled,
     }
 
 
@@ -4721,7 +4742,7 @@ def _round_events(conn, row, window, runs):
     return events
 
 
-def _round_report(conn, row, window, pairs):
+def _round_report(conn, row, window, pairs, settled):
     """The approval card and what it was built from.
 
     THE CARD IS ALREADY IN THE DATABASE, TWICE, and neither copy is the one the
@@ -4746,7 +4767,7 @@ def _round_report(conn, row, window, pairs):
                 payload = json.loads(rows[0]["payload"])
             except ValueError:
                 payload = None
-    if payload is None and not _round_settled(row):
+    if payload is None and not settled:
         rows = _fleet_rows(conn, "SELECT body FROM report WHERE worktree_id = ?",
                            (window[0],))
         if rows and rows[0].get("body"):
