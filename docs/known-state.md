@@ -3974,6 +3974,21 @@ three of them are the same mistake in different clothes.
 - **It opens no blind spot**: a phase that never ends is `agents.phase_stuck`'s finding, graded past
   10800s against a scope whose `RuntimeMaxSec` is 5400. Proved by exercising all six arms in
   isolation, including a marker with the key absent, which fails safe to the warn.
+- **`phase_in_flight` was only the FIRST of two busy signals, and the same day proved it.** The
+  round the gate sends to a person leaves `_intake_idle` refusing work with "a pull request is still
+  pending on <worktree>" - and that path returns WITHOUT stamping, because it is busy rather than a
+  decision. So the ordinary end of every round the fleet cannot autopublish ages the stamp past an
+  hour with no phase running, and the check called it "the intake pass has stopped" while the fleet
+  was doing exactly what it was built to do. A suspended step is the same kind of cause as a running
+  phase: not a second opinion, the reason the look did not happen.
+- **The measurement was hoisted rather than repeated.** `agents.approvals_pending` already asks
+  `v2_job_queue` a hundred lines below; asking twice would be two sources for one truth. It is
+  measured once above `agents.intake` and graded in both places.
+- **A control plane that cannot be read is a NOTE and not the warn.** With windmill-db down the busy
+  signal cannot be asked for at all, and a fleet with no control plane already has findings of its
+  own - so the arm says the two cannot be told apart from here rather than guessing the worse one.
+- **A human gate nobody answers is still found**, by `agents.approvals_pending` at twelve hours on
+  that same measurement. This one goes quiet; that one does not.
 
 ### A browser under the C locale keeps only the names it could have guessed
 - **`conduct verify` exited 2 on every round from 2026-08-24 to 2026-08-29**, always on `e2e-test`

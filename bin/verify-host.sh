@@ -2480,6 +2480,37 @@ if [ -z "$GREENBOOT" ]; then
 	# IT OPENS NO BLIND SPOT. A phase that never ends cannot mask this for ever:
 	# agents.phase_stuck grades a phase past 10800s against a scope whose
 	# RuntimeMaxSec is 5400, so a wedged phase is already somebody else's finding.
+	#
+	# AND `phase_in_flight` IS ONLY THE FIRST OF TWO BUSY SIGNALS, which this
+	# learned the same day by warning about it. `_intake_idle` refuses to take
+	# work while a round conduct opened is still open - "a pull request is still
+	# pending on <worktree>" - and it returns WITHOUT stamping, because that path
+	# is busy rather than a decision. So a round waiting on a person ages the
+	# stamp past an hour with no phase running, which is the ordinary end of
+	# every round the gate sends to a human, and it read as "the intake pass has
+	# stopped". A suspended step is the same kind of cause as a running phase:
+	# not a second opinion, the reason the look did not happen.
+	#
+	# A HUMAN GATE NOBODY ANSWERS IS STILL FOUND, by agents.approvals_pending at
+	# twelve hours on the same measurement. This one goes quiet; that one does
+	# not, so the pair still covers a fleet that has genuinely stalled.
+	# THE SUSPENDED-STEP COUNT, HOISTED FROM agents.approvals_pending A HUNDRED
+	# LINES BELOW, because this check needs the same answer and measuring it
+	# twice would be two sources for one truth. Both grade it; only one asks.
+	wm_up=""
+	podman ps --format '{{.Names}}' 2>/dev/null | grep -qx windmill-db && wm_up=1
+	ap_n=""
+	ap_age=0
+	if [ -n "$wm_up" ]; then
+		ap_sql="select count(*), coalesce(max(extract(epoch from (now() - created_at)))::bigint, 0) from v2_job_queue where suspend > 0"
+		ap_row=$(podman exec -e AP_SQL="$ap_sql" windmill-db \
+			sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "$AP_SQL"' 2>/dev/null)
+		ap_n=${ap_row%%|*}
+		ap_age=${ap_row##*|}
+		case "$ap_n" in ''|*[!0-9]*) ap_n="" ;; esac
+		case "$ap_age" in ''|*[!0-9]*) ap_age=0 ;; esac
+	fi
+
 	intake_at=$(cget intake_last_at)
 	intake_age=$(cage intake_last_at)
 	intake_why=$(cget intake_last_why)
@@ -2490,8 +2521,16 @@ if [ -z "$GREENBOOT" ]; then
 		note agents.intake "no project has \`intake\` armed - conduct records no look at all in that state, whether it has never chosen work or was paused deliberately - so the fleet takes the work it is given and chooses none"
 	elif [ -n "$intake_age" ] && [ "$intake_age" -gt 3600 ] && [ "$intake_busy" = 1 ]; then
 		note agents.intake "conduct last looked for work ${intake_age}s ago and the cadence is 900s, because a look is skipped while a phase runs and one has been running throughout: ${intake_phase:-a phase in flight}. agents.phase_stuck is what grades a phase that never ends"
+	elif [ -n "$intake_age" ] && [ "$intake_age" -gt 3600 ] && [ -z "$ap_n" ]; then
+		# UNREADABLE IS NOT STOPPED. With windmill-db down the busy signal cannot
+		# be asked for at all, and a fleet whose control plane is missing already
+		# has findings of its own - warning here would be a second one for one
+		# cause, which is what hoisting the measurement was meant to avoid.
+		note agents.intake "conduct last looked for work ${intake_age}s ago and the cadence is 900s, but the suspended-step count could not be read - so a stopped pass and a round waiting on a person cannot be told apart from here. agents.approvals_pending names why it is unreadable"
+	elif [ -n "$intake_age" ] && [ "$intake_age" -gt 3600 ] && [ "${ap_n:-0}" -gt 0 ]; then
+		note agents.intake "conduct last looked for work ${intake_age}s ago and the cadence is 900s, because a look is also skipped while a round conduct opened is still open - and $ap_n flow step(s) are suspended, so one is. The fleet resumes the moment that round is answered; agents.approvals_pending is what grades one nobody answers"
 	elif [ -n "$intake_age" ] && [ "$intake_age" -gt 3600 ]; then
-		warn agents.intake "conduct last looked for work ${intake_age}s ago, the cadence is 900s and NOTHING is in flight - so the intake pass has stopped and the fleet will now sit idle looking exactly as it would with an empty backlog${intake_why:+ (last reason: $intake_why)}"
+		warn agents.intake "conduct last looked for work ${intake_age}s ago, the cadence is 900s, no phase is running and NOTHING is suspended - so the intake pass has stopped and the fleet will now sit idle looking exactly as it would with an empty backlog${intake_why:+ (last reason: $intake_why)}"
 	elif [ -n "$intake_why" ]; then
 		# HOLDING IS NOT A FAULT AND MUST NOT READ AS ONE. Every reason conduct
 		# writes here is a decision it was told to make - the Review cap, the
@@ -2630,11 +2669,10 @@ if [ -z "$GREENBOOT" ]; then
 	# --------------------------------------------------------------------------
 	# The control plane, read out of its own database
 	# --------------------------------------------------------------------------
-	# Hoisted, because both checks below need the same answer and a stopped
-	# fleet must not produce two findings that say the same thing twice.
-	wm_up=""
-	podman ps --format '{{.Names}}' 2>/dev/null | grep -qx windmill-db && wm_up=1
-
+	# `wm_up` and the suspended-step count are measured ABOVE, beside
+	# agents.intake, because that check needs the same answer - see the hoist
+	# there. What is left here is the grading.
+	#
 	# v2_job_queue.suspend IS THE PREDICATE, measured against the live schema
 	# rather than guessed: it is an int holding how many approvals a suspended
 	# job still needs, and resume_job holds the signed rows that answer them.
@@ -2654,13 +2692,6 @@ if [ -z "$GREENBOOT" ]; then
 		fact agents_approvals_pending ""
 		note agents.approvals_pending "windmill-db is not running, so pending approvals cannot be read"
 	else
-		ap_sql="select count(*), coalesce(max(extract(epoch from (now() - created_at)))::bigint, 0) from v2_job_queue where suspend > 0"
-		ap_row=$(podman exec -e AP_SQL="$ap_sql" windmill-db \
-			sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "$AP_SQL"' 2>/dev/null)
-		ap_n=${ap_row%%|*}
-		ap_age=${ap_row##*|}
-		case "$ap_n" in ''|*[!0-9]*) ap_n="" ;; esac
-		case "$ap_age" in ''|*[!0-9]*) ap_age=0 ;; esac
 		fact agents_approvals_pending "${ap_n:-}" num
 		if [ -z "$ap_n" ]; then
 			note agents.approvals_pending "the suspended-job count could not be read - not measured"

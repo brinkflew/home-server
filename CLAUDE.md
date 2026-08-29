@@ -1285,6 +1285,10 @@ signal read green.
 - The marker's `phase_in_flight` is the CAUSE of the skipped look, not a second opinion. Busy is a
   note; stale with nothing running is still the warn. `agents.phase_stuck` covers a phase that
   never ends, so no blind spot.
+- **`phase_in_flight` was only the FIRST of two busy signals.** A round waiting on a person ages the
+  stamp past an hour with no phase running, which is the ordinary end of every round the gate sends
+  to a human. The suspended-step count is hoisted from `agents.approvals_pending` rather than asked
+  twice; unreadable is a note, not the warn.
 
 ### A permanent FAIL on a value this repository publishes in git
 - `secrets.rendered_documents` treated every `.env` value of 12+ characters as a credential, so
