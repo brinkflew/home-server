@@ -112,7 +112,7 @@ const tally = computed(() => {
         <thead>
           <tr>
             <th class="rail-head" />
-            <th class="id-head">Check</th>
+            <th class="id-head p2">Check</th>
             <th>Finding</th>
           </tr>
         </thead>
@@ -121,8 +121,20 @@ const tally = computed(() => {
             <td class="rail" :style="{ '--rail': railFor(c.status) }">
               <StatusDot :tone="checkTone(c.status)" :live="c.status === 'fail'" :size="6" />
             </td>
-            <td class="fid mono">{{ c.id }}</td>
-            <td class="msg" :title="c.message">{{ c.message }}</td>
+            <td class="fid mono p2">{{ c.id }}</td>
+            <td :title="c.message">
+              <!-- COLUMN PRIORITY. A 232px check id in 347px leaves the finding
+                   115px, which is not a sentence. Below 640 the id goes above
+                   its own message instead of beside it - the same fact, one
+                   line up.
+
+                   OUTSIDE .msg, NOT INSIDE IT. That element is a two-line
+                   clamp, so an id nested in it spent one of the message's two
+                   lines and the finding read as a truncated sentence under its
+                   own name. -->
+              <span class="fold2 fid mono">{{ c.id }}</span>
+              <div class="msg">{{ c.message }}</div>
+            </td>
           </tr>
         </tbody>
       </table>

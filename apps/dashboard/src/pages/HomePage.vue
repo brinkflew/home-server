@@ -329,4 +329,33 @@ function requestMeta(r: (typeof media.requests)[number]): string {
   font: var(--t-mono-xs);
   color: var(--fg-dim);
 }
+
+/* --- the rungs ------------------------------------------------------------
+   THIS PAGE HAD NO BREAKPOINT AT ALL, which is worth stating because it is the
+   front door: `/` redirects here, so it is what a phone opens onto. Two things
+   made it the widest page in the app. `.row-one` carries a HARD 300px track
+   for the requests panel beside up to three flexible ones, so on a 375px
+   screen the panel alone wanted 300 of 347 usable pixels and each now-playing
+   card went to nothing. And the poster grid is eight across at every width -
+   at 390px that is a 35x52px poster under an 11px title.
+
+   The posters step 8 -> 5 -> 3 rather than going `auto-fill`. auto-fill sized
+   from a 88px minimum gives FOURTEEN columns at 1360, which is not the design
+   and is not what anybody wants on a desktop; the count is a decision per rung
+   and it is written down as one. */
+@media (max-width: 900px) {
+  .row-one {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
 </style>

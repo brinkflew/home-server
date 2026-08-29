@@ -451,10 +451,21 @@ const metricsStale = useMetricsStale();
 }
 
 
+/* PANNED BELOW THE WIDTH IT NEEDS, rather than squeezed. Eight columns of
+   which seven are a fixed width - 672px of tracks, 84px of gaps and 28px of
+   padding is a 784px floor - and it sits directly in the page rather than in a
+   panel, so at 375px it pushed the whole document sideways. Converting it to
+   `.tbl` with column priority is the follow-up; this is the repair. */
 .rack {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.rack .row {
+  min-width: 784px;
 }
 
 .rack.dim {
@@ -580,6 +591,14 @@ const metricsStale = useMetricsStale();
 @media (max-width: 1100px) {
   .apps {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Two columns of "label   value" in 347px is about 165px a pair, which puts
+   the value under its own label as often as beside it. */
+@media (max-width: 640px) {
+  .apps {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

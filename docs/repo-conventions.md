@@ -133,4 +133,44 @@ set `tabular-nums`, so neither reflows its column as it ticks.
 **A BAND IS EITHER FULL WIDTH OR N EQUAL COLUMNS**, and `Band.vue` is the component that makes it
 structural. A band that needs a grid AND a full-width panel under it is two bands, not a special
 case. Two rhythms carry it: `--gap` between panels inside a band, `--gap-lg` between bands, which is
-what makes a page read as bands rather than as one long stack.
+what makes a page read as bands rather than as one long stack. It governs panels *within* a band -
+one full-width panel is free to have hierarchy inside it, which is what the Agents board's header
+is.
+
+**THREE BREAKPOINT RUNGS, AND THEY ARE LITERALS BECAUSE A MEDIA QUERY CANNOT READ A CUSTOM
+PROPERTY.** There is no `--bp-*` token and there cannot be one, so the numbers are repeated in
+scoped blocks across the app and the ladder is written down here instead. Add to it rather than
+inventing a fourth.
+
+| Rung | | What changes |
+|---|---|---|
+| **1180** | the fold | `Band` goes to one column. `Band.vue` states it and names the 1360x860 reference viewport. |
+| **900** | tablet | N-up tile grids fold; the four hand-rolled racks and the network drawing gain a scroller; `.tbl` drops its `.p3` columns; the nav becomes a drawer. |
+| **640** | phone | The header sticks and `--pad-page` tightens to 14px; `.tbl` drops its `.p2` columns. |
+
+`1100`, `1280` and `1400` also exist, on three pages, each doing a real job at a real width. They
+are left alone deliberately: normalising them onto the ladder would be a desktop behaviour change
+made for tidiness.
+
+**The 900 rung is where the nav goes because it was measured.** Seven tabs are about 452px, the
+lockup 113px, the verdict pill up to 229px and the gutters 66px - the header needs 776px before a
+page teleports anything into it. Written at 640 first, and the tablet viewport reported 44px of
+overflow on all nine routes.
+
+**NOTHING SHRINKS TO FIT.** The type floor is 11px at every width; a phone is read closer than a
+wall panel, not further away, so a narrow screen gets fewer columns and never smaller type. The two
+exceptions are chrome insets, not type: `--pad-chip` and `--pad-control` GROW under
+`@media (pointer: coarse)`. The tokens move rather than the call sites, which is one edit instead
+of forty.
+
+**Column priority is how a table survives a phone.** `.p3` drops at 900 and `.p2` at 640;
+`.fold3` / `.fold2` are lines inside the surviving cell that appear only once their own column has
+gone, so a fact relocates rather than disappearing. Put a fold OUTSIDE any clamped element -
+`FindingsPanel`'s `.msg` is a two-line clamp, and an id nested inside it spent one of the message's
+two lines.
+
+**And `overflow-x: hidden` on `body` is refused.** It conceals the class of defect the ladder
+exists to remove, and conceals it worst on touch, where the scrollbar is an overlay and a page
+running off the right edge is already silent. `apps/dashboard/fixtures/shoot.mjs` asserts
+`scrollWidth` against `clientWidth` at three viewports on nine routes instead. Absence is the
+finding.

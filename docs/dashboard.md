@@ -79,6 +79,32 @@ and `slicePids` - and are not carried over.
 time axis, and on the single page it sat above five panels that ignored it - *"a picker that changes
 nothing on screen is a lie about a control."*
 
+**THE BOARD'S HEADER LEADS WITH ONE READING, SINCE 2026-08-29.** It was five equal columns -
+conduct, phase, quota, worktrees, intake - each handed a fifth of 1360 to hold about 150px of
+content, so the band read as a sparse row of unrelated numbers with no primary and a great deal of
+air. Every fact it carried is still there; what changed is that they stopped being peers. The phase
+state is the headline in `--t-mono-xl`, which `tokens.css` describes as *"the one headline
+reading"* and which nothing consumed until now. The conditions - intake, quota, worktrees - pack
+left at content width under a hairline, which is also the whole of their phone layout.
+
+**One panel with internal hierarchy is not a bento.** The band rule governs panels *within* a band,
+full width or N equal columns; this is a single full-width panel and the rule is untouched.
+
+**It is no longer labelled `Fleet`.** That label sat directly under a sub-nav whose other segment is
+also `Fleet`, so the page announced itself with the name of the view beside it. It says `Right now`.
+
+**The conduct heartbeat moved to the band's aside, and that is a claim about what it is.** It is the
+provenance of every reading in the panel rather than a sixth fact among them: if conduct has stopped
+polling, nothing below it is a current statement. It keeps its own tone, so stale is still amber and
+never-run still grey.
+
+**AND `idle` NO LONGER DRAWS A BARE PROGRESS TRACK.** The tile rendered an empty track and a dash,
+which is the encoding this whole store reserves for *"in progress, ratio unknown"*. Nothing is
+running, which is a different claim. `ProgressBar`'s contract was never wrong - null is a bare
+track and zero is a zero-width fill, deliberately - the call site was. The bar renders only while a
+phase is in flight, and the line under the reading says which nothing it is: `no phase running`
+against `no phase has started on this host`.
+
 **The intake switch is still drawn twice, deliberately, and the split made that cleaner rather than
 harder.** The board's tile answers *"is the fleet armed"*; the fleet view's panel answers *"who said
 so, and why"*, and only that one carries the note. `useIntake()` is new and is what keeps them one
@@ -87,6 +113,101 @@ still outstanding all come off it, so a chip reading `arm` on one view cannot se
 the other. `src/roundboard.ts` does the same job for the row: the board and the round page both
 need to say how far a round has got and how long it has been going, and two copies of *"elapsed
 leads, the estimate is usually absent"* would be two copies of a rule already got wrong once.
+
+**IT WORKS ON A PHONE SINCE 2026-08-29, AND IT NEVER HAD FOR A REASON WORTH WRITING DOWN.** There
+were eight layout media queries in the app and every one of them was between 1100 and 1400; the
+narrowest thing declared anywhere was a one-column fold at 1180. Nothing in `docs/` said a word
+about viewport, breakpoints, touch or small screens, and the design system's own readme names
+**1360x860** as the reference viewport and stops there - so this extends the system into a case it
+never addressed rather than contradicting it. The reference viewport is unchanged and still decides
+what the design is drawn against.
+
+It was never hypothetical. `index.html` has carried `width=device-width` from the start and
+`public/site.webmanifest` declares `display: standalone` with 192/512 rasters and an Apple touch
+icon, so **the app has been installable on a phone the whole time** - and what it installed was a
+desktop layout in a 375px window.
+
+**THE SHELL HEADER ALONE WAS THE HORIZONTAL SCROLLBAR.** `.left` is `flex: none` and its intrinsic
+width is about 583px - a seven-tab nav of roughly 452px plus the 113px lockup - so at 375px the
+document's scroll width was at least 649px **before any page contributed a pixel**. Every page had
+~275px of bare `--bg` beside it and a scroll axis nobody asked for. That is why the nav became a
+drawer rather than the pages being fixed one at a time: it is one element and it was most of the
+problem.
+
+**AND THE OVERFLOW WAS SILENT, ON EXACTLY THE DEVICES IT AFFECTED.** Touch draws overlay
+scrollbars, so a page running off the right edge shows nothing at all until somebody swipes. This
+is the same shape as everything else in this document - a fault whose only symptom is the absence
+of a symptom - which is why the fix is a check rather than a suppression. **`overflow-x: hidden` on
+`body` was refused deliberately**: it conceals this class of defect instead of removing it, and it
+breaks `position: sticky` in some engines. `fixtures/shoot.mjs` asserts `scrollWidth` against
+`clientWidth` at three viewports instead, on nine routes.
+
+**Three rungs, and they are literals because a media query cannot read a custom property.** 1180 is
+the existing `Band` fold. **900** is where the racks gain a scroller, N-up grids fold, tables drop
+their lowest-priority columns, and the nav becomes a drawer. **640** is where the header sticks,
+the page gutter tightens to 14px and tables drop to their essential columns. `1100`, `1280` and
+`1400` still exist on three pages, each doing a real job at a real width; normalising them would
+have been a desktop behaviour change made for tidiness. The ladder is in
+`docs/repo-conventions.md`.
+
+**THE DRAWER'S RUNG IS 900 AND IT WAS MEASURED, NOT CHOSEN.** Seven tabs are ~452px, the lockup
+113px, the verdict pill up to 229px and the gutters 66px: the header needs **776px** before a page
+has teleported anything into it. It was first written at 640, and the tablet viewport reported 44px
+of overflow on all nine routes within a minute - which had been true all along and invisible,
+because `overflow: hidden` on the old header wrapper was eating it. The alternative was a fourth
+breakpoint at 780 existing for one element.
+
+**That clip was also removing the wrong thing.** The wrapper was `justify-content: flex-end` with
+`overflow: hidden`, and an overflow in a flex-end row accumulates on the **start** edge - so the
+first casualties were the verdict's StatusDot and then the front of its sentence. A status pill
+with no status light is the one rendering this header must never produce. The clip belongs to the
+toolbar, which has its own; the tally truncates and the dot and the age are `flex: none`.
+
+**A page's toolbar gets a row of its own below 900 rather than being clipped to nothing.** That
+required flattening `#toolbar` out of its wrapper and into the bar directly - nested, a
+`flex-basis: 100%` sized the *wrapper*, which put the verdict on a line by itself and left the
+toolbar indented under it, three rows for two things. There is still exactly **one** `#toolbar`
+element: eight pages teleport into it and a second target would be two answers to one question.
+
+**A LIST OF RECORDS IS STILL A TABLE ON A PHONE.** Six columns do not fit 375px, so `.tbl` gained
+**column priority**: `.p3` drops at 900, `.p2` at 640, and `.fold3` / `.fold2` are lines inside the
+surviving cell that appear only once their own column has gone. Nothing is lost, it relocates -
+and on the round board the row still links to the round's own page, which holds all of it either
+way. `display: none` on a `th`/`td` removes the column outright under `table-layout: fixed`, which
+is what makes this one global rule rather than a width recalculation per table.
+
+**The four hand-rolled racks are panned instead, and that is repair rather than design.** Services
+floors at ~784px, CI at ~748px, Library at ~666px and the System timeline at 320px before its chart
+track; none can shed a column without being rebuilt as a `.tbl`, which is still the follow-up each
+of them has. CI's rack has **no header row at all** - its eleven column labels live only in
+tooltips - and that is a real limitation of stopping at repair depth. What makes them reachable is
+that `Tooltip` gained a tap-elsewhere dismiss: a tap has always *opened* one, there was simply no
+way to shut it.
+
+**The network drawing is panned for the opposite reason: it does not reflow, it shrinks.** It is
+1498x856 and aspect-preserving, so a 390px panel renders it at a 0.197 factor - 13px node names at
+2.6px, 11px rail labels at 2.2px, and the hairlines surviving intact because they carry
+`non-scaling-stroke`. A grey smear of rules connecting things nobody can read. 900px of min-width
+is where its smallest type is still above the 11px floor.
+
+**NOTHING SHRINKS TO FIT.** The type floor is 11px at every width. A phone is read closer than a
+wall panel, not further away, so the answer to a narrow screen is fewer columns and never smaller
+type. What does move is two chrome insets: `--pad-chip` and `--pad-control` grow under
+`@media (pointer: coarse)`, taking a chip from a ~23px target to ~31px. The tokens move, not the
+call sites - one edit rather than forty, and it lands on a desktop touchscreen too, which is right.
+
+**Two media queries were folds that got WORSE as the screen narrowed.** `SystemPage`'s
+`.right-column` and `NetworkPage`'s `.side` both flip from a column to a row when they can no
+longer sit beside their sibling - correct at 1200, and still in force at 375, where it left two
+panels in ~160px each. `.bottom` stopped at two columns for want of a rung below its own. All three
+have one now. This is the shape to look for in any breakpoint written for a single viewport: it is
+not that the rule is wrong, it is that it has no floor.
+
+**And one defect the drawer surfaced that had nothing to do with layout**: a function `ref` on a
+`RouterLink` is handed the **component instance**, not its element, so `.focus()` threw - inside a
+watcher, where nothing on the page showed it. The drawer opened perfectly for anyone using a mouse
+and not at all for anyone using a keyboard. `shoot.mjs` reports `pageerror`, which is how it was
+found; it is a `querySelector` now.
 
 **The design project's `templates/dashboard-page/` is STALE against its own README** and should not
 be followed. It still shows a 12-column bento with bespoke spans and still says *"nothing above

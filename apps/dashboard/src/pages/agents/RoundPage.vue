@@ -382,9 +382,9 @@ function weight(phase: RoundPhase): string {
               <th class="c-rail" />
               <th>Phase</th>
               <th class="c-res">Result</th>
-              <th class="c-took r">Took</th>
-              <th class="c-cost r">Cost</th>
-              <th class="c-size">Transcript</th>
+              <th class="c-took r p2">Took</th>
+              <th class="c-cost r p3">Cost</th>
+              <th class="c-size p3">Transcript</th>
             </tr>
           </thead>
           <tbody>
@@ -404,13 +404,20 @@ function weight(phase: RoundPhase): string {
                      the host, outside anything this container can serve, so a
                      link would be an offer the page cannot keep. -->
                 <div class="mono sub truncate">{{ p.log ?? "no log named" }}</div>
+                <!-- COLUMN PRIORITY: cost and transcript size go at 900, the
+                     duration at 640, and all three arrive here instead. -->
+                <div class="fold3 mono sub truncate">
+                  {{ p.cost_usd === null ? fmt.NO_DATA : `$${p.cost_usd.toFixed(2)}` }} -
+                  {{ weight(p) }}
+                </div>
+                <div class="fold2 mono sub">took {{ took(p) }}</div>
               </td>
               <td><StatePill :label="p.result ?? 'running'" :tone="phaseTone(p)" size="sm" /></td>
-              <td class="r mono">{{ took(p) }}</td>
-              <td class="r mono">
+              <td class="r mono p2">{{ took(p) }}</td>
+              <td class="r mono p3">
                 {{ p.cost_usd === null ? fmt.NO_DATA : `$${p.cost_usd.toFixed(2)}` }}
               </td>
-              <td class="mono sub">{{ weight(p) }}</td>
+              <td class="mono sub p3">{{ weight(p) }}</td>
             </tr>
           </tbody>
         </table>
@@ -698,6 +705,18 @@ pre.gate {
 @media (max-width: 1180px) {
   .facts {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+/* Five facts in two columns is 165px each on a phone, which puts half the
+   values under their own labels. */
+@media (max-width: 640px) {
+  .facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .event {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
   }
 }
 </style>

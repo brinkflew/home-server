@@ -118,6 +118,26 @@ const quota = computed(() => {
 const midPhase = computed(() => phase.value.state === "in flight");
 const intake = useIntake(midPhase);
 
+/**
+ * The line under the headline reading, and it is three different sentences.
+ *
+ * `idle` USED TO DRAW A BARE PROGRESS TRACK AND A DASH, which is the encoding
+ * this whole store reserves for "in progress, ratio unknown". Nothing is
+ * running, which is a different claim - so the bar is not rendered at all and
+ * this says which nothing it is. ProgressBar's contract was never wrong; the
+ * call site was.
+ */
+const leadSub = computed(() => {
+  const { state, age } = phase.value;
+  if (state === "in flight") {
+    return Number.isFinite(age)
+      ? `${fmt.duration(age)} of ${fmt.duration(PHASE_MAX_S)}`
+      : "started at a time nothing recorded";
+  }
+  if (state === "idle") return "no phase running";
+  return "no phase has started on this host";
+});
+
 // --- the board ---------------------------------------------------------------
 
 /**
@@ -194,58 +214,64 @@ function rail(tone: Tone): string {
 </script>
 
 <template>
-  <Band label="Fleet">
+  <!-- THE HEADER LEADS WITH ONE READING, and it did not used to. This was five
+       equal columns - conduct, phase, quota, worktrees, intake - each given a
+       fifth of 1360 to hold about 150px of content, so the band read as a
+       sparse row of unrelated numbers with no primary and a great deal of air.
+       Every fact it carried is still here; what changed is that they stopped
+       being peers.
+
+       AND IT IS NOT LABELLED `Fleet` ANY MORE. That label sat directly under a
+       sub-nav whose other segment is also `Fleet`, so the page announced itself
+       with the name of the view beside it.
+
+       ONE PANEL WITH INTERNAL HIERARCHY IS NOT A BENTO. The band rule governs
+       panels within a band - full width or N equal columns - and this is a
+       single full-width panel. -->
+  <Band label="Right now">
+    <template #aside>
+      <!-- THE PROVENANCE OF EVERYTHING BELOW IT, rather than a sixth fact. If
+           conduct has stopped polling then no reading in this panel is a
+           current claim, so it qualifies them rather than sitting among them.
+           It keeps its own tone: stale is still amber, never run still grey. -->
+      <span class="beat">
+        <StatusDot :tone="conduct.tone" :size="6" />
+        <span class="mono">conduct
+          {{ Number.isFinite(conduct.age) ? `${fmt.coarse(conduct.age)} ago` : "never run" }}
+        </span>
+      </span>
+    </template>
+
     <PanelBox :stale="metricsStale">
-      <div class="tiles">
-        <div class="tile">
-          <span class="tlabel label">conduct</span>
-          <span class="tvalue">
-            <StatusDot :tone="conduct.tone" :size="6" />
-            <span class="mono">{{
-              Number.isFinite(conduct.age) ? `${fmt.coarse(conduct.age)} ago` : "never run"
-            }}</span>
-          </span>
-        </div>
+      <div class="lead">
+        <StatusDot :tone="phase.tone" :live="midPhase" :size="9" />
+        <span class="reading mono">{{ phase.state }}</span>
+      </div>
 
-        <div class="tile">
-          <span class="tlabel label">phase</span>
-          <span class="tvalue">
-            <StatusDot :tone="phase.tone" :live="midPhase" :size="6" />
-            <span class="mono">{{ phase.state }}</span>
-          </span>
-          <ProgressBar
-            :ratio="Number.isFinite(phase.age) ? phase.age / PHASE_MAX_S : null"
-            :tone="phase.tone"
-            :live="midPhase"
-          />
-          <span class="mono sub">{{
-            Number.isFinite(phase.age) ? fmt.duration(phase.age) : fmt.NO_DATA
-          }}</span>
-        </div>
+      <!-- ONLY WHILE SOMETHING IS RUNNING. See leadSub. -->
+      <ProgressBar
+        v-if="midPhase"
+        class="lead-bar"
+        :ratio="Number.isFinite(phase.age) ? phase.age / PHASE_MAX_S : null"
+        :tone="phase.tone"
+        live
+      />
 
-        <div class="tile" v-bind="tip.hover('ag-quota', quotaTip)">
-          <span class="tlabel label">quota</span>
-          <span class="tvalue">
-            <StatePill :label="quota.state" :tone="quota.tone" size="sm" />
-          </span>
-          <span class="mono sub">{{ quota.clears ?? "no window recorded" }}</span>
-        </div>
+      <p class="lead-sub mono">{{ leadSub }}</p>
 
-        <div class="tile" v-bind="tip.hover('ag-worktrees', worktreeTip)">
-          <span class="tlabel label">worktrees</span>
-          <span class="mono tvalue">
-            {{ fmt.number(m?.worktreesLeased ?? Number.NaN) }} leased /
-            {{ fmt.number(m?.worktreesOnDisk ?? Number.NaN) }} on disk
-          </span>
-          <span class="mono sub">leases in the database, directories on disk</span>
-        </div>
-
+      <!-- The conditions: what governs whether that reading changes. Packed
+           left at content width and wrapping, so a narrow screen reflows them
+           and a wide one does not stretch three facts across 1300px. -->
+      <div class="conds">
         <!-- THE ONE CONTROL THAT DECIDES WHETHER ANY OF THE REST HAPPENS, and
-             it is here for that reason. It lived only in the Intake panel, six
-             panels down, where it was correct, enabled and missed. -->
-        <div class="tile">
-          <span class="tlabel label">intake</span>
-          <span class="tvalue">
+             it is first for that reason. It lived only in the Intake panel, six
+             panels down, where it was correct, enabled and missed. This is
+             still the header half of the deliberate duplication: it answers
+             "is the fleet armed" and carries no provenance sentence, which
+             belongs to the panel on /agents/fleet. -->
+        <div class="cond">
+          <span class="label">intake</span>
+          <span class="cvalue">
             <StatePill :label="intake.state.value.state" :tone="intake.state.value.tone" size="sm" />
             <ChipButton
               :label="intake.state.value.label"
@@ -258,6 +284,23 @@ function rail(tone: Tone): string {
           <span class="mono sub" :class="{ warnish: intake.askedFor.value !== null }">{{
             intake.sub.value
           }}</span>
+        </div>
+
+        <div class="cond" v-bind="tip.hover('ag-quota', quotaTip)">
+          <span class="label">quota</span>
+          <span class="cvalue">
+            <StatePill :label="quota.state" :tone="quota.tone" size="sm" />
+          </span>
+          <span class="mono sub">{{ quota.clears ?? "no window recorded" }}</span>
+        </div>
+
+        <div class="cond" v-bind="tip.hover('ag-worktrees', worktreeTip)">
+          <span class="label">worktrees</span>
+          <span class="mono cvalue">
+            {{ fmt.number(m?.worktreesLeased ?? Number.NaN) }} leased /
+            {{ fmt.number(m?.worktreesOnDisk ?? Number.NaN) }} on disk
+          </span>
+          <span class="mono sub">leases in the database, directories on disk</span>
         </div>
       </div>
     </PanelBox>
@@ -291,10 +334,10 @@ function rail(tone: Tone): string {
           <tr>
             <th class="c-state">State</th>
             <th>Task</th>
-            <th class="c-phase">Phase</th>
-            <th class="c-time" v-bind="tip.hover('ag-eta', etaTip)">Time</th>
-            <th class="c-cost r" v-bind="tip.hover('ag-cost', costTip)">Cost</th>
-            <th class="c-out">Outcome</th>
+            <th class="c-phase p2">Phase</th>
+            <th class="c-time p2" v-bind="tip.hover('ag-eta', etaTip)">Time</th>
+            <th class="c-cost r p3" v-bind="tip.hover('ag-cost', costTip)">Cost</th>
+            <th class="c-out p3">Outcome</th>
           </tr>
         </thead>
         <tbody>
@@ -332,9 +375,41 @@ function rail(tone: Tone): string {
               <div class="tsummary truncate" :title="row.r.summary ?? row.r.ref ?? ''">
                 {{ row.r.summary ?? row.r.ref ?? "no branch recorded" }}
               </div>
+
+              <!-- COLUMN PRIORITY. Below 900 the cost and outcome columns go;
+                   below 640 the phase and time columns go with them. What they
+                   carried arrives here instead, so a narrow board loses columns
+                   and never facts - and the row still leads to the round page,
+                   which holds all of it either way. These two blocks are
+                   display:none until their own column has actually gone. -->
+              <div class="fold3 fline">
+                <ChipLink
+                  v-if="row.r.pr_url"
+                  :label="row.r.pr_number === null ? 'pr' : `#${row.r.pr_number}`"
+                  :href="row.r.pr_url"
+                  :title="`the pull request this round opened (${row.r.pr_state})`"
+                />
+                <ChipLink
+                  v-else-if="row.branch"
+                  :label="row.branch"
+                  :href="row.r.branch_url"
+                  title="the branch this round pushed, before any pull request"
+                />
+                <span v-else-if="row.r.published && row.r.pr_state !== 'unknown'" class="mono sub">
+                  opened none
+                </span>
+                <span v-else class="mono sub">{{ fmt.NO_DATA }}</span>
+                <span class="mono sub">{{
+                  row.r.cost_usd === null ? fmt.NO_DATA : `$${row.r.cost_usd.toFixed(2)}`
+                }}</span>
+              </div>
+
+              <div class="fold2 mono sub truncate">
+                {{ row.phase }} - {{ row.elapsed }}
+              </div>
             </td>
 
-            <td>
+            <td class="p2">
               <div class="mono pname">{{ row.phase }}</div>
               <ProgressBar
                 :ratio="row.progress"
@@ -376,7 +451,7 @@ function rail(tone: Tone): string {
                  This column used to hold the ETA alone and so read `-` on most
                  rows: the collector withholds an estimate below five samples of
                  any remaining phase. Elapsed is always knowable, so it leads. -->
-            <td class="mono" v-bind="tip.hover(`ag-eta-${row.r.worktree_id}`, etaTip)">
+            <td class="mono p2" v-bind="tip.hover(`ag-eta-${row.r.worktree_id}`, etaTip)">
               {{ row.elapsed }}
               <div v-if="row.phaseClock" class="sub truncate">{{ row.phaseClock }}</div>
               <div v-else-if="row.eta !== fmt.NO_DATA" class="sub">{{ row.eta }} left</div>
@@ -386,11 +461,11 @@ function rail(tone: Tone): string {
                  today's five rounds span $2.47 to $17.94 and an expensive
                  failure is invisible in a daily sum. Display only, never a
                  series. -->
-            <td class="r mono">
+            <td class="r mono p3">
               {{ row.r.cost_usd === null ? fmt.NO_DATA : `$${row.r.cost_usd.toFixed(2)}` }}
             </td>
 
-            <td class="out">
+            <td class="out p3">
               <ChipLink
                 v-if="row.r.pr_url"
                 :label="row.r.pr_number === null ? 'pr' : `#${row.r.pr_number}`"
@@ -463,20 +538,66 @@ function rail(tone: Tone): string {
 </template>
 
 <style scoped>
-.tiles {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: var(--gap-lg);
+/* --- the header ---------------------------------------------------------- */
+
+/* The heartbeat, in the band's own head row. Quiet on purpose: it is only
+   interesting when it is not fresh, and its tone says that without size. */
+.beat {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font: var(--t-mono-sm);
+  color: var(--fg-5);
 }
 
-.tile {
+.lead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* --t-mono-xl, which tokens.css describes as "the one headline reading" and
+   which nothing consumed until now. One per view is the whole point of it. */
+.reading {
+  font: var(--t-mono-xl);
+  color: var(--fg);
+}
+
+/* CAPPED, because a 4px track drawn across 1280px of panel stops reading as a
+   measure and starts reading as the hairline rule two elements below it. 460px
+   is about where the fill's proportion is still legible at a glance. */
+.lead-bar {
+  margin-top: 11px;
+  max-width: 460px;
+}
+
+.lead-sub {
+  margin-top: 7px;
+  font: var(--t-mono-sm);
+  color: var(--fg-5);
+}
+
+/* PACKED LEFT AT CONTENT WIDTH, NOT STRETCHED. Three facts across a 1300px
+   panel as equal columns is what made the old header read as five unrelated
+   readings; wrapping is also the whole of its phone layout. */
+.conds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap) var(--gap-lg);
+  margin-top: 15px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-divider);
+}
+
+.cond {
   display: flex;
   flex-direction: column;
   gap: 5px;
   min-width: 0;
 }
 
-.tvalue {
+.cvalue {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -604,9 +725,32 @@ td.out {
   color: var(--fail-text);
 }
 
-@media (max-width: 1180px) {
-  .tiles {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+/* The folded lines, which base.css reveals at their own rung. */
+.fline {
+  margin-top: 6px;
+}
+
+.fline .sub {
+  margin-top: 0;
+  margin-left: 7px;
+  vertical-align: middle;
+}
+
+/* Once state and task are the only two columns left, 168px is most of a phone -
+   but 104px was too far the other way: `waiting on you` is fourteen mono
+   characters and the pill ellipsed to `waitin...`, which is the one word on
+   the row that must survive.
+
+   156px IS MEASURED, TWICE, AND THE SECOND MEASUREMENT IS THE POINT. 24px of
+   cell padding and 13px of dot and gap come off the top, leaving 111 for a
+   pill whose content needs 111.x - so at 148 it still ellipsed while
+   `scrollWidth` and `clientWidth` both reported 111 and agreed it fitted. The
+   pill is a flex item with the default `flex-shrink: 1`, so it had been
+   squeezed to exactly its share and the ellipsis fired on the fraction the
+   integer readings had rounded away. Guessed twice, then measured. */
+@media (max-width: 640px) {
+  .c-state {
+    width: 156px;
   }
 }
 </style>

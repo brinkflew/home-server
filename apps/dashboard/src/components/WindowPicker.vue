@@ -34,11 +34,16 @@ const { windows, active, setWindow } = useTimeWindow();
    which were themselves byte-identical to each other. */
 .picker {
   display: flex;
+  flex-wrap: wrap;
   gap: 2px;
   padding: 2px;
   border-radius: var(--r-sm);
   background: var(--field);
   border: 1px solid var(--line);
+  /* It is about 178px of controls in a header half that clips, so it wraps
+     rather than losing "7d" off the end. Below 640 it rides the toolbar's own
+     scrollable row instead, and does not need to. */
+  flex: none;
 }
 
 .pick {

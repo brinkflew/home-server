@@ -17,11 +17,19 @@ withDefaults(defineProps<{ label: string; tone: Tone; size?: "sm" | "md" }>(), {
 </template>
 
 <style scoped>
+/* NOWRAP NEEDS A CAP OR IT PUSHES ITS COLUMN OPEN. Every other chip-shaped
+   element here caps itself - ChipLink and ChipButton both carry max-width with
+   a shrinkable label - and this one did not, so a long state word was enough to
+   widen a fixed-layout table past its container. */
 .pill {
-  display: inline-flex;
-  align-items: center;
+  display: inline-block;
+  vertical-align: middle;
   border-radius: var(--r-xs);
   white-space: nowrap;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* THE FLOOR IS 11px. `sm` used to be 9px, which is below what a screen

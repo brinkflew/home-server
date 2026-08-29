@@ -3,7 +3,8 @@
    --------------------------------------------------------------------------
    Everything else is scoped to a component. This file exists for the things
    that genuinely cannot be: the box model, the page background, focus, links,
-   scrollbars, the four text utilities, and ONE table recipe.
+   scrollbars, the four text utilities, ONE table recipe, and the three
+   breakpoint rungs every page and component measures itself against.
 
    The table recipe is here rather than in a component because a list of
    records turns out to be most of this product - findings, drives,
@@ -151,6 +152,9 @@ a:hover {
   color: var(--text-label);
   padding: 0 12px 10px;
   white-space: nowrap;
+  /* nowrap with no overflow is a cell that SPILLS rather than clips, which is
+     the one thing table-layout: fixed cannot protect against on its own. */
+  overflow: hidden;
 }
 
 .tbl td {
@@ -231,4 +235,106 @@ a:hover {
 
 *::-webkit-scrollbar-thumb:hover {
   background: oklch(1 0 0 / 0.24);
+}
+
+/* --- The breakpoint ladder ------------------------------------------------
+   THREE RUNGS, AND THEY ARE LITERALS BECAUSE A MEDIA QUERY CANNOT READ A
+   CUSTOM PROPERTY. There is no --bp-* token and there cannot be one; the
+   numbers are repeated in scoped blocks across the app and the ladder is
+   written down in docs/repo-conventions.md so the next person adds to it
+   rather than inventing a fourth.
+
+     1180  the existing fold. A Band goes to one column. Band.vue states it.
+      900  tablet. N-up tile grids fold, the racks gain a scroller, tables
+           drop their lowest-priority columns.
+      640  phone. The nav becomes a drawer, the header wraps and sticks,
+           tables drop to their essential columns.
+
+   1100, 1280 and 1400 also exist, on three pages, each doing a real job at a
+   real width. They are left alone deliberately: normalising them onto the
+   ladder would be a desktop behaviour change made for tidiness.
+
+   NOTHING SHRINKS TO FIT. The type floor is 11px at every width - a phone is
+   read closer than a wall panel, not from further away, so the answer to a
+   narrow screen is fewer columns and never smaller type.
+
+   AND overflow-x: hidden IS DELIBERATELY NOT SET ON body. It would conceal
+   exactly the class of defect this ladder exists to remove - and conceal it
+   worst on touch, where the scrollbar is an overlay and a page running off
+   the right edge is already silent. fixtures/shoot.mjs asserts scrollWidth
+   against innerWidth at three viewports instead. Absence is the finding. */
+
+/* --- Column priority ------------------------------------------------------
+   A LIST OF RECORDS IS STILL A TABLE ON A PHONE. Six columns do not fit
+   375px, so a narrow screen DROPS a column rather than squeezing all six into
+   illegibility - and the facts that column carried move into a line under the
+   cell that survives, so nothing is lost, it relocates.
+
+   .p3 goes at the tablet rung and .p2 at the phone rung, cumulatively, since
+   640 is inside 900. .fold3 / .fold2 are the mirror: hidden until their own
+   column has gone. display:none on a th or td removes the column outright
+   under table-layout: fixed, which is what makes this one rule rather than a
+   width recalculation per table. */
+.fold3,
+.fold2 {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .tbl .p3 {
+    display: none;
+  }
+
+  .fold3 {
+    display: block;
+  }
+}
+
+@media (max-width: 640px) {
+  .tbl .p2 {
+    display: none;
+  }
+
+  .fold2 {
+    display: block;
+  }
+}
+
+/* The page gutter tightens on a phone, and it is the only spacing token that
+   moves. 24px of padding either side of a 375px screen is 13% of it; 14px is
+   still a margin and gives a table back 20px. Everything else on the ladder
+   keeps its rhythm - a narrow screen is a narrower page, not a denser one. */
+@media (max-width: 640px) {
+  :root {
+    --pad-page: 14px;
+  }
+}
+
+/* --- The horizontal scroller ----------------------------------------------
+   For a grid that genuinely cannot shed a column: the four hand-rolled racks
+   (Services, CI, Library, System's timeline) and the network drawing. Pan a
+   legible thing rather than squint at an illegible one - NetworkGraph scaled
+   to a 375px panel is a 0.197 factor, which renders a 13px label at 2.6px.
+
+   The child takes a min-width; this only ever scrolls. overscroll-behavior-x
+   keeps a swipe that reaches the end from becoming a browser back gesture. */
+.hscroll {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+/* --- Touch ----------------------------------------------------------------
+   THE TOKENS MOVE, NOT THE CALL SITES. Redefining two insets here is one edit
+   where raising every chip and control by hand would be forty, and it lands
+   on a desktop touchscreen too, which is correct.
+
+   A chip was a 23px target; it becomes 31px, and with the gaps around it that
+   clears 40px of tappable area. Nothing visible changes at a mouse. */
+@media (pointer: coarse) {
+  :root {
+    --pad-chip: 7px 10px;
+    --pad-control: 9px 14px;
+    --pad-cell: 13px 12px;
+    --pad-cell-tight: 10px 12px;
+  }
 }

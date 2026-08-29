@@ -637,9 +637,24 @@ const sliceTip = computed(() => ({
   color: var(--fg-5);
 }
 
+/* ELEVEN COLUMNS, EIGHT OF THEM A FIXED WIDTH: 622px of tracks, 100px of gaps
+   and 26px of padding is a 748px floor before three flexible columns take
+   anything. Panned below that.
+
+   AND IT HAS NO HEADER ROW AT ALL - the column labels live only in tooltips,
+   which is a real limitation on a phone and is not fixed here. What makes them
+   reachable is Tooltip's new tap-elsewhere dismiss: a tap has always OPENED
+   one of these, there was simply no way to shut it. Giving this rack a header
+   row means converting it to `.tbl`, which is its own follow-up. */
 .rack {
   display: flex;
   flex-direction: column;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.rack .row {
+  min-width: 748px;
 }
 
 /* Explicit columns with minmax(0, ...) throughout: a bare 1fr lets a long
@@ -807,6 +822,23 @@ const sliceTip = computed(() => ({
 @media (max-width: 1100px) {
   .grid-2 {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* A 150px track for the check id in 347px leaves the message 180px, which is
+   not a sentence. The id goes above it instead of beside it. */
+@media (max-width: 640px) {
+  .check {
+    grid-template-columns: 12px minmax(0, 1fr);
+  }
+
+  .check .cid {
+    grid-column: 2;
+  }
+
+  .check .msg {
+    grid-column: 2;
+    white-space: normal;
   }
 }
 </style>

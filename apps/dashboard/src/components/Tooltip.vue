@@ -65,15 +65,38 @@ function onKey(e: KeyboardEvent): void {
   if (e.key === "Escape") tip.closeAll();
 }
 
+/**
+ * THE TOUCH HALF, and it is what makes the caveat reachable at all on a phone.
+ *
+ * `bind` and `hover` both open on `pointerenter`, which a tap DOES fire - so a
+ * tooltip has always been openable by touch. What did not exist was a way to
+ * shut it: there is no `pointerleave` after a tap, so the box stayed until a
+ * scroll or a route change happened to remove it. That matters more than it
+ * sounds, because CI's rack has no header row at all and its eleven column
+ * labels live nowhere but in these.
+ *
+ * CAPTURE PHASE AND `open` GUARDED, so the pointerdown that OPENS a tooltip is
+ * not also the one that closes it - the new anchor's own enter handler runs
+ * after this, and closing something that is not open yet is a no-op.
+ */
+function onPointerDown(e: PointerEvent): void {
+  const t = tip.current.value;
+  if (!t) return;
+  if (t.anchor.contains(e.target as Node)) return;
+  tip.closeAll();
+}
+
 onMounted(() => {
   window.addEventListener("scroll", dismiss, true);
   window.addEventListener("resize", dismiss);
   document.addEventListener("keydown", onKey);
+  document.addEventListener("pointerdown", onPointerDown, true);
 });
 onBeforeUnmount(() => {
   window.removeEventListener("scroll", dismiss, true);
   window.removeEventListener("resize", dismiss);
   document.removeEventListener("keydown", onKey);
+  document.removeEventListener("pointerdown", onPointerDown, true);
 });
 watch(() => route.fullPath, dismiss);
 
@@ -104,7 +127,9 @@ const current = computed(() => tip.current.value);
   position: fixed;
   z-index: 60;
   pointer-events: none;
-  max-width: 320px;
+  /* 320px is wider than a phone's usable width, so the box was pinned to both
+     edges and the placement arithmetic had nothing to work with. */
+  max-width: min(320px, calc(100vw - 16px));
   padding: 8px 10px;
   border-radius: var(--r-sm);
   background: var(--surface-high);

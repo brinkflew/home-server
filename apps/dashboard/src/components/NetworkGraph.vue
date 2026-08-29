@@ -228,6 +228,7 @@ const summary = computed(() => {
 
 <template>
   <div class="wrap">
+    <div class="scroll">
     <svg
       :viewBox="`0 0 ${L.width} ${L.height}`"
       preserveAspectRatio="xMidYMid meet"
@@ -356,6 +357,7 @@ const summary = computed(() => {
         </g>
       </g>
     </svg>
+    </div>
 
     <p class="legend mono">
       Every bridge carries <span class="lit">Options=isolate=true</span>, so a container on one rail
@@ -376,6 +378,31 @@ const summary = computed(() => {
   height: auto;
   display: block;
   overflow: visible;
+}
+
+/* --- the tablet rung ------------------------------------------------------
+   THIS DRAWING IS 1498 UNITS WIDE AND IT PRESERVES ITS ASPECT, so a narrow
+   panel does not reflow it - it SHRINKS it. At 390px that is a scale factor of
+   about 0.197: the 13px node names render at 2.6px, the 11px rail labels at
+   2.2px, and every 150x36 node box becomes 30x7. The hairlines survive, because
+   they carry non-scaling-stroke, so what is left is a grey smear of rules
+   connecting things that can no longer be read.
+
+   SO IT IS PANNED RATHER THAN SCALED. The min-width is what stops `width: 100%`
+   from being obeyed, and 900 is the width at which the smallest type in the
+   drawing is still above the 11px floor. A horizontal swipe is a worse
+   affordance than a diagram that fits - but it is a very great deal better
+   than a diagram nobody can read, and this is the one view in the app whose
+   whole subject is a shape. */
+@media (max-width: 900px) {
+  .scroll {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+
+  .scroll .graph {
+    min-width: 900px;
+  }
 }
 
 .graph:focus-visible {

@@ -353,9 +353,14 @@ const emptiness = computed<"none" | "filtered" | "stale" | "fresh">(() => {
   color: var(--warn);
 }
 
+/* Six counts at 18px apart is 478px of strip, and `.controls` wraps around it
+   without letting it wrap inside itself - so this was the one thing left
+   pushing the page sideways once the table had its own scroller. */
 .stats {
   display: flex;
-  gap: 18px;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  min-width: 0;
 }
 
 .stat {
@@ -395,6 +400,11 @@ a.stat:hover .sl {
 /* --- the table --- */
 .table {
   --cols: 1.5fr 118px 138px 1fr 92px 116px 104px;
+  /* ONE SCROLL CONTAINER FOR BOTH AXES, holding the header and the rows
+     together. See .head. */
+  max-height: 520px;
+  overflow: auto;
+  overscroll-behavior-x: contain;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--r-md);
@@ -412,8 +422,23 @@ a.stat:hover .sl {
   align-items: center;
   padding: 7px 13px;
   border-bottom: 1px solid var(--line-faint);
+  /* Seven columns of which five are a fixed width: 568px of tracks, 72px of
+     gaps and 26px of padding is a 666px floor before the title and detail
+     columns have taken a pixel. It does not fit a phone and it cannot be made
+     to, so below it is panned. 900 is where the two flexible columns still get
+     enough to be worth reading. */
+  min-width: 900px;
 }
 
+/* STICKY, AND NOW AGAINST THE RIGHT SCROLLER. This has always carried
+   `position: sticky`, and it has never worked the way it reads: `.head` is a
+   SIBLING of `.body`, so its containing block was `.table` while the element
+   that actually scrolled was `.body`. Worse, `.body`'s `overflow-y: auto`
+   computes `overflow-x` to `auto` as well, so the rows scrolled sideways and
+   the header they are labelled by did not - the two came apart on any
+   horizontal scroll, which is every horizontal scroll a phone makes.
+
+   The scrolling moved up to `.table`, which holds both. */
 .head {
   position: sticky;
   top: 0;
@@ -424,11 +449,6 @@ a.stat:hover .sl {
   color: var(--fg-5);
   background: var(--surface-raised);
   border-radius: var(--r-md) var(--r-md) 0 0;
-}
-
-.body {
-  max-height: 520px;
-  overflow-y: auto;
 }
 
 .body .row:last-child {

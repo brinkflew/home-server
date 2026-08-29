@@ -3763,3 +3763,66 @@ three of them are the same mistake in different clothes.
   the mark and wrapped the OS line rather than the toolbar - a 75px header with a nav tab under it.
   The nav is `flex: none` and the toolbar is the half that clips, because a page's own toolbar is
   the half that may give way.
+
+### The header was the horizontal scrollbar, and touch is where it could not be seen
+- **`.left` is `flex: none` at an intrinsic ~583px** - a seven-tab nav of roughly 452px plus the
+  113px lockup - so on a 375px screen the document's scroll width was at least **649px before any
+  page contributed a pixel**. Every page carried ~275px of bare `--bg` and a scroll axis nobody
+  asked for, and the fix was one element rather than seven pages.
+- **Touch draws overlay scrollbars, so the overflow was silent on exactly the devices that had
+  it.** No affordance, no scrollbar, nothing on screen to say the page continued off the right edge
+  until somebody swiped. Which is why `overflow-x: hidden` on `body` was refused: it conceals this
+  class of defect rather than removing it, and it breaks `position: sticky` in some engines.
+  `fixtures/shoot.mjs` asserts `scrollWidth` against `clientWidth` at three viewports instead.
+- **The clip that hid it was also eating the wrong end.** The old header wrapper was
+  `justify-content: flex-end` with `overflow: hidden`, and an overflow in a flex-end row accumulates
+  on the **start** edge - so the first thing sliced off was the verdict's StatusDot and then the
+  front of its sentence. A status pill with no status light is the one rendering that header must
+  never produce.
+- **The drawer's rung is 900 and it was measured twice.** Seven tabs ~452px, lockup 113, verdict up
+  to 229, gutters 66: the header needs **776px** empty. Written at 640 first, and the tablet
+  viewport immediately reported 44px of overflow on all nine routes - true all along, invisible
+  because the clip above was eating it. A fourth breakpoint at 780 would have existed for one
+  element.
+- **`#toolbar` had to leave its wrapper to get a row of its own.** Nested, a `flex-basis: 100%`
+  sizes the WRAPPER, which put the verdict on a line by itself and left the toolbar indented under
+  it - three rows for two things. There is still exactly one `#toolbar`; eight pages teleport into
+  it and a second target would be two answers to one question.
+
+### Two folds that got worse as the screen got smaller, and one that never had a floor
+- **`SystemPage`'s `.right-column` and `NetworkPage`'s `.side` flip from a column to a ROW** when
+  they can no longer sit beside their sibling. Correct at 1200, still in force at 375, where it left
+  two panels in ~160px each - one of them holding a 92px fixed track. The rule is not wrong; it has
+  no floor.
+- `.bottom` folded `1fr 1fr 340px` to `1fr 1fr` and stopped there, permanently two columns.
+- **`HomePage` had no breakpoint at all**, and it is the front door - `/` redirects to it. A hard
+  300px track for the requests panel beside up to three flexible ones wanted 300 of 347 usable
+  pixels, and the poster grid is eight across at every width.
+
+### Three ways a phone lost information rather than losing width
+- **A folded cell must sit OUTSIDE any clamped element.** `FindingsPanel`'s `.msg` is a two-line
+  `-webkit-line-clamp`, so the check id folded into it spent one of the message's two lines and
+  every finding read as a truncated sentence under its own name.
+- **`StatePill` was the one chip-shaped element with no `max-width`.** ChipLink and ChipButton both
+  cap themselves with a shrinkable label; this one did not, so a long state word could widen a
+  fixed-layout table past its container.
+- **A column sized by arithmetic ellipsed anyway, and `scrollWidth` agreed it fitted.** `waiting on
+  you` needs 111.x px and both integer readings said 111 in a cell offering 111 - the pill is a flex
+  item with the default `flex-shrink: 1`, so it had been squeezed to exactly its share and the
+  ellipsis fired on the fraction the rounding had thrown away. Guessed twice, then measured.
+
+### A drawer that opened perfectly for a mouse and not at all for a keyboard
+- **A function `ref` on a `RouterLink` is handed the COMPONENT INSTANCE, not its element**, so
+  `.focus()` on it throws - and it throws inside a watcher, where nothing on the page shows it.
+  `shoot.mjs` reports `pageerror`, which is the only reason it was found in the same minute it was
+  written. `querySelector` off the panel is the fix.
+- `--z-scrim` and `--z-overlay` had been declared in `tokens.css` with the comment "a modal, a
+  drawer" and had no consumer at all, so the drawer introduced no new tier.
+
+### `idle` drew the encoding that means "in progress, ratio unknown"
+- The Agents header's phase tile rendered a bare `ProgressBar` track and a dash while nothing was
+  running. `ProgressBar`'s contract was never wrong - null is a bare track and zero is a
+  zero-width fill, deliberately, and that distinction is load-bearing everywhere else - the call
+  site was. The bar renders only in flight now, and the line under the reading says WHICH nothing:
+  `no phase running` against `no phase has started on this host`.
+- The band was also labelled `Fleet` directly under a sub-nav whose other segment is `Fleet`.

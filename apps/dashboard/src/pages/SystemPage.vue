@@ -1335,4 +1335,35 @@ const jellyfinSessions = usePoll(
     flex: 1;
   }
 }
+
+/* --- the rungs ------------------------------------------------------------
+   THE 1280 RULE ABOVE GETS WORSE AS THE SCREEN NARROWS, which is the same
+   defect NetworkPage's `.side` has: `.right-column` turns a stack into a row
+   when it can no longer sit beside the cards, and then stays a row all the way
+   down - two panels in about 160px each at 375. `.bottom` stops at two columns
+   for the same reason, having no rung below its own.
+
+   The timeline is panned rather than folded. `160px 1fr 128px` is a 320px
+   floor before the chart track has a pixel, and every lane must share one
+   x-mapping or the axis silently stops being shared - so this is the one grid
+   on the page that genuinely cannot give a column back. */
+@media (max-width: 900px) {
+  .bottom {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .right-column {
+    flex-direction: column;
+  }
+
+  .timeline {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+
+  .timeline .tl-head,
+  .timeline .lane {
+    min-width: 620px;
+  }
+}
 </style>

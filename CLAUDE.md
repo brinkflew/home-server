@@ -1254,6 +1254,36 @@ signal read green.
 - Everything in the shell header was shrinkable, so 13px type compressed the MARK and wrapped the OS
   line rather than the toolbar. The nav is `flex: none`; the toolbar is the half that clips.
 
+### The header was the horizontal scrollbar, and touch is where it could not be seen
+- `.left` is `flex: none` at ~583px, so a 375px screen had a 649px document BEFORE any page
+  contributed - and overlay scrollbars made it silent on exactly the devices that had it.
+- The clip hiding it ate the wrong end: a flex-end overflow accumulates on the START edge, so the
+  verdict lost its status light first. `overflow-x: hidden` on `body` is refused for the same
+  reason the check exists.
+- The drawer's rung is 900 because the header needs 776px empty. Written at 640 and the tablet
+  viewport named 44px on all nine routes - true all along, eaten by the clip.
+
+### Two folds that got worse as the screen got smaller, and one that never had a floor
+- Two media queries flip a column to a ROW when it can no longer sit beside its sibling, and stay a
+  row at 375. The rule is not wrong; it has no floor. `.bottom` stopped at two columns.
+- `HomePage` had no breakpoint at all, and `/` redirects to it.
+
+### Three ways a phone lost information rather than losing width
+- A folded cell must sit OUTSIDE any clamped element, or the id spends one of the message's lines.
+- `StatePill` was the one chip-shaped element with no `max-width`.
+- A column sized by arithmetic ellipsed anyway and `scrollWidth` agreed it fitted: the pill is a
+  flex item that had been squeezed to exactly its share, and the ellipsis fired on the fraction.
+
+### A drawer that opened perfectly for a mouse and not at all for a keyboard
+- A function `ref` on a `RouterLink` is handed the COMPONENT INSTANCE, so `.focus()` throws - inside
+  a watcher, where nothing shows it. `shoot.mjs`'s `pageerror` line is why it was found at all.
+- `--z-scrim` and `--z-overlay` were declared for "a modal, a drawer" and had no consumer.
+
+### `idle` drew the encoding that means "in progress, ratio unknown"
+- A bare `ProgressBar` track while nothing runs. The contract was right and the CALL SITE was wrong;
+  the bar renders only in flight, and the sub-line says which nothing it is.
+- The band was labelled `Fleet` directly under a sub-nav whose other segment is `Fleet`.
+
 
 ## Target architecture
 

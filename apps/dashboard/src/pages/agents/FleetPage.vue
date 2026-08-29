@@ -412,7 +412,7 @@ const costTip = computed(() => ({
       <thead>
         <tr>
           <th class="c-rail" />
-          <th class="c-id">Check</th>
+          <th class="c-id p2">Check</th>
           <th>Finding</th>
         </tr>
       </thead>
@@ -421,15 +421,21 @@ const costTip = computed(() => ({
           <td class="rail" :style="{ '--rail': `var(--${ch.tone})` }">
             <StatusDot :tone="ch.tone" :size="6" />
           </td>
-          <td class="mono cid">{{ ch.id }}</td>
-          <td class="msg">{{ ch.message }}</td>
+          <td class="mono cid p2">{{ ch.id }}</td>
+          <td class="msg">
+            <!-- COLUMN PRIORITY: the id goes above its own finding rather than
+                 beside it once 232px of a 347px row is no longer affordable. -->
+            <span class="fold2 mono cid">{{ ch.id }}</span>
+            {{ ch.message }}
+          </td>
         </tr>
         <tr v-bind="tip.hover('ag-leaked', leakedTip)">
           <td class="rail" :style="{ '--rail': (m?.leaked ?? 0) > 0 ? 'var(--warn)' : 'var(--ok)' }">
             <StatusDot :tone="(m?.leaked ?? 0) > 0 ? 'warn' : 'ok'" :size="6" />
           </td>
-          <td class="mono cid">runners leaked</td>
+          <td class="mono cid p2">runners leaked</td>
           <td class="msg">
+            <span class="fold2 mono cid">runners leaked</span>
             {{ fmt.number(m?.leaked ?? Number.NaN) }} past the ceiling, across both fleets
           </td>
         </tr>
@@ -566,6 +572,12 @@ const costTip = computed(() => ({
   color: var(--fg-2);
 }
 
+/* The folded check id, once its own column has gone. A block so it sits above
+   the finding rather than running into the front of the sentence. */
+.msg .fold2 {
+  margin-bottom: 3px;
+}
+
 .note {
   margin-top: 12px;
   padding-top: 11px;
@@ -583,6 +595,24 @@ const costTip = computed(() => ({
 @media (max-width: 1180px) {
   .tiles {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+/* The tiles go to one, and the intake switch stops being a four-track grid -
+   its two `auto` tracks are sized by max-content, so at 375px the sentence
+   between them had nowhere to go. */
+@media (max-width: 640px) {
+  .tiles {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .switch {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 7px;
+  }
+
+  .irow {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
   }
 }
 </style>

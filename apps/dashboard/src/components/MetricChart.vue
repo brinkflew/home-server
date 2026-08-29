@@ -132,6 +132,11 @@ const props = withDefaults(
 
 const VIEW_W = 900;
 const Y_GUTTER = 46;
+/* The same gutter below the phone rung. A label like "14.2 GB" still fits at
+   --t-mono-xs; what goes is the air between it and the plot. It is a constant
+   rather than a media query on .y-tick because the GRID TRACK is what has to
+   move, and the track is set inline from showYAxis. */
+const Y_GUTTER_SM = 34;
 
 const cross = useCrosshair();
 
@@ -430,7 +435,13 @@ function onLeave(): void {
 </script>
 
 <template>
-  <div class="frame" :style="{ '--y-gutter': showYAxis ? `${Y_GUTTER}px` : '0px' }">
+  <div
+    class="frame"
+    :style="{
+      '--y-gutter': showYAxis ? `${Y_GUTTER}px` : '0px',
+      '--y-gutter-sm': showYAxis ? `${Y_GUTTER_SM}px` : '0px',
+    }"
+  >
     <!-- Absolutely positioned inside a gutter of exactly `height` px, because a
          vertical frame unit is a CSS pixel. NOT grid rows: nice ticks are not
          evenly spaced, and even spacing is the thing being removed. -->
@@ -694,6 +705,33 @@ function onLeave(): void {
 
 .x-tick.last {
   transform: translateX(-100%);
+}
+
+/* --- the phone rung -------------------------------------------------------
+   THE VIEWBOX IS 900 UNITS WIDE WHATEVER THE SCREEN IS, so at 390px the plot
+   is squashed about 3.2:1. The strokes survive that (every one of them carries
+   vector-effect="non-scaling-stroke" already), but three pieces of chrome do
+   not: a 46px y-gutter is 16% of the panel, five x-ticks at their authored
+   positions collide, and a readout capped at 45% of ~280px cannot hold a
+   timestamp and a value.
+
+   ALTERNATE TICKS ARE HIDDEN RATHER THAN THE COUNT BEING REDUCED. `xTicks` is
+   a prop and several call sites pass their own; changing it here would change
+   what the axis claims on a desktop too. Hiding every second one is a
+   presentation fix that leaves first and last - the two that anchor the axis -
+   in place, which is why the nth-child runs from the second element. */
+@media (max-width: 640px) {
+  .frame {
+    grid-template-columns: var(--y-gutter-sm, 0px) minmax(0, 1fr);
+  }
+
+  .x-tick:nth-child(even) {
+    display: none;
+  }
+
+  .readout {
+    max-width: 72%;
+  }
 }
 
 /* Brighter than the time it sits above: the date is the rarer, more orienting

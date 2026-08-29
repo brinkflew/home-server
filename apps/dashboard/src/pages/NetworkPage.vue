@@ -357,4 +357,16 @@ const tunnel = computed(() => {
     flex: 1;
   }
 }
+
+/* AND BACK TO A COLUMN. The rule above turns a stack into a row when the
+   sidebar can no longer sit beside the graph, which is right at 1200 and
+   actively wrong at 375: it left two panels in about 160px each, one of them
+   holding a 92px fixed track. A fold that gets WORSE as the screen narrows is
+   the shape of every breakpoint in this app that was written for one viewport
+   and never revisited. */
+@media (max-width: 900px) {
+  .side {
+    flex-direction: column;
+  }
+}
 </style>
