@@ -4511,7 +4511,8 @@ def _round_document(conn, row, window, index, spoken_for, pairs, budget):
             claimed.add(found)
 
     if _ROUND_DRY_RUN[0] or not _round_fresh(path, logs.values(), settled):
-        phases, short = _round_phases(runs, logs, pairs, budget)
+        phases, short = _round_phases(runs, logs, pairs, budget,
+                                      _round_previous(path))
         doc = Document()
         doc.set("round", _round_summary(conn, row, window, settled))
         doc.set("events", _round_events(conn, row, window, runs))
@@ -4584,7 +4585,36 @@ def _round_fresh(path, log_paths, settled):
     return True
 
 
-def _round_phases(runs, logs, pairs, budget):
+def _round_previous(path):
+    """The last document written for this round, as {run_id: phase}, or {}.
+
+    WHAT THIS IS FOR IS THE BUDGET, and without it the whole thing deadlocks.
+    An unsettled round is rebuilt on EVERY pass, because its database rows are
+    still moving - and rebuilding it re-read every one of its logs, so the two
+    rounds in flight spent all six file slots every time and the nine older ones
+    were never reached. Measured: `pending` walked 35 -> 33 -> 31 and then sat
+    there for four passes.
+
+    A PHASE'S TRANSCRIPT CANNOT CHANGE ONCE ITS LOG STOPS BEING WRITTEN, so
+    rebuilding the document does not mean re-reading the logs. This is what
+    makes "database content every pass, log content under budget" - which is
+    what the design claimed - actually true.
+    """
+    try:
+        stamp = os.path.getmtime(path)
+        with open(path, "r", encoding="utf-8") as handle:
+            existing = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    keep = {}
+    for phase in existing.get("phases") or []:
+        if not isinstance(phase, dict) or not phase.get("rendered"):
+            continue
+        keep[phase.get("run_id")] = (phase, stamp)
+    return keep
+
+
+def _round_phases(runs, logs, pairs, budget, previous):
     """One entry per run, with its conversation if the budget reached it."""
     phases = []
     short = 0
@@ -4609,10 +4639,26 @@ def _round_phases(runs, logs, pairs, budget):
         path = logs.get(run["id"])
         if path:
             size = 0
+            written = 0.0
             try:
                 size = os.path.getsize(path)
+                written = os.path.getmtime(path)
             except OSError:
                 pass
+            done, doc_stamp = previous.get(run["id"], (None, 0.0))
+            if (done is not None and written <= doc_stamp
+                    and done.get("log") == os.path.basename(path)):
+                # ALREADY RENDERED AND THE LOG HAS NOT MOVED SINCE. Carried
+                # across for free, so an unsettled round costs the budget
+                # nothing once its phases have finished.
+                entry.update({
+                    "turns": done.get("turns") or [],
+                    "result_event": done.get("result_event"),
+                    "gate": done.get("gate"),
+                    "rendered": True,
+                })
+                phases.append(entry)
+                continue
             if budget["files"] <= 0 or size > budget["bytes"]:
                 # NOT AN ERROR AND NOT AN EMPTY CONVERSATION. `rendered` false
                 # is what lets the browser say "not yet" instead of drawing a
