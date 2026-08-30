@@ -4118,3 +4118,26 @@ three of them are the same mistake in different clothes.
   stale row raises the bar it has to clear and masks a real orphan one for one.
 - The reaper is **aged**, because the row is written before the directory exists: an unaged sweep
   would forget a worktree in the middle of being built.
+
+### The fleet was down for 68 minutes and nothing anywhere was failed
+- **An ordering cycle, and systemd breaks one by DELETING a job.**
+  `home-server-conduct-secret.service` carried `After=default.target` alongside
+  `Before=home-server-conduct.service`, while conduct is `WantedBy=default.target` - so
+  default.target wanted conduct, conduct was after the secret, and the secret was after
+  default.target. On the 2026-08-30 boot systemd chose conduct's start job to delete:
+  *"Job home-server-conduct.service/start deleted to break ordering cycle"*.
+- **Every signal read green.** 29 containers up and healthy, `list-units --failed` empty,
+  `Result=success`, `ExecMainStatus=0`. `systemctl --user status` said `inactive (dead)` with
+  **`ConditionResult=no`**, which reads as a condition the unit declares - and it declares none.
+- **It survived a week because it is only reachable at boot.** The line was committed at 08:00Z on
+  2026-08-23; the running boot had begun at 05:08Z that morning, so it never applied. The next boot
+  was the Sunday reboot window seven days later, and it fired on its first opportunity.
+- **`systemd-analyze verify` is silent on it** - a cycle is a property of the job transaction, not
+  of the unit file - so no lint leg could have caught it, and none was added pretending otherwise.
+- **The line bought nothing.** `bin/sync-podman-secrets.sh` needs `.env`, which is a FILE, and the
+  `podman` binary; it starts no container and talks to no service. `Before=` was the whole of the
+  ordering it needed.
+- **The reboot that exposed it was working correctly**: `home-server-reboot.service` fired at
+  07:08:04 on the hourly Sunday window, applied a staged deployment and came back at 07:09. The
+  gate, the escalation and greenboot all did their job; the only thing that did not come back was
+  the one unit with the cycle.

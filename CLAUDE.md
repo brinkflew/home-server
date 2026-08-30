@@ -1399,6 +1399,18 @@ signal read green.
 - A round keeps the branch it started with now, keyed on the report's own `odoo_task` and never
   parsed out of the name. A test fake and a fixture both had to be corrected to see any of it.
 - Four `worktree` rows named directories that were gone, which MASKS `agents.worktree_orphans`.
+- A round a LATER one carried was drawn amber as "not published", asking for attention nobody owed.
+  `superseded` is the third outcome; `unknown` outranks it, because a shrug is not a claim.
+
+### The fleet was down for 68 minutes and nothing anywhere was failed
+- **An ordering cycle, and systemd breaks one by DELETING a job** - conduct's, on the 2026-08-30
+  boot. `After=default.target` on the secret unit, `Before=` conduct, conduct `WantedBy=` the same
+  target. Every container healthy, no failed unit, and `ConditionResult=no` on a unit that declares
+  no condition.
+- **Only reachable at boot**, so it survived a week: committed at 08:00Z, the running boot had begun
+  at 05:08Z, and the next boot was the Sunday window seven days later.
+- `systemd-analyze verify` is SILENT on it - a cycle belongs to the job transaction, not the unit
+  file - so no lint leg can catch it, and none was added pretending to.
 
 ## Target architecture
 
