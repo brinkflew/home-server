@@ -440,6 +440,22 @@ export interface FleetRound {
    * still waiting to publish.
    */
   published: boolean;
+  /**
+   * True when a LATER round for the same task exists and this one opened no
+   * pull request - so its work is not what a reviewer is looking at.
+   *
+   * A THIRD OUTCOME, AND IT USED TO BE DRAWN AS A FAULT. "not published" is
+   * amber and says a person should look; the ordinary way a round ends without
+   * a pull request is that the review found something blocking, `retry` stopped
+   * the flow, and the next round carried the same work through. Task 1271 drew
+   * both rows on 2026-08-30 - one in review, one asking for attention it did
+   * not need.
+   *
+   * MAY BE `undefined` ON A DOCUMENT WRITTEN BY AN OLDER COLLECTOR, because the
+   * bundle and the collector deploy separately. Every reader must treat absence
+   * as false rather than test it against null.
+   */
+  superseded?: boolean;
 
   /** Seconds until the round is expected to finish, or null. Measured from the
    *  document's `generated_at`, not from now. */

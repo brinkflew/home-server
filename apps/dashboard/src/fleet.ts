@@ -94,6 +94,13 @@ export function roundState(r: FleetRound): RoundState {
   // through to "not published" would put a permanent, confident lie on the one
   // round this fleet has actually merged.
   if (r.pr_state === "unknown") return { tone: "ok", state: "published" };
+  // A LATER ROUND ON THIS TASK CARRIED THE WORK, so nothing is owed here. This
+  // is checked BEFORE the two below because both of them are claims about a
+  // round that ended on its own account, and a superseded one did not: the
+  // review found something blocking, `retry` stopped the flow, and the next
+  // round published. Grey rather than amber - it is history, not a fault - and
+  // absence is false, because an older collector emits no such field.
+  if (r.superseded) return { tone: "off", state: "superseded" };
   // A publication row that closed carrying no pull request, on a database this
   // code COULD have read one from: the flow ended without opening one, which is
   // a declined approval or a seven-day timeout.

@@ -3871,6 +3871,43 @@ def source_fleet(m, doc):
             row.pop("running", None)
             row.pop("failed", None)
 
+        # SUPERSEDED IS A THIRD OUTCOME AND IT WAS BEING DRAWN AS A FAULT.
+        # A closed round that opened no pull request used to read "not
+        # published", amber, under a comment saying that means a declined
+        # approval or a seven-day timeout. It also means the ordinary case: the
+        # review found something blocking, `retry` stopped the flow, and the
+        # NEXT round carried the same work to a pull request. Task 1271 drew two
+        # rows on 2026-08-30 - one in review as #272, one amber asking for
+        # attention it did not need, for work that is inside #272.
+        #
+        # A LATER ROUND ON THE SAME TASK IS THE WHOLE TEST, and it is
+        # structural: rounds are what `_fleet_derive_rounds` groups, `opened_at`
+        # orders them, and a round that opened no pull request cannot be what a
+        # reviewer is looking at when a later one did. `pr_state == "unknown"`
+        # is excluded deliberately - it means this collector could not tell
+        # whether a pull request was opened, and superseding is a claim, not a
+        # shrug.
+        #
+        # BEFORE THE TRUNCATION, so an old round whose successor is still on the
+        # board is graded against it rather than against an absence the cap
+        # created.
+        newest = {}
+        for row in rounds:
+            task, opened = row.get("odoo_task"), row.get("opened_at") or ""
+            if task is None:
+                continue
+            key = (row.get("project"), task)
+            if opened > newest.get(key, ""):
+                newest[key] = opened
+        for row in rounds:
+            task, opened = row.get("odoo_task"), row.get("opened_at") or ""
+            row["superseded"] = bool(
+                task is not None
+                and row["closed_at"] is not None
+                and not row["pr_url"]
+                and row["pr_state"] != "unknown"
+                and opened < newest.get((row.get("project"), task), ""))
+
         rounds = rounds[:FLEET_ROUNDS]
 
 

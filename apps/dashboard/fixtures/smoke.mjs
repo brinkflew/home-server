@@ -358,6 +358,26 @@ check("published but opened nothing is not a failure",
 check("no publication row at all is",
   roundState(by("wt-88fa10")), { tone: "fail", state: "stopped" });
 
+// THE THIRD OUTCOME, AND IT WAS DRAWN AS THE FIRST. A round whose review found
+// something blocking ends at `retry` with no pull request, and the NEXT round
+// carries the same work through - so the amber row above asked for attention
+// nobody owed. Task 1271 drew both on 2026-08-30: one in review as #272, one
+// accusing a round whose work is inside it.
+check("a round a later one carried is superseded, not accused",
+  roundState(by("wt-1271aa")), { tone: "off", state: "superseded" });
+check("...and it outranks both closed verdicts it used to be confused with",
+  roundState({ ...by("wt-1271aa"), published: false }).state, "superseded");
+// ABSENCE IS FALSE, NEVER null. The collector and this bundle deploy
+// separately, so a document written by the older one carries no such field and
+// must still grade as it did.
+check("a document with no superseded field grades as it always did",
+  roundState({ ...by("wt-1271aa"), superseded: undefined }).state,
+  "not published");
+// An unreadable pr_state is a shrug, and superseding is a claim. The collector
+// refuses to make it; this asserts the row it emits reads that way.
+check("unknown outranks superseded, because it is not a claim",
+  roundState({ ...by("wt-1271aa"), pr_state: "unknown" }).state, "published");
+
 // THE ROW THAT PREDATES THE PR COLUMNS. A migration is a moment in time, so
 // every round this fleet published before the feature shipped holds a NULL
 // pr_url whether or not it opened one - and the real database had exactly one

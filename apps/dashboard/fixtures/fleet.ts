@@ -337,6 +337,51 @@ export function fleetDocument(): FleetDocument {
         tokens_in: 210300,
         tokens_out: 9814,
       },
+      // SUPERSEDED: closed, opened no pull request, and a LATER round on the
+      // same task did. Its work is inside that pull request, so it owes nobody
+      // anything - and it used to draw the amber "not published" above, asking
+      // for attention it did not need. Measured on task 1271, 2026-08-30.
+      {
+        worktree_id: "wt-1271aa",
+        project: "upskald",
+        odoo_task: 1271,
+        ref: "agents/fix/1271-settle-three-field-behaviours",
+        phase: "review",
+        opened_at: iso(58 * 3600),
+        started_at: iso(58 * 3600),
+        ended_at: iso(57 * 3600),
+        attempts: 1,
+        max_attempts: 3,
+        flow_job_id: "job-1271a",
+        head: "715ddcf",
+        resumed_at: null,
+        waiting_on: null,
+        link: null,
+        summary: "Settle three field behaviours their new specs could only pin",
+        kind: null,
+        closed_at: iso(57 * 3600),
+        closed_why: null,
+        done: PHASES,
+        phases: PHASES,
+        odoo_url: "https://avanserv.com/odoo/project.task/1271",
+        branch: "agents/fix/1271-settle-three-field-behaviours",
+        branch_url:
+          "https://github.com/avanserv/upskald/tree/fix/1271-settle-three-field-behaviours",
+        pr_url: null,
+        pr_number: null,
+        pr_state: null,
+        published: true,
+        superseded: true,
+        eta_seconds: null,
+        eta_samples: null,
+        held: false,
+        held_at: null,
+        held_why: null,
+        error: null,
+        cost_usd: 9.35,
+        tokens_in: 268400,
+        tokens_out: 11902,
+      },
       // Never reached the publish path at all - no publication row exists.
       // `closed_why` is shown to a reader and parsed by nothing.
       {
