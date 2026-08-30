@@ -850,13 +850,26 @@ nothing while everything exits 0:
   gate would time out, and nothing would go red. The notice repeats every six hours while the step
   is still suspended, and closes when it is not. It is the only thing here that repeats itself.
 
-**It is sent at answer time, not from a second discovery pass.** conduct knows a human gate is next
-at the instant it answers `conduct_verify` - it has the card in its hand - so sending there dedups on
-a key it already owns, needs no second `jobs_u/get` to dig the card out of a child job's result, and
-**cannot notify about an unrelated flow somebody wrote in the UI**, because a notice exists only for
-a gate conduct created. The six-hourly re-send needs no Windmill read beyond the suspended-id list
-the cycle already fetches, and it runs **before** the dispatch pass: both `return`s in the dispatch
-loop cut it short, and a phase would otherwise block a notification for twenty minutes.
+**It is sent when the step it names is suspended, and that was got wrong first.** The card used to be
+opened at answer time, on the argument that *"conduct knows a human gate is next at the instant it
+answers `conduct_verify` - it has the card in its hand"*. **conduct knows no such thing.** Five
+modules sit between the gate and any human gate - `await_review`, `conduct_review`, `retry`,
+`await_ship`, `conduct_ship`, `publish_auto` - and **two of them stop the flow before one is
+reached**: `retry` when the review found something blocking and a round remains, and `publish_auto`
+when conduct measured the autopublish bar as met and opened the pull request itself. On both of those
+paths `await_human` never runs, `publish_pr` never suspends, and the card names a step that does not
+exist. See `docs/known-state.md` for the morning that cost.
+
+`poll._arm_approvals` opens it instead, from the suspended set the cycle already reads, and it keeps
+the one thing the old placement had for free: **it cannot notify about an unrelated flow somebody
+wrote in the UI**, because it opens a notice only for a job with a `dispatch` row - a step conduct
+itself answered. The card comes back out of that row's payload, **keyed by flow job id and never by
+worktree**, because the worktree is reused and `last_report` would hand a person the next task's
+summary. Arming and the six-hourly re-send both run **before** the dispatch pass: both `return`s in
+the dispatch loop cut it short, and a phase would otherwise block a notification for twenty minutes.
+
+**The card is therefore later than it was - after the review and the squash rather than before them,
+5-20 minutes - and that is the trade.** It arrived promptly before, and was unanswerable.
 
 **A refusal is notified too**, with no approval link. Not symmetry - an errored flow is otherwise
 completely silent: there is no suspend, so `agents.approvals_pending` cannot see it, and the only

@@ -1375,6 +1375,31 @@ signal read green.
   clause is a gate that PASSED, was armed on 2026-08-25 and could never fire.
 - The datastore drift beside it: `redis:7-alpine` against the pull request's Valkey 8.
 
+### The card named a step the flow had not reached, and two of its paths never do
+- An approval was sent when the GATE passed, five modules early - and `retry` and `publish_auto`
+  both STOP the flow before any human gate, so on both paths `publish_pr` never suspends. Task
+  1271's card was unanswerable for its whole life, both ways in one morning.
+- It also contradicted `publish: nobody will be asked`, logged one second earlier.
+  `NOTICE_ARMING_SEC` measured the gap and misread which one it was.
+- The phone, the board and the approve button all read the one notice row, so opening it from the
+  suspended set fixes three readers at once - and the card is 5-20 minutes later on purpose.
+
+### Two signal deaths, graded against each other as gate verdicts
+- The nightly agents-update restarted conduct mid-gate. `-9` and `-15` were parsed for `make`
+  targets, compared, carded, spent a repair round, and the `-15` was CACHED for seven days against
+  the live base and image. Both call sites had `_interrupted` in hand and discarded it.
+- A negative code is a signal and `make` cannot produce one, so the sign is the structural half and
+  the flag is the other. The refusal to record lives in `state.set_base_gate`, not at the caller.
+- The timer is deliberately untouched: classifying the kill covers every restart, not just that one.
+
+### A lease that named another branch, and the re-plan that minted it
+- `--force-with-lease` names a ref AND a sha, and only the sha was chosen - so a re-planned round
+  leased round 1's head on round 1's branch while pushing to a new one. `(stale info)`, three
+  attempts, and the message names neither branch.
+- A round keeps the branch it started with now, keyed on the report's own `odoo_task` and never
+  parsed out of the name. A test fake and a fixture both had to be corrected to see any of it.
+- Four `worktree` rows named directories that were gone, which MASKS `agents.worktree_orphans`.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

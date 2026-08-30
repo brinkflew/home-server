@@ -4040,3 +4040,81 @@ three of them are the same mistake in different clothes.
   from the pull request is the same shape as the locale, correct until the day it is not. The alias
   moved with the image, because `podman.run_datastore`'s argument for aliases is that the gate
   addresses these by the bare names the compose file uses.
+
+### The card named a step the flow had not reached, and two of its paths never do
+- **A person approved task 1271 and Windmill answered "job 01a0508b is not waiting for anybody".**
+  The card went out at 03:41:01 on 2026-08-30 behind a gate that had just passed; the review found
+  one blocking finding; the flow completed at 03:46:41 at `retry` with `await_ship`, `conduct_ship`,
+  `publish_auto`, `await_human` and `publish_pr` all still `WaitingForPriorSteps`; and the click
+  landed at 03:50:09. **It was never answerable, not for one second of its life.**
+- **The premise was in the docstring and it was false.** `_note_for_a_person` ran at the instant
+  conduct answered `conduct_verify`, arguing "conduct already knows a human gate is next". Five
+  modules sit in between and **two of them stop the flow before one**: `retry` on a blocking finding
+  with a round left, and `publish_auto` on a met autopublish bar.
+- **The second round is not a consequence of the approval.** It started at 03:47:37, two and a half
+  minutes BEFORE the click, on the review's finding. The ordering only looked causal from outside.
+- **The card also contradicted a decision one second old.** The journal reads `publish: nobody will
+  be asked` at 03:41:00 - `report["autopublish"]` was already True - and the approval went out at
+  03:41:01. `_note_for_a_person` keyed on `payload["ok"]` and never read `autopublish`. Round 3
+  proved the benign direction the same morning: card at 05:43:47, `publish_auto` opened pull request
+  272 at 05:56:46, and the person got an approval request and an "opened" notice for one round.
+- **`NOTICE_ARMING_SEC = 600` measured the gap and misread what it was.** Its comment covers the
+  MOMENT between resuming the gate and suspending on `await_human` - real - and never the case where
+  `await_human` does not run at all. Ten minutes of grace for a step that would never exist.
+- **One row, three readers, and the board could not have known either.**
+  `bin/collect-metrics.py` reads `notice WHERE closed_at IS NULL` and `_fleet_waiting` calls
+  `publish_pr` "waiting on a person" from the module id alone; it never asks whether the step
+  suspended. So the phone, the board and the approve button were all wrong together, and opening the
+  notice from the suspended set fixes all three from one measurement.
+- **The card is later now and that is the trade**: after the review and the squash rather than
+  before them, 5-20 minutes. It was prompt before, and it was a lie.
+
+### Two signal deaths, graded against each other as gate verdicts
+- **`home-server-agents-update.timer` restarted conduct mid-gate** at 04:55:29 (`NRestarts=0`, a
+  deliberate stop). conduct logged `stopping: conduct was asked to stop` TWICE and still recorded the
+  head gate as `-9` with the target `unit-test-web` parsed off a truncated log, the base gate as
+  `-15` with no target, and then compared them: *"head fails on unit-test-web, base on no make target
+  named, so the two are not the same failure"* - refused, retryable, one repair round.
+- **Both call sites had the answer and both discarded it.** `_interrupted = _await_phase(...)` at two
+  places in `dispatch.py`, under the identical comment "a gate that did not complete is a non-zero
+  code either way". True, and not sufficient: the code was then parsed, compared, put on a card, used
+  to justify a round, and cached.
+- **The `-15` was written to `base_gate`** against the current base `c9a9135bc789` and the current
+  runner image, TTL seven days. Every later round whose head gate went red would have read "no make
+  target named", concluded the failures differed, and spent a repair round on it.
+- **The sign is the structural half and the flag does not cover it.** `subprocess` spells a signal
+  death `-N` and `make` cannot produce one, so a negative code is never a verdict - including an OOM
+  kill and somebody's `kill`, neither of which sets conduct's flag. The flag is the other half: a
+  phase ended inside the grace can exit 0 or 1 on its own.
+- **Refusing to RECORD one lives in `state.set_base_gate`**, not at the caller. A wrong refusal costs
+  one round; a poisoned row costs a round on every red gate for a week.
+- **The timer was deliberately left alone.** Raising an `ExecCondition=` on it would cover this
+  timer and no other restart; classifying the kill correctly covers a deploy, a reboot and a hand
+  `systemctl restart` as well, and routes the round to the one-shot resume that re-runs only the
+  gate. The honest limit: a chain that has already spent its resume closes and tells somebody.
+
+### A lease that named another branch, and the re-plan that minted it
+- **`--force-with-lease` names a ref AND a sha, and only the sha was chosen.** Round 2 of task 1271
+  re-planned, so `_naming` answered a new slug and the push went to
+  `agents/fix/1271-numeric-arrow-keys-url-normalize` while `pushed_sha` still held `715ddcfd` -
+  round 1's head on `agents/fix/1271-settle-three-field-behaviours`. Leasing a sha on a ref that does
+  not exist is `! [rejected] (stale info)`, three attempts, and the verification failed on it.
+- **The message names neither branch**, which is why it read as a transport problem.
+- **A re-planned round used to mint a second branch every time.** Two branches existed for one task
+  and the first was left on GitHub with no pull request. A round keeps the branch it started with
+  now, keyed on the report's own `odoo_task` - never parsed out of the name, because the report is
+  one row per WORKTREE and the worktree is reused.
+- **The same bug was latent at the squash push for a hand run**: with no task the fallback name
+  carries the head sha, which the squash has just changed, so the lease named a ref that had never
+  existed. All three push sites go through one helper now.
+- **A test fake and a fixture both had to be corrected to see it.** `test_verify`'s fake `push`
+  returned the bare SUFFIX where the real one returns `branch_name`'s answer, and `test_loop`'s
+  report fixture carried `pushed_sha` with no `branch`. Neither mattered while nothing compared the
+  two, which is exactly what the defect was.
+
+### A claim conduct could not back up hides the check that would find it
+- Four `worktree` rows named directories that no longer existed, so the marker's `worktrees` gauge
+  read 7 against 3 real trees. `agents.worktree_orphans` warns when DISK exceeds this claim, so every
+  stale row raises the bar it has to clear and masks a real orphan one for one.
+- The reaper is **aged**, because the row is written before the directory exists: an unaged sweep
+  would forget a worktree in the middle of being built.
