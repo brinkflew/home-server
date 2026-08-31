@@ -3717,8 +3717,12 @@ def source_fleet(m, doc):
         # the live database before the migration had run.
         has_pr = (_fleet_has(conn, "publication", "pr_url")
                   and _fleet_has(conn, "publication", "pr_number"))
+        # `job_id` IS THE PRIMARY KEY AND IS ALSO THE ANSWER TO A SECOND
+        # QUESTION: which flow a CLOSED round is suspended in. See the notice
+        # join below for why the obvious route - this round's dispatch rows -
+        # cannot supply it.
         pubs = _fleet_rows(conn, """
-            SELECT worktree_id, branch, closed_at, opened_at%s
+            SELECT job_id, worktree_id, branch, closed_at, opened_at%s
               FROM publication ORDER BY opened_at
         """ % (", pr_url, pr_number" if has_pr else ""))
 
@@ -3767,7 +3771,28 @@ def source_fleet(m, doc):
             row["held_why"] = entry["note"] if row["held"] else None
             row["phases"] = list(FLEET_PHASES)
             row["ref"] = chain["ref"] if chain and is_open else None
-            row["flow_job_id"] = chain["flow_job_id"] if chain and is_open else None
+            # THE JOB THIS ROUND IS SUSPENDED IN, WHICH IS NOT ALWAYS THE CHAIN'S.
+            #
+            # conduct sets chain.closed_at the moment it reaches the publish path
+            # - its own work IS done - while the flow stays suspended on the
+            # human gate. Reading the id only off an OPEN chain therefore made
+            # every round waiting for an approval match no notice at all, and the
+            # board drew it "stopped": task 1254 sat in red for 26 hours while
+            # the phone reminded twice and agents.approvals_pending warned
+            # correctly. So a closed round needs its own answer.
+            #
+            # AND IT COMES FROM THE PUBLICATION, NOT FROM `dispatch`. The obvious
+            # route is this round's dispatch rows, and it is off by one round:
+            # conduct writes the dispatch about a second BEFORE the run row it
+            # opens, so the last dispatch inside any window belongs to the NEXT
+            # round. Measured on all six rounds of 2026-08-30 - see _round_job,
+            # which is safe only because it takes the first. `publication.job_id`
+            # is exact, is already joined to the right round two blocks above,
+            # and every open approval notice has one: conduct opens the row at
+            # the verification push and only then can a gate suspend.
+            published = row.get("publication") or {}
+            row["flow_job_id"] = (chain["flow_job_id"] if chain and is_open
+                                  else published.get("job_id"))
             row["head"] = None
             row["resumed_at"] = None
             # `chain` SPEAKS FOR ONE ROUND, AND THIS IS THE ONE IT SPEAKS FOR.
@@ -3792,16 +3817,23 @@ def source_fleet(m, doc):
                 # sentence conduct wrote for it.
                 row["closed_at"] = row["ended_at"] or row["started_at"]
 
-            # BEST EFFORT, AND NULL WHERE IT CANNOT BE KNOWN. chain.flow_job_id
-            # is the job that STOPPED, not the one running - state.py says so -
-            # so a round mid-flight legitimately matches no notice. Null means
-            # "in flight"; defaulting to "conduct" would claim the fleet owns a
-            # step nobody has looked at.
             matched = by_job.get(row["flow_job_id"]) or [] if row["flow_job_id"] else []
             person = [n for n in matched if n["waiting_on"] == "person"]
-            if row["closed_at"] is None:
-                row["waiting_on"] = ("person" if person
-                                     else "conduct" if matched else None)
+            # A PERSON OWING AN ANSWER IS TRUE WHETHER OR NOT THE ROUND CLOSED,
+            # and that asymmetry is the point. conduct closes the round when it
+            # reaches the publish path - its own work IS done - but the flow is
+            # suspended and an open approval notice says so; task 1254 sat there
+            # for 26 hours reading "stopped" while the host's own
+            # agents.approvals_pending warned about it correctly.
+            #
+            # "conduct" STAYS RESTRICTED TO AN OPEN ROUND. A closed round with a
+            # conduct-owned notice is history, and drawing it as a live step
+            # would be the mirror error: claiming the fleet is working on
+            # something it finished. Null still means "in flight".
+            if person:
+                row["waiting_on"] = "person"
+            elif row["closed_at"] is None:
+                row["waiting_on"] = "conduct" if matched else None
             else:
                 row["waiting_on"] = None
             row["link"] = person[0]["link"] if person else None
@@ -3817,7 +3849,9 @@ def source_fleet(m, doc):
                               else _fleet_text(title, 160))
             row["odoo_url"] = _fleet_odoo_url(env, row["odoo_task"])
 
-            published = row.pop("publication", None) or {}
+            # ALREADY READ ABOVE, for the flow job id. Popped here so the join
+            # does not travel to the browser - one row, two questions.
+            row.pop("publication", None)
             # THE RUN LOG FIRST, AND publication.branch AS THE FALLBACK. That
             # row opens when the pull request does, so it is the only source for
             # rounds that predate run.branch and the wrong one for every round
@@ -4767,6 +4801,16 @@ def _round_job(conn, window):
     the publish path. `dispatch` carries worktree_id, flow_job_id AND
     started_at, so it is the one table that can name the job of a round that is
     finished, refused, or still running.
+
+    THE FIRST MATCH, AND ONLY THE FIRST MATCH IS SAFE. A window ends where the
+    next round on the worktree BEGINS, measured on the run log - and conduct
+    writes its dispatch row about a second BEFORE the run row it opens, every
+    time (12:38:16 against 12:38:17, and the same gap on all six rounds of
+    2026-08-30). So the last dispatch row inside any window belongs to the NEXT
+    round, and a reader taking the newest one gets its neighbour's flow. Nothing
+    saw that while this returned the first; source_fleet resolves a closed
+    round's job through the publication join instead, which is measured on one
+    table and needs no window arithmetic.
     """
     for row in _fleet_rows(conn, """
         SELECT flow_job_id, started_at FROM dispatch

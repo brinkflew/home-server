@@ -382,6 +382,56 @@ export function fleetDocument(): FleetDocument {
         tokens_in: 268400,
         tokens_out: 11902,
       },
+      // CLOSED AND STILL OWED AN ANSWER, which is the shape no fixture had until
+      // 2026-08-31 - every closed round here carried `waiting_on: null`, so
+      // nothing could see that the board drew this one "stopped", in red, with
+      // no approve button. conduct closes the round when it reaches the publish
+      // path; the flow is suspended on the human gate for as long as nobody
+      // looks, which for task 1254 was 26 hours. Note `published: false`: the
+      // publication row is OPEN, so the two verdicts below it would both be
+      // wrong and `waiting_on` has to be read first.
+      {
+        worktree_id: "wt-1254aa",
+        project: "upskald",
+        odoo_task: 1254,
+        ref: "main",
+        phase: "ship",
+        opened_at: iso(30 * 3600),
+        started_at: iso(30 * 3600),
+        ended_at: iso(26 * 3600),
+        attempts: 2,
+        max_attempts: 3,
+        flow_job_id: "job-1254aa",
+        head: "7364772",
+        resumed_at: null,
+        waiting_on: "person",
+        link: "https://agents.avanserv.com/run/job-1254aa?workspace=dev-agents",
+        summary:
+          "upskald verify on upskald-ship\n7 commit(s), 48 file(s), head 736477284775",
+        kind: "approval",
+        closed_at: iso(26 * 3600),
+        closed_why: "reached the publish path",
+        done: PHASES,
+        phases: PHASES,
+        odoo_url: "https://avanserv.com/odoo/project.task/1254",
+        branch: "agents/feat/1254-audit-pilot-waiting-list",
+        branch_url:
+          "https://github.com/avanserv/upskald/tree/feat/1254-audit-pilot-waiting-list",
+        pr_url: null,
+        pr_number: null,
+        pr_state: null,
+        published: false,
+        superseded: false,
+        eta_seconds: null,
+        eta_samples: null,
+        held: false,
+        held_at: null,
+        held_why: null,
+        error: null,
+        cost_usd: 12.44,
+        tokens_in: 402100,
+        tokens_out: 18330,
+      },
       // Never reached the publish path at all - no publication row exists.
       // `closed_why` is shown to a reader and parsed by nothing.
       {

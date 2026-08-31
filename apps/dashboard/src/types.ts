@@ -384,10 +384,15 @@ export interface FleetRound {
   head: string | null;
   resumed_at: string | null;
   /**
-   * NULL MEANS IN FLIGHT, NOT "conduct". chain.flow_job_id is the job that
-   * STOPPED rather than the one running, so a round mid-flight legitimately
-   * matches no notice. Rendering null as "waiting on conduct" would claim the
-   * fleet owns a step nobody has looked at.
+   * NULL MEANS IN FLIGHT, NOT "conduct". A round mid-flight legitimately matches
+   * no notice, and rendering null as "waiting on conduct" would claim the fleet
+   * owns a step nobody has looked at.
+   *
+   * "person" IS INDEPENDENT OF `closed_at` AND THE OTHER TWO ARE NOT. conduct
+   * closes a round the moment it reaches the publish path, while the flow is
+   * still suspended on the human gate - so the round a person owes an answer on
+   * is, normally, a CLOSED one. "conduct" is only ever set on an open round,
+   * because a closed round conduct owns is history rather than work.
    */
   waiting_on: FleetWaiting | null;
   link: string | null;
@@ -396,7 +401,9 @@ export interface FleetRound {
    *  been asked. It is what decides WHICH action a waiting row offers. */
   kind: string | null;
 
-  /** Null while the round is open. Set means it will not run again. */
+  /** Null while the round is open. Set means CONDUCT will not run it again -
+   *  which is not the same as nothing being owed: a round that reached the
+   *  publish path closes here and then waits on a person. See `waiting_on`. */
   closed_at: string | null;
   /**
    * conduct's sentence for why it closed. DISPLAYED AND NEVER PARSED - the

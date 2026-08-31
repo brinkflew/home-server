@@ -166,6 +166,12 @@ export function boardRow(r: FleetRound, ctx: BoardContext): BoardRow {
     controls: roundControls(r, ctx.control, ctx.now),
     holdLeft: holdExpiresIn(r, ctx.now),
     moving: r.closed_at === null && r.waiting_on === null,
-    waiting: r.closed_at === null && r.waiting_on === "person",
+    // `waiting_on` ALONE, AND `moving` DELIBERATELY NOT. The two look
+    // symmetrical and are not: `moving` asks whether the machine is working, so
+    // a closed round is never it; this asks whether a PERSON owes an answer,
+    // which conduct closing the round does not change. RoundPage gates the
+    // approve and decline chips on this, so with the `closed_at` clause the one
+    // round that could be answered was the one showing no way to answer it.
+    waiting: r.waiting_on === "person",
   };
 }

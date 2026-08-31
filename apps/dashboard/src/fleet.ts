@@ -71,8 +71,15 @@ export function isSettled(r: FleetRound): boolean {
  * everything, because it is the only state a reader can act on.
  */
 export function roundState(r: FleetRound): RoundState {
+  // A PERSON OWING AN ANSWER OUTRANKS `closed_at`, AND THAT IS NOT A TIDY-UP.
+  // conduct closes a round when it reaches the publish path - its own work is
+  // done - while the flow stays suspended on the human gate. Every branch below
+  // is a claim about a round that ended on its own account, and this one has
+  // not: task 1254 sat here for 26 hours drawn "stopped", in red, while the
+  // phone was reminding about it and agents.approvals_pending warned correctly.
+  // The comment above already called this the top priority; it was third.
+  if (r.waiting_on === "person") return { tone: "warn", state: "waiting on you" };
   if (r.closed_at === null) {
-    if (r.waiting_on === "person") return { tone: "warn", state: "waiting on you" };
     // NULL IS NOT "conduct". chain.flow_job_id names the job that STOPPED, so a
     // round mid-flight matches no notice - grey says "nobody has been asked"
     // rather than claiming the fleet owns a step.
@@ -118,7 +125,10 @@ export function roundState(r: FleetRound): RoundState {
  * wording of a summary.
  */
 export function roundAction(r: FleetRound): RoundAction {
-  if (r.closed_at === null && r.waiting_on === "person") {
+  // NOT GATED ON `closed_at`, for the reason roundState carries at length: the
+  // round conduct has finished and a person has not is exactly the row with
+  // something to click on, and it was the one offering "task" instead.
+  if (r.waiting_on === "person") {
     // conduct's own link to the approval page, behind sign-on. Carried
     // verbatim; the collector already refused anything resembling a resume URL.
     if (r.kind === "refused" || !r.link) {
@@ -182,8 +192,11 @@ export function roundEtaAt(r: FleetRound, generatedAtUnix: number): number | nul
  */
 export function byUrgency(a: FleetRound, b: FleetRound): number {
   const rank = (r: FleetRound) => {
-    if (r.closed_at !== null) return 3;
+    // ASKED BEFORE `closed_at`, or the one row that needs a person sinks to the
+    // bottom of the board the moment conduct finishes with it - which is the
+    // moment it starts needing one. Same reordering as roundState's.
     if (r.waiting_on === "person") return 0;
+    if (r.closed_at !== null) return 3;
     if (r.waiting_on === null) return 1;
     return 2;
   };

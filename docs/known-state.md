@@ -4141,3 +4141,93 @@ three of them are the same mistake in different clothes.
   07:08:04 on the hourly Sunday window, applied a staged deployment and came back at 07:09. The
   gate, the escalation and greenboot all did their job; the only thing that did not come back was
   the one unit with the cycle.
+
+### The test suite was a client of the live control plane
+- **`python3 -m unittest discover` on the server rewrote all four Windmill flows and answered a
+  live suspended step.** `tests/test_serve.py`'s `StoppingTests` called the real
+  `serve.serve(cycles=1)` - which reconciles, pushes every flow from git, reconciles again and
+  runs a full poll cycle - with none of the three stubs `LoopTests` installs, and unittest runs
+  `LoopTests` first, so its `tearDown` had already put the real functions back.
+- **It was inert on the workstation for one reason only**: there is no `/var/home-server/.env`
+  there. `config.py` calls `_load_dotenv()` at import, so on the server every credential the unit
+  has is in `os.environ` before the first test body runs. The suite was never safe; it was
+  unconfigured.
+- **The cost was a round.** 2026-08-30T10:17:38Z: four `flows/update` POSTs. 10:17:50Z: a `201` on
+  `jobs/flow/resume/01a05209`, answering `conduct_dev` out of an empty temporary database with
+  *"the dev prompt asks for a plan and none was given"*. The flow completed failed; conduct's real
+  answer arrived at 10:17:58 and got `500 parent flow job not found`; task 1262's dev phase, 29m36s
+  in, exited 137. Eighteen `/tmp/tmp*/conduct.db` files are stamped `10:17:38Z` and `10:18:00Z`.
+- **`reconcile.run` was the worse half and nothing noticed.** It removes worktrees, deletes scratch
+  and unlinks logs, all under the REAL `config.WORKTREES`/`SCRATCH`/`LOGS`, and `serve.serve` calls
+  it before anything else.
+- **`unittest discover -s tests` DOES NOT IMPORT `tests/__init__.py`.** It puts the directory on
+  `sys.path` and imports each file as a top-level module. Adding the package and assuming it ran is
+  the same shape of mistake: measured with the guard in place and `config.ENV_FILE` still reading
+  `/var/home-server/.env` while all 750 tests passed. What installs it is an explicit `import tests`
+  in every test file, above its own `conduct` import, enumerated by a test over the directory.
+- **The refusal must be a `BaseException`.** `serve.serve` wraps every stage in `except Exception`
+  and prints; so do `poll._intake` and half of `reconcile`. An `Exception` would be caught, logged
+  and walked past - the guard would fail open and the run would go green.
+- Two of the four boundaries DELEGATE when the credential is absent, so "not configured" behaves
+  exactly as it always did - `test_odoo.NotConfiguredTests` and `test_notify.PublishTests` both
+  depend on it, and an unset token holding while a revoked one fails is a distinction conduct draws
+  everywhere.
+
+### A failed verification erased what conduct had pushed
+- **`run_verify` builds its report from scratch and saves it in a `finally`**, and `report` is one
+  row per WORKTREE, `INSERT OR REPLACE`. `branch`/`pushed_sha`/`odoo_task` are written only on the
+  success path past every refusal, so any verification that raised first overwrote the pair
+  `push_after_dev` had written minutes before. The memory survived exactly until the case it exists
+  for.
+- **Task 1264 paid for it twice.** Round 1's dev created
+  `agents/docs/1264-prose-sweep-tests-scripts-e2e`; the Sunday reboot killed its verify at 07:08:40;
+  the wipe followed. Round 2 re-planned to the same slug, found no task id to match and no branch to
+  compare, and pushed **plain** - `! [rejected] (non-fast-forward)`, three attempts, at the end of
+  dev and again on the resumed verify. $25.02, no branch, no pull request.
+- **`(non-fast-forward)` and `(stale info)` are different sentences.** The first means no `--force`
+  was applied at all; the second means a lease named a sha the ref does not hold. Reading which one
+  git printed is what separates "the lease was absent" from "the lease was wrong".
+- **The pair now lives on the run log**, which is append-only and per execution, so nothing can
+  clobber it. `run.branch` had been WRITE-ONLY since it was added - two writers, no reader - so the
+  durable copy existed all along and nothing had ever looked at it. `state.last_push` is its first
+  reader, and it takes several worktree ids because the verification's row is opened under
+  `verify.worktree_id(base_id)`: a lease reading only the parent would miss every round refused
+  after its verification pushed.
+- **`run_ship` recorded its squash nowhere**, which is the same defect one layer down. It mutates
+  the report and RETURNS it as the flow's payload rather than saving it, so the stored copy kept the
+  PRE-squash sha for ever while the branch held the squashed one. A later round on the same task
+  would have leased a sha the ref no longer held.
+- **No test called `run_verify` at all** - one `grep` hit, and it is a comment. Every test that
+  established the branch/sha pair did it by calling `save_report` by hand, so nothing exercised what
+  the `finally` leaves behind, and `test_the_second_push_leases_on_what_the_first_one_left` ran two
+  pushes with no verification between them.
+
+### The board drew a pending approval as "stopped", and the host check was right
+- **conduct sets `chain.closed_at` when it reaches the publish path** - its own work IS done -
+  while the flow stays suspended on the human gate. `source_fleet` read `flow_job_id` only off an
+  OPEN chain, so a closed round matched no notice: `waiting_on`, `link` and `kind` all null, the
+  approval summary replaced by the task title, and an OPEN publication reading `published: false`.
+  `roundState` then fell through to `{tone: "fail", state: "stopped"}`.
+- **Task 1254 sat there for 26 hours in red**, with `boardRow.waiting` also gated on `closed_at`,
+  so the one round that could be answered was the one showing no way to answer it.
+- **This was true of every approval ever** - 1247's own 11.5-hour wait included. It only became
+  visible when one was left long enough to look at.
+- **The host layer had it right the whole time.** `agents.approvals_pending` warned - *"1 suspended
+  step(s), the oldest for 26h ... at this age it is a human gate nobody saw"* - and `agents.intake`
+  named it as the reason the fleet was holding. Two checks agreeing and a dashboard contradicting
+  them; no `bin/verify-host.sh` change was needed or made.
+- **A round's own dispatch rows CANNOT supply the job id, and the reason is one second.** conduct
+  writes the dispatch row about a second before the run row it opens - 12:38:16 against 12:38:17,
+  on all six rounds of 2026-08-30 - and a window ends where the next round on the worktree BEGINS,
+  measured on the run log. So the last dispatch inside any window belongs to the NEXT round. Taking
+  the newest gave every round its neighbour's flow, and the superseded round claimed the live
+  approval. `_round_job` is safe only because it takes the FIRST match.
+- **`publication.job_id` is the exact answer and was already joined to the right round.** conduct
+  opens that row at the verification push and only then can a gate suspend, so every open approval
+  notice has one. No window arithmetic, and one measurement rather than a second reading.
+- **`waiting_on: "person"` is now independent of `closed_at` and `"conduct"` is not.** A closed
+  round conduct owns is history; drawing it as a live step would be the mirror error. `moving` keeps
+  its `closed_at` clause for the same reason - it asks whether the MACHINE is working.
+- **No fixture had the shape**: all thirteen closed rounds carried `waiting_on: null`, and
+  `fixtures/smoke.mjs` had never loaded `roundboard.ts` at all, so `waiting` and `moving` had no
+  coverage of any kind.

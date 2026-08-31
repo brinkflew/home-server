@@ -401,9 +401,35 @@ fleet choosing work and `check`/`probe`/`hello` are hand-run diagnostics; none i
 journey, and a group with neither a plan nor a task is dropped outright.
 
 **`chain` IS STILL READ, FOR THE ONE THING IT DESCRIBES ACCURATELY**: the round in flight. It
-supplies `waiting_on`, the approval link and the tracker id, and only to the latest round on its
-worktree - letting an earlier one inherit a live chain row would draw a finished round as though
-somebody were waiting on it.
+supplies the approval link and the tracker id, and only to the latest round on its worktree -
+letting an earlier one inherit a live chain row would draw a finished round as though somebody were
+waiting on it.
+
+**BUT IT CANNOT SUPPLY `waiting_on`, AND BELIEVING IT COULD COST A ROUND 26 HOURS IN RED.** conduct
+sets `chain.closed_at` the moment it reaches the publish path - its own work IS done - while the
+flow stays suspended on the human gate for as long as nobody looks. Reading the flow job id only off
+an OPEN chain therefore made every round waiting for an approval match no notice at all:
+`waiting_on`, `link` and `kind` null, the approval summary replaced by the task title, and the open
+publication reading `published: false`, so `roundState` fell through to **"stopped"**. `boardRow`'s
+`waiting` was gated the same way, so the one round that could be answered showed no way to answer
+it. This was true of every approval this fleet has ever asked for; it only became visible when task
+1254's was left unanswered long enough to look at. **The host had it right throughout** -
+`agents.approvals_pending` warned at 26h and `agents.intake` named it as why the fleet was holding.
+
+**A ROUND'S OWN DISPATCH ROWS CANNOT NAME ITS JOB EITHER, AND THE REASON IS ONE SECOND.** conduct
+writes the `dispatch` row about a second before the run row it opens - 12:38:16 against 12:38:17,
+on all six rounds of 2026-08-30 - and a round's window ends where the next round on the worktree
+BEGINS, measured on the run log. So the last dispatch inside any window belongs to the *next* round,
+and reading it made the superseded round claim the live approval. `_round_job` is safe only because
+it takes the first match. **`publication.job_id` is the exact answer**, is already joined to the
+right round, and always exists when an approval is open - conduct opens that row at the verification
+push, and only then can a gate suspend.
+
+**SO `waiting_on: "person"` IS INDEPENDENT OF `closed_at` AND `"conduct"` IS NOT.** A person owing
+an answer outranks every other state on the row, open or closed, in `roundState`, `roundAction` and
+`byUrgency` alike. A closed round *conduct* owns is history, and drawing that as a live step would
+be the mirror error - which is also why `boardRow.moving` keeps its `closed_at` clause: the two look
+symmetrical and ask different questions, one about the machine and one about a person.
 
 **THE PUBLICATION JOIN HAD TO BECOME WINDOWED IN THE SAME CHANGE.** Matching on `worktree_id` alone
 was invisible while `chain` held one row and is wrong the instant history appears: all ten rounds on

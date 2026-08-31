@@ -2376,8 +2376,30 @@ does not descend from its base" and "the change touches what verifies it" alread
 the refusals where pushing would be **wrong** rather than merely early, and skipping here costs a
 person nothing because the verification makes the same ones a minute later with the full card.
 
-**The lease needed no change.** The verification already reads `expect =
-last_report["pushed_sha"]`, so it leases on what dev pushed instead of creating the branch itself.
+**The lease was read off the report, and that is where it broke.** All three pushes - dev, the
+verification, the squash - used `last_report`, which is **one row per worktree** that `run_verify`
+rebuilds from scratch and saves in a `finally`. `branch`, `pushed_sha` and `odoo_task` are written
+only on the success path past every refusal, so a gate that raised first - a reboot, a SIGKILL, a
+podman failure - erased what dev had pushed minutes earlier. The memory survived exactly until the
+case it exists for. Task 1264 then re-planned to the same slug, found no task id to match and no
+branch to compare, pushed **plain**, and git refused it `(non-fast-forward)`: twice, $25.02, no
+branch and no pull request. The two refusals are different sentences and worth telling apart -
+`(non-fast-forward)` means no `--force` was applied at all, `(stale info)` means a lease named a sha
+the ref does not hold.
+
+**It lives on the run log now**, which is append-only and one row per execution, so no later phase
+can overwrite it. `state.record_push` writes the pair together - a branch with no sha cannot be
+leased on and a sha with no branch is what named the wrong ref for task 1271 - and
+`state.last_push` reads it back. Two things that fall out of it: **`run.branch` had been
+write-only** since the day it was added, two writers and no reader, so the durable copy existed all
+along and nothing had looked at it; and `last_push` takes **several** worktree ids, because the
+verification opens its row under `verify.worktree_id(base_id)` and a lease reading only the parent
+would miss every round refused after its verification pushed.
+
+**`run_ship` recorded its squash nowhere**, which is the same defect one layer down: it mutates the
+report and *returns* it as the flow's payload rather than saving it, so the stored copy kept the
+pre-squash sha while the branch held the squashed one. A later round on that task would have leased
+a sha the ref no longer held.
 
 **What is genuinely different is the posture.** Until now nothing left the host until the gate had
 spoken. conduct never deletes a ref - `-` is deliberately absent from `publish._FLAGS` - so `agents/`

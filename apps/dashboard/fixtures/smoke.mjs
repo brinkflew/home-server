@@ -25,6 +25,11 @@ const {
   isSettled,
   byUrgency,
 } = await load("/src/fleet.ts");
+// LOADED FOR THE FIRST TIME ON 2026-08-31. `boardRow` is where the approve
+// button's gate lives, and it had never been exercised here - so `waiting`
+// carrying a `closed_at` clause it should not have was invisible to every test
+// this application has.
+const { boardRow } = await load("/src/roundboard.ts");
 const {
   askAge,
   holdExpiresIn,
@@ -363,6 +368,37 @@ check("no publication row at all is",
 // carries the same work through - so the amber row above asked for attention
 // nobody owed. Task 1271 drew both on 2026-08-30: one in review as #272, one
 // accusing a round whose work is inside it.
+// A ROUND CONDUCT HAS FINISHED AND A PERSON HAS NOT. It closes when it reaches
+// the publish path, with the flow still suspended on the human gate - so this is
+// the ordinary shape of an approval, and it drew "stopped" in red for 26 hours
+// while the phone reminded about it twice. The three checks below it are the
+// negative controls: without them, hoisting waiting_on could have swallowed
+// every other closed verdict on the board.
+check("a closed round a person still owes an answer on says so",
+  roundState(by("wt-1254aa")), { tone: "warn", state: "waiting on you" });
+check("...and it is the same row, so the same round still ends stopped",
+  roundState({ ...by("wt-1254aa"), waiting_on: null }),
+  { tone: "fail", state: "stopped" });
+check("...a closed publication with no pull request is still not published",
+  roundState({ ...by("wt-1254aa"), waiting_on: null, published: true }).state,
+  "not published");
+check("...and the open round that always worked is untouched",
+  roundState(by("wt-9f21c4")), { tone: "warn", state: "waiting on you" });
+// THE ACTION AND THE SORT MOVED WITH IT, because a row that says "waiting on
+// you" and then offers "task" is worse than one that says nothing: the approve
+// link is on the notice, and it was being thrown away with the state.
+check("a closed round owing an answer offers the approval, not the tracker",
+  roundAction(by("wt-1254aa")).label, "approve");
+check("...at conduct's own link, which is never a resume url",
+  roundAction(by("wt-1254aa")).href, by("wt-1254aa").link);
+// boardRow.waiting IS WHAT RoundPage GATES ITS APPROVE AND DECLINE CHIPS ON, so
+// with a closed_at clause the one round that could be answered was the one
+// showing no way to answer it. `moving` keeps its clause: that one asks whether
+// the MACHINE is working, which a closed round never is.
+const row1254 = boardRow(by("wt-1254aa"), { control: fleet.control, now: NOW });
+check("the approve chips are offered on a closed round owing an answer",
+  [row1254.waiting, row1254.moving], [true, false]);
+
 check("a round a later one carried is superseded, not accused",
   roundState(by("wt-1271aa")), { tone: "off", state: "superseded" });
 check("...and it outranks both closed verdicts it used to be confused with",
@@ -657,9 +693,18 @@ check("an ask from the future is dropped", askAge(stands, "intake_off", ASKED_AT
 console.log("\n-- the board puts what needs acting on at the top --");
 
 const ordered = [...fleet.rounds].sort(byUrgency).map((r) => r.worktree_id);
-check("a person's answer comes first", ordered[0], "wt-9f21c4");
-check("no finished round outranks a live one",
-  ordered.slice(0, 3).every((id) => by(id).closed_at === null), true);
+// EVERY ROUND OWING A PERSON AN ANSWER, AND NOTHING ELSE, IS AT THE TOP - open
+// or closed. This asserted `closed_at === null` for the top three until
+// 2026-08-31, which was true only because no fixture had the shape that matters
+// most: conduct finishes a round and THEN a person owes an answer on it, so
+// ranking on closed_at sank the one row that needed acting on.
+const owed = fleet.rounds.filter((r) => r.waiting_on === "person").length;
+check("two rounds owe a person an answer", owed, 2);
+check("both come first, whether or not conduct has finished with them",
+  ordered.slice(0, owed).every((id) => by(id).waiting_on === "person"), true);
+check("no finished round that owes nothing outranks a live one",
+  ordered.slice(owed).findIndex((id) => by(id).closed_at === null)
+    < ordered.slice(owed).findIndex((id) => by(id).closed_at !== null), true);
 
 // A LOCKED DATABASE IS NOT AN IDLE FLEET, and both produce the same empty list.
 const broken = fleetUnreadable();

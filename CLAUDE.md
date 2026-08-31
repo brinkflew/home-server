@@ -1412,6 +1412,31 @@ signal read green.
 - `systemd-analyze verify` is SILENT on it - a cycle belongs to the job transaction, not the unit
   file - so no lint leg can catch it, and none was added pretending to.
 
+### The test suite was a client of the live control plane
+- `unittest discover` on the server rewrote all four flows and answered a live suspended step out of
+  an empty temp database, killing a dev phase 29m36s in. Inert on a workstation for one reason: no
+  `.env` there. `reconcile.run` - real worktrees, real scratch - was the worse half.
+- **`discover -s tests` does not import `tests/__init__.py`**, so adding the package and assuming it
+  ran is the same mistake; an explicit `import tests` per file is what installs it. The refusal must
+  be a `BaseException` or `except Exception` swallows it and the run goes green.
+
+### A failed verification erased what conduct had pushed
+- `run_verify` rewrites the one-row-per-worktree report in a `finally`, so a gate that raised before
+  its own push wiped the dev phase's branch and sha. The next round pushed plain:
+  `(non-fast-forward)`, twice, $25.02, no pull request. `(stale info)` is the other sentence.
+- The pair lives on the append-only run log now. `run.branch` had been WRITE-ONLY since it was
+  added, so the durable copy always existed; the verification's row is under `<wt>-verify`, and
+  `run_ship` recorded its squash nowhere at all.
+
+### The board drew a pending approval as "stopped", and the host check was right
+- conduct closes the round at the publish path while the flow is still suspended, so a closed round
+  matched no notice and drew red for 26 hours - with the approve buttons suppressed. True of every
+  approval ever. `agents.approvals_pending` and `agents.intake` were both correct throughout.
+- **A round's dispatch rows cannot supply its job id**: conduct writes the dispatch one second
+  before the run row it opens, so the last one in any window belongs to the NEXT round.
+  `publication.job_id` is exact and was already joined. `waiting_on: "person"` is now independent of
+  `closed_at`; `"conduct"` and `moving` are deliberately not.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless
