@@ -122,6 +122,34 @@ export function useQuotaHold(): QuotaControl {
 }
 
 /**
+ * The window's own sentence: when it comes back, or when it came back.
+ *
+ * PURE, AND OUT HERE RATHER THAN IN THE PAGE, for the reason src/fleet.ts opens
+ * with: this lived inline in RoundsPage.vue as a four-line computed, which
+ * fixtures/smoke.mjs cannot reach, so neither direction had ever been asserted.
+ *
+ * BOTH DIRECTIONS, AND THE SECOND ONE IS WHY THIS EXISTS. It used to be
+ * `clears in 2d` or null, so a window that had ROLLED OVER produced null and
+ * quotaSub's fallback captioned the fleet's most recent reading "no window
+ * recorded" - while the reset time it needed was in the marker, in the store,
+ * and rendered in the tooltip one line down. A window that has ended is the best
+ * news a hold can get; it was being reported as an absence of evidence.
+ *
+ * NO ABSOLUTE STAMP, and that is not a style choice. The host runs UTC and the
+ * household does not, so a rendered `2026-08-31T14:00:00Z` is a number a person
+ * has to convert before it means anything. Every other clock on this page is a
+ * duration for the same reason.
+ */
+export function quotaWindow(resetsAt: number | undefined, nowUnix: number): string | null {
+  if (resetsAt === undefined || !Number.isFinite(resetsAt) || !Number.isFinite(nowUnix)) {
+    return null;
+  }
+  return resetsAt > nowUnix
+    ? `clears in ${fmt.coarse(resetsAt - nowUnix)}`
+    : `rolled over ${fmt.coarse(nowUnix - resetsAt)} ago`;
+}
+
+/**
  * The line under the quota reading, composed here because it is this page's
  * sentence rather than the derivation's.
  *
@@ -130,14 +158,14 @@ export function useQuotaHold(): QuotaControl {
  * right countdown - the window comes back when it comes back - so it is kept and
  * prefixed rather than replaced.
  *
- * NO ABSOLUTE STAMP, and that is not a style choice. The host runs UTC and the
- * household does not, so a rendered `2026-08-31T14:00:00Z` is a number a person
- * has to convert before it means anything. Every other clock on this page is a
- * duration for the same reason.
+ * THE PARAMETER IS THE WINDOW AND NOT THE COUNTDOWN. It was named `clears` while
+ * it could only ever say "clears in ...", and quotaWindow above now answers in
+ * both directions; a name that describes one of the two branches is how the
+ * fallback below came to speak for a window that exists.
  */
 export function quotaSub(
   hold: QuotaHold,
-  clears: string | null,
+  windowLine: string | null,
   rejected: boolean,
   askedFor: number | null,
   midPhase: boolean,
@@ -146,10 +174,10 @@ export function quotaSub(
     const waiting = midPhase ? " - conduct is mid-phase, and answers this from inside it" : "";
     return `${hold.label} asked ${fmt.coarse(askedFor)} ago${waiting}`;
   }
-  if (!hold.spending) return clears ?? "no window recorded";
+  if (!hold.spending) return windowLine ?? "no window recorded";
   // THE COMBINATION THAT SURPRISES PEOPLE, and the one worth the longer
   // sentence: the warning hold is lifted and the fleet is stopped anyway,
   // because lifting it moves the level to a rejection and no further.
   const head = rejected ? "spending, but the API is refusing" : "spending the headroom";
-  return clears ? `${head} - ${clears}` : head;
+  return windowLine ? `${head} - ${windowLine}` : head;
 }

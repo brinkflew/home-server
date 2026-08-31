@@ -41,6 +41,10 @@ const {
   HOLD_TIMEOUT_S,
 } = await load("/src/control.ts");
 const fmt = await load("/src/format.ts");
+// LOADED FOR THE FIRST TIME ON 2026-08-31, for the reason boardRow was: the
+// quota sub-line is a pure function living in a composable, and nothing had
+// ever called it outside a browser.
+const { quotaSub, quotaWindow } = await load("/src/composables/useQuotaHold.ts");
 const { control } = await load("/src/api/control.ts");
 
 let failures = 0;
@@ -220,6 +224,32 @@ check("the warning is amber", quotaTone(1).tone, "warn");
 check("rejected is red", quotaTone(2).tone, "fail");
 check("an unrecognised status is not green", quotaTone(7).tone, "fail");
 
+// A WINDOW THAT HAS ROLLED OVER IS NOT A HOLD, AND THIS IS THE THIRD READER OF
+// THAT RULE RATHER THAN THE FIRST. bin/verify-host.sh's agents.quota_headroom
+// clears on `now >= resets_at` and says "the fleet is dispatching again";
+// AgentQuotaRejected only fires while
+// home_server_agent_quota_resets_timestamp_seconds > time(), so it never pages
+// about a window that came back. This reader had no such clause, so a status the
+// API set at 13:38Z on 2026-08-30 drew amber here for the whole of the following
+// day - against a marker whose OWN resets_at said 14:00Z, and a fleet that was
+// dispatching. The status is a reading of one model call and the window it
+// described either has rolled over or has not; nothing here is a staleness rule.
+check("a rolled-over warning is green", quotaTone(1, 1000, 2000).tone, "ok");
+check("...and says the window cleared", quotaTone(1, 1000, 2000).state, "cleared");
+// A REJECTION CLEARS TOO, which is the arm that looks wrong and is not: the
+// refusal was the API's answer to one call inside a window that has since ended,
+// and both of the other two readers grade it exactly this way.
+check("a rolled-over rejection clears too", quotaTone(2, 1000, 2000).tone, "ok");
+check("the boundary counts as cleared", quotaTone(1, 2000, 2000).state, "cleared");
+// THE NEGATIVE CONTROLS, which are what make the four above mean anything. The
+// last two are the honest default: with no reset stamp to compare against, a
+// reading cannot be talked out of by this function.
+check("a live window still holds", quotaTone(1, 3000, 2000).tone, "warn");
+check("a live rejection still fails", quotaTone(2, 3000, 2000).tone, "fail");
+check("no reset stamp claims nothing", quotaTone(1, undefined, 2000).tone, "warn");
+check("an unreadable reset claims nothing", quotaTone(1, Number.NaN, 2000).tone, "warn");
+check("allowed is allowed, cleared or not", quotaTone(0, 1000, 2000).state, "allowed");
+
 // --- the quota hold, which is a THRESHOLD and not a switch -------------------
 //
 // THE CHIP'S LABEL AND THE COMMAND IT SENDS COME OFF ONE BRANCH, which is what
@@ -257,6 +287,27 @@ for (const value of [null, stamp(3600), stamp(-60)]) {
   check(`label and action agree for ${value ?? "no row"}`,
         hold.action, hold.label === "pace" ? "quota_pace" : "quota_spend");
 }
+
+// THE SENTENCE UNDER THE PILL HAD THE SAME HOLE AND A WORSE WORDING. With no
+// override live, quotaSub falls through to the window line - and the page passed
+// null for a window that had rolled over, so the fleet's most recent reading was
+// captioned "no window recorded" about a window whose reset time is in the
+// marker, in the store and in the tooltip beside it.
+check("a rolled-over window is not an absent one",
+      quotaSub(quotaHold(held(null), NOW), "rolled over 4h ago", false, null, false),
+      "rolled over 4h ago");
+check("a window nothing recorded still says so",
+      quotaSub(quotaHold(held(null), NOW), null, false, null, false),
+      "no window recorded");
+
+// AND THE LINE ITSELF, WHICH THE PAGE USED TO BUILD INLINE. The null branch is
+// the one that mattered: it was every window that had already come back.
+check("a live window counts down", quotaWindow(NOW + 7200, NOW), "clears in 2h");
+check("a window that ended says when",
+      quotaWindow(NOW - 7200, NOW), "rolled over 2h ago");
+check("the boundary has rolled over", quotaWindow(NOW, NOW), "rolled over 0s ago");
+check("no reset stamp is still null", quotaWindow(undefined, NOW), null);
+check("an unreadable stamp is null", quotaWindow(Number.NaN, NOW), null);
 
 check("a heartbeat nobody wrote is grey", heartbeatTone(Number.NaN, 600).tone, "off");
 check("a stale heartbeat is amber", heartbeatTone(900, 600).tone, "warn");

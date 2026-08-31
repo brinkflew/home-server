@@ -4231,3 +4231,36 @@ three of them are the same mistake in different clothes.
 - **No fixture had the shape**: all thirteen closed rounds carried `waiting_on: null`, and
   `fixtures/smoke.mjs` had never loaded `roundboard.ts` at all, so `waiting` and `moving` had no
   coverage of any kind.
+
+### The window came back and one reader of three never heard
+- **`home_server_agent_quota_status` describes ONE model call**, and the API says in the same breath
+  when the window it was answered against comes back. `docs/observability.md` states the rule -
+  *"the window either has rolled over or has not, and the API said when"* - which is why the
+  staleness arm was removed rather than tuned.
+- **The check and the alert both implement it and the dashboard did not.**
+  `agents.quota_headroom` clears on `now >= resets_at` and reports *"has since cleared ... the fleet
+  is dispatching again"*; `AgentQuotaRejected` fires only while
+  `home_server_agent_quota_resets_timestamp_seconds > time()`, so it never pages about a window that
+  ended. `health.ts`'s `quotaTone` took the status **alone**.
+- **So a reading taken at 13:38Z on 2026-08-30 drew amber all through 2026-08-31**, against a
+  marker whose own `resets_at` said 14:00:00Z, on a fleet that had gone back to work. Both halves
+  were already on the page - the status in the pill, `quotaResets` in the line under it - and
+  nothing put them together.
+- **It could not correct itself, either.** The marker's status is rewritten only by the next model
+  phase, and the fleet was holding at `REVIEW_CAP`, so nothing was going to run and refresh it.
+  A reading that only a phase can update needs its expiry read, not its age.
+- **`quotaSub` had the same hole with a worse sentence.** With no override live it falls through to
+  the window line, and the page passed `null` for a window that had rolled over - so the caption
+  read *"no window recorded"* about a window whose reset time was in the marker, in the store, and
+  rendered in the tooltip one line down. An ending is the best news a hold can get; it was being
+  reported as an absence of evidence.
+- **A rejection clears too, and that arm looks wrong until the other two readers are checked.** The
+  refusal was the API's answer inside a window that has since ended. All three now grade it the same
+  way, `>=` to the second, matching the battery's `-ge`.
+- **The clearing test is optional and its absence claims nothing.** With no reset stamp there is no
+  evidence the window ended, so the reading stands - the same posture that makes an absent status
+  grey rather than green.
+- **The derivation was a four-line computed inside `RoundsPage.vue`**, which `fixtures/smoke.mjs`
+  structurally cannot reach, so neither direction of it had ever been asserted. `quotaWindow` is
+  pure and out here now, and the composable was loaded by the smoke test for the first time - the
+  same blind spot, and the same repair, as `roundboard.ts` the day before.

@@ -104,12 +104,48 @@ export function laneTone(
  * 2 rejected, and anything unrecognised is 2. The series is ABSENT until a
  * model phase has run at all, which is grey - a fleet nobody has asked is not a
  * fleet with headroom.
+ *
+ * A WINDOW THAT HAS ROLLED OVER IS NOT A HOLD, AND THIS WAS THE ONE READER OF
+ * THREE THAT DID NOT KNOW IT. The status describes ONE model call, and the API
+ * says in the same breath when the window it was refused against comes back -
+ * which is why nothing here is a staleness rule and why a stale reading is
+ * still a reading. bin/verify-host.sh's agents.quota_headroom clears on
+ * `now >= resets_at` and reports "the fleet is dispatching again";
+ * AgentQuotaRejected fires only while
+ * home_server_agent_quota_resets_timestamp_seconds > time(), so it never pages
+ * about a window that came back. This function had no such clause, so a reading
+ * taken at 13:38Z on 2026-08-30 drew amber for the whole of the following day
+ * against a marker whose own resets_at said 14:00Z - contradicting the check and
+ * the alert rule, on a fleet that had gone back to work hours earlier.
+ *
+ * THE TWO CLOCKS ARE OPTIONAL AND THEIR ABSENCE CLAIMS NOTHING. Without a reset
+ * stamp to compare against there is no evidence the window ended, so the reading
+ * stands - the same posture as an absent status ranking grey rather than green.
+ * `>=` rather than `>`, matching the battery's own `-ge` to the second.
  */
-export function quotaTone(status: number | undefined): ContainerHealth {
+export function quotaTone(
+  status: number | undefined,
+  resetsAt?: number,
+  nowUnix?: number,
+): ContainerHealth {
   if (status === undefined || !Number.isFinite(status)) {
     return { tone: "off", state: "not read yet" };
   }
+  // ALLOWED STAYS ALLOWED. "cleared" is a word about a hold that has ended, and
+  // a window nothing was holding on never had one to end.
   if (status <= 0) return { tone: "ok", state: "allowed" };
+  if (
+    resetsAt !== undefined &&
+    Number.isFinite(resetsAt) &&
+    nowUnix !== undefined &&
+    Number.isFinite(nowUnix) &&
+    nowUnix >= resetsAt
+  ) {
+    // A REJECTION CLEARS TOO, which looks like the wrong arm and is not: the
+    // refusal was the API's answer inside a window that has since ended, and
+    // both of the other two readers grade it exactly this way.
+    return { tone: "ok", state: "cleared" };
+  }
   if (status === 1) return { tone: "warn", state: "warning" };
   return { tone: "fail", state: "rejected" };
 }

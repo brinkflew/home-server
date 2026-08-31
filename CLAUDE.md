@@ -1437,6 +1437,15 @@ signal read green.
   `publication.job_id` is exact and was already joined. `waiting_on: "person"` is now independent of
   `closed_at`; `"conduct"` and `moving` are deliberately not.
 
+### The window came back and one reader of three never heard
+- The quota status describes ONE model call and carries its own `resets_at`. `agents.quota_headroom`
+  clears on it and `AgentQuotaRejected` will not fire past it; `quotaTone` read the status ALONE, so
+  a 2026-08-30 reading drew amber all through the next day on a fleet that was dispatching - and it
+  could not self-correct, because only a phase rewrites the status and the fleet was holding at
+  `REVIEW_CAP`. Both halves were already on the page and nothing put them together.
+- `quotaSub` captioned that same window "no window recorded" while its reset time sat in the tooltip
+  one line down, and the derivation was a computed inside a `.vue` file, which smoke cannot reach.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

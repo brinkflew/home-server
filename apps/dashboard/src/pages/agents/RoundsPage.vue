@@ -28,7 +28,7 @@ import { usePoll } from "@/composables/usePoll";
 import { useMetricsStale } from "@/composables/useStaleness";
 import { useTooltip } from "@/composables/useTooltip";
 import { useIntake } from "@/composables/useIntake";
-import { quotaSub, useQuotaHold } from "@/composables/useQuotaHold";
+import { quotaSub, quotaWindow, useQuotaHold } from "@/composables/useQuotaHold";
 import { useHostStore } from "@/stores/host";
 import { useFleetStore } from "@/stores/fleet";
 import { instant, value } from "@/api/prometheus";
@@ -106,15 +106,17 @@ const phase = computed(() => {
   return { tone: age > PHASE_STUCK_S ? ("warn" as Tone) : ("ok" as Tone), state: "in flight", age };
 });
 
-const quota = computed(() => {
-  const q = quotaTone(m.value?.quotaStatus);
-  const resets = m.value?.quotaResets;
-  const clears =
-    resets !== undefined && Number.isFinite(resets) && resets > host.now
-      ? `clears in ${fmt.coarse(resets - host.now)}`
-      : null;
-  return { ...q, clears };
-});
+/**
+ * THE RESET TIME GRADES THE READING, IT DOES NOT ONLY CAPTION IT. Both halves
+ * were already on this page - quotaStatus in the pill, quotaResets in the line
+ * under it - and nothing put them together, so a window that had rolled over
+ * drew amber under a tooltip saying when it had come back. See quotaTone, which
+ * carries which two other readers had the clause all along.
+ */
+const quota = computed(() => ({
+  ...quotaTone(m.value?.quotaStatus, m.value?.quotaResets, host.now),
+  windowLine: quotaWindow(m.value?.quotaResets, host.now),
+}));
 
 const midPhase = computed(() => phase.value.state === "in flight");
 const intake = useIntake(midPhase);
@@ -205,7 +207,7 @@ const quotaTip = computed(() => ({
   title: "quota",
   lines: [
     quota.value.state,
-    quota.value.clears ?? "no reset time recorded",
+    quota.value.windowLine ?? "no reset time recorded",
     spend.state.value.spending
       ? "the warning hold is lifted for this window"
       : "holding at the warning, which is the default",
@@ -349,7 +351,7 @@ function rail(tone: Tone): string {
             />
           </span>
           <span class="mono sub" :class="{ warnish: spend.state.value.spending }">{{
-            quotaSub(spend.state.value, quota.clears, rejected,
+            quotaSub(spend.state.value, quota.windowLine, rejected,
                      spend.askedFor.value, midPhase)
           }}</span>
         </div>

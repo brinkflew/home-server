@@ -143,6 +143,28 @@ no further.
 `2026-08-31T14:00:00Z` is a number a person has to convert before it means anything. Every other
 clock on this page is a duration for the same reason.
 
+**AND THE RESET TIME NOW GRADES THE READING RATHER THAN ONLY CAPTIONING IT, from 2026-08-31.** The
+status describes one model call; the API says in the same breath when the window it was answered
+against comes back, which is why `docs/observability.md` removed the staleness arm instead of tuning
+it. `agents.quota_headroom` clears on `now >= resets_at` and `AgentQuotaRejected` will not fire past
+it - and `quotaTone` read the status alone, so a reading taken at 13:38Z on 2026-08-30 drew amber
+all through the following day against a marker whose own `resets_at` said 14:00:00Z, on a fleet that
+had gone back to work. **Both halves were already on this page** and nothing put them together. The
+pill reads `cleared` once the window has rolled over - including after a rejection, because that
+refusal was an answer inside a window that has since ended - and the line under it says
+`rolled over 4h ago` where it used to say **"no window recorded"**, about a window whose reset time
+was rendered in the tooltip immediately below.
+
+**It could not have corrected itself, either**, which is what makes it worth more than a colour.
+Only a model phase rewrites the status in the marker, and the fleet was holding at `REVIEW_CAP` with
+three changes waiting to be read - so nothing was going to run, and the amber would have stood until
+a person cleared the review queue.
+
+**`quotaWindow` is a pure function for the reason `src/fleet.ts` opens with.** It was a four-line
+computed inside `RoundsPage.vue`, which `fixtures/smoke.mjs` structurally cannot reach, so neither
+direction of it had ever been asserted - and the composable had never been loaded by the smoke test
+at all. The same blind spot as `roundboard.ts` the day before, and the same repair.
+
 **That takes the header to two accent chips**, which is inside the *"more than three raspberry
 elements, remove two"* budget and worth restating rather than rediscovering: `disarm`, `spend`, and
 the active nav tab.
