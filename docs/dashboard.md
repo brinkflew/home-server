@@ -1112,3 +1112,78 @@ the way `FindingsPanel` already nests it. And under `table-layout: fixed` the co
 from the **first row**, so hiding the `thead` at 640 - which is right, a header over one column names
 nothing - moved that to the first body row, which carries no widths: the two surviving columns split
 50/50 and every finding wrapped inside half a phone. The `th` hints still govern above the rung.
+
+**AND THE PICKER ON THAT PAGE WAS DRIVING HALF A BAND, WHICH IS THE COMPLAINT `FleetPage.vue`'S OWN
+DOCBLOCK HAD ALREADY WRITTEN DOWN.** *"A picker that changes nothing on screen is a lie about a
+control"* sat eight lines above two `ActivityBars` strips on a hardcoded fourteen UTC days, beside a
+memory chart that did answer it - so moving the window moved one card of two, and the band was
+labelled `Fourteen days`, which names a timeframe the picker is supposed to own. Fixed 2026-09-07,
+with the strips, the reading order and the register of the prose.
+
+**THE STRIPS BECAME TWO CHART LANES, AND THE ENCODING HAD TO CHANGE RATHER THAN THE SPAN.**
+`runs_today` and `tokens_today` are gauges conduct resets at UTC midnight with **no cumulative
+counter behind them anywhere**, which is what made the fourteen-bar strip right: a day's peak *is* a
+day's total. Tie that to a picker whose shortest rung is an hour and it collapses - one bucket at
+1h - and a per-bucket "increment" at any rung would be client-side reset arithmetic reported as a
+measurement. So the lanes draw **the gauge itself** over the picker's window: the sawtooth is the
+metric, and at 7d each tooth's peak is still that day's total. `dailyPeaks` and `utcDayStarts` went
+with their one consumer; `dailyRatios` and `dayStarts`, which bucket into LOCAL days for the
+container availability bars, stay and are a different question.
+
+**Three things came with the lane, and the third is the one worth having.** A crosshair readout,
+which the strips could not have - `ActivityBars` says of itself that it is *"deliberately not a
+chart: it has no axis and no scale, and it is not meant to be read as a number"*, which is right for
+sixteen rows of a pod rack and wrong for the only history panel on a page. The window. And
+**`useCrosshair` is module-level**, so hovering the runs lane marks the same instant on tokens *and*
+on slice memory in the card beside it: a memory spike can finally be read against the run that
+caused it. That is why all four ranges are fetched on **one** `options` - a lane on a different
+window would draw its cursor at a different instant while looking exactly as correct.
+
+The lane is `SystemPage.vue`'s shared timeline unchanged - a name, a plot, a reading with the
+window's peak - with two things it does not do. **Only the last lane passes `x-axis`**, so the one
+axis per card is rendered by the same component as the memory chart beside it, phone rung included,
+rather than by a hand-rolled row needing its own copy of the alternate-tick rule. And **the runs
+lane draws failures as a second series** at `opacity: 1` against the brightness ramp, because
+dimming them would say a failure matters less than the run it is a subset of. It is the first time
+the page says *when* a run failed rather than that one did.
+
+**`Over time`, and the span in the aside.** The label names the axis and not the length of it, so
+the picker cannot make it false; the span is `last {win.label}`, derived from the picker itself,
+which is the one place it can be stated without being able to drift.
+
+**`Band` gained `stretch`, and it is off by default because a stretched panel is dead air.** Two
+panels of genuinely different length must not be equalised - the band rule's answer to that is to
+give the taller one its own band, which is what the preconditions table got a week earlier, and
+stretching would have hidden that it wanted one. It is for panels of the SAME shape differing by a
+line of chrome: two charts on one axis, where a ragged bottom edge reads as one of them having
+failed to finish drawing. Here it absorbs 29px. If it is closing more than that, the band is wrong.
+
+**Intake is second on the page and was fifth.** It is the one thing on this view a person can act
+on, and it sat under a ten-row table and above a findings panel, buried in a stack of records. The
+order is the reading, the control that decides whether there will be another one, the history, then
+the evidence.
+
+**FULL CAPS IS THE COMMENTS' VOICE, NOT THE PAGE'S, AND THAT IS A RULE.** In a source file it is an
+author arguing with the next one and it earns its place; in a string a reader sees it is shouting at
+someone who asked a question. `AN INTAKE THAT HAS STOPPED LOOKS EXACTLY LIKE AN EMPTY BACKLOG`,
+`A CEILING IS NOT USAGE`, `THIS IS /var/agents, NOT THIS CHECKOUT` - eight of them on this page and
+one on `/ci`, all rewritten in sentence case with the argument unchanged. **Only acronyms and
+identifiers keep it**: UTC, SQL, PAT, UI, USD, FETCH_HEAD, WORKER_TAGS, MemoryMax.
+
+**`fmt.compact` is new, and the tokens condition is why.** It printed `289113220` - nine digits
+nobody reads and the widest thing in the row. Base 1000 rather than 1024, four lines from
+`fmt.bytes`, which does the opposite: these are counts, and a token count divided by 1024 is a
+quantity no source publishes. The exact figures moved into the tooltip, where a number you would
+quote belongs.
+
+**The two things a fixture could not see, and one it was actively hiding.** No fixture can move a
+picker or hover a plot, so both were driven by hand in a browser: the aside going `last 6h` ->
+`last 7d`, all four lane paths redrawing, three crosshair rules on screen at once and exactly one
+readout naming both series. That run is also what found the third: **the fixture ramp fell off a
+cliff at the right-hand edge of every window.** `dayRamp` computes `daysAgo` against a `now` frozen
+when the table is built and cached, while the page keeps asking for a range ending later than that -
+so every sample past it read `daysAgo = -1`, took another day's factor, and drew the run counter
+dropping from 7 to 3 for no reason. It had been there since the ramp was written and was invisible,
+because the only consumer was a strip reduced with `max`: a low tail inside today's bucket lost to
+the day's peak and the bar was right anyway. `src/uptime.ts` documents the same clamp for the same
+reason one function over. The headline and the lane's own reading disagreed on screen the whole time.

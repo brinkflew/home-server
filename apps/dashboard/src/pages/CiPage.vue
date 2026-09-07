@@ -599,7 +599,7 @@ const sliceTip = computed(() => ({
       </div>
 
       <p class="note mono">
-        Nothing here comes from GitHub. Queue depth and runner online status are NOT MEASURED on this
+        Nothing here comes from GitHub. Queue depth and runner online status are not measured on this
         host: the runner PAT must never enter a container, and an hourly poll of api.github.com was
         argued against rather than forgotten. These three lanes are what is observable, not the whole
         picture.

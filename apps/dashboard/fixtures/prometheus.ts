@@ -381,10 +381,10 @@ function bySeries(): Record<string, SeriesSpec[]> {
   table[AGENTS.quotaRead] = [{ metric: {}, at: () => now - 300 }];
   table[AGENTS.intakeLast] = [{ metric: {}, at: () => now - 260 }];
 
-  table[AGENTS.tokensToday] = [{ metric: {}, at: constant(2_140_000) }];
   table[AGENTS.tokensWeek] = [{ metric: {}, at: constant(11_900_000) }];
-  table[AGENTS.runsToday] = [{ metric: {}, at: constant(6) }];
-  table[AGENTS.runsFailedToday] = [{ metric: {}, at: constant(1) }];
+  // tokensToday, runsToday and runsFailedToday are the resetting gauges, and
+  // they are given their shape at the foot of this function - the fleet page
+  // draws all three over a time axis, so a constant would be three flat lines.
 
   // THE TWO WORKTREE COUNTS DISAGREE, deliberately: three leases against four
   // directories is an orphan, which is exactly what agents.worktree_orphans
@@ -414,35 +414,54 @@ function bySeries(): Record<string, SeriesSpec[]> {
   table[AGENTS.publishConfigured] = [{ metric: {}, at: constant(1) }];
   table[AGENTS.conductAge] = [{ metric: {}, at: constant(41) }];
 
-  // The daily strips. A resetting gauge, so the fixture ramps within a UTC day
-  // and drops back at midnight - which is what makes dailyPeaks' max reducer
-  // visibly right rather than merely plausible. Four days back is deliberately
-  // absent so a grey bar is on screen.
+  // The three resetting gauges, which the fleet page draws as lines over the
+  // window picker. Each one climbs through a UTC day and drops back to nothing
+  // at midnight, so a 7d window shows seven teeth and a 6h one shows a rise -
+  // the sawtooth IS the metric, and nothing on the page reduces it.
+  //
+  // Four days back is deliberately ABSENT so a hole is on screen at 7d. A hole
+  // and a flat zero are the two readings this page must never draw the same.
   const DAY = 86400;
 
   // A DIFFERENT PEAK EVERY DAY, and that is not decoration. The first version
-  // ramped every day to the same ceiling, so dailyPeaks' max reducer produced
-  // fourteen identical bars - which reads as a strip that failed to render
-  // rather than as a fleet with quiet days and busy ones, and would have hidden
-  // a real bug in the reducer behind a plausible-looking wall.
+  // ramped every day to the same ceiling, so a fortnight of them was a wall of
+  // identical teeth - which reads as a chart that failed to render rather than
+  // as a fleet with quiet days and busy ones, and would hide a real bug behind
+  // a plausible-looking shape.
+  //
+  // COSINE RATHER THAN SINE, so today's factor is 1 rather than 0.35: the
+  // headline reads this same series at `now` through an instant query, and a
+  // quiet fixture day made "1 phase run today" the shot on every screenshot.
   //
   // Deterministic rather than random, for the reason images.ts gives about
   // poster hues: a reload that reshuffles the data makes a visual review
   // impossible.
-  const dayFactor = (daysAgo: number) => 0.35 + 0.65 * Math.abs(Math.sin(daysAgo * 1.7));
+  const dayFactor = (daysAgo: number) => 0.35 + 0.65 * Math.abs(Math.cos(daysAgo * 1.7));
 
   const dayRamp = (peak: number, gapDaysAgo: number): At => (t) => {
-    const daysAgo = Math.floor((now - t) / DAY);
+    // CLAMPED AT ZERO, and this is the same clamp src/uptime.ts documents for
+    // the same reason. `now` is frozen when this table is built and cached,
+    // while the page keeps asking for a range ending LATER than that - so every
+    // sample past it read daysAgo = -1, took a different day's factor and drew
+    // the counter falling off a cliff at the right-hand edge of every window.
+    //
+    // Invisible until 2026-09-07, because the only consumer was a fourteen-bar
+    // strip reduced with max: a low tail inside today's bucket lost to the
+    // day's peak and the bar was right anyway. Drawn as a line it is a fleet
+    // whose run counter dropped from 7 to 3 for no reason.
+    const daysAgo = Math.max(0, Math.floor((now - t) / DAY));
     if (daysAgo === gapDaysAgo) return Number.NaN;
-    // A resetting counter: it climbs through the day and drops at UTC midnight,
-    // so the day's maximum IS the day's total - which is what makes dailyPeaks'
-    // choice of reducer visibly right rather than merely plausible.
     const intoDay = ((t % DAY) + DAY) % DAY;
     return Math.round(peak * dayFactor(daysAgo) * (0.2 + 0.8 * (intoDay / DAY)));
   };
-  table[AGENTS.runsHourly] = [{ metric: {}, at: dayRamp(9, 4) }];
-  table[AGENTS.runsFailedHourly] = [{ metric: {}, at: dayRamp(2, 4) }];
-  table[AGENTS.tokensHourly] = [{ metric: {}, at: dayRamp(2_600_000, 4) }];
+
+  // ONE GAP DAY ACROSS ALL THREE. Two lanes disagreeing about which day the
+  // store has no sample for would read as a data problem rather than as one.
+  // And failed <= runs at every instant by construction, because both ramps
+  // share the day factor and the fraction of the day.
+  table[AGENTS.runsToday] = [{ metric: {}, at: dayRamp(9, 4) }];
+  table[AGENTS.runsFailedToday] = [{ metric: {}, at: dayRamp(2, 4) }];
+  table[AGENTS.tokensToday] = [{ metric: {}, at: dayRamp(2_600_000, 4) }];
 
   return table;
 }

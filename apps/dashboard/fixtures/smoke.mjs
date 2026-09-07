@@ -15,7 +15,6 @@ const { sortRows, actionFor, badgeFor, whoLine, stateClass, STATE_LABEL, STATE_T
   await load("/src/media.ts");
 const { posterHeight, posterUrl } = await load("/src/images.ts");
 const { containerTone, laneTone, quotaTone, heartbeatTone } = await load("/src/health.ts");
-const { dailyPeaks, utcDayStarts } = await load("/src/uptime.ts");
 const { fleetDocument, fleetUnreadable } = await load("/fixtures/fleet.ts");
 const {
   roundState,
@@ -141,6 +140,23 @@ check("stopped is red", containerTone(false, undefined), { tone: "fail", state: 
 check("elapsed keeps every field past an hour", fmt.elapsed(3661), "01:01:01");
 check("elapsed of NaN is the dash", fmt.elapsed(Number.NaN), fmt.NO_DATA);
 check("percent of 0 is not the dash", fmt.percent(0, 0), "0%");
+
+// fmt.compact, which the fleet page's tokens lane, its reading, its peak and
+// the tokens condition in its header all render through. fmt.number(289113220)
+// is 289113220, which is nine digits nobody reads and what that condition
+// printed until 2026-09-07.
+//
+// BASE 1000, NOT 1024, and this is the assertion that says so: a thousand is a
+// clean "1.0k" and would be "1000" under fmt.bytes' divisor. The two live four
+// lines apart in format.ts and draw on the same page.
+check("compact is base 1000", fmt.compact(1000), "1.0k");
+check("compact keeps one decimal under a hundred", fmt.compact(41_231_004), "41.2M");
+check("compact drops it at three digits", fmt.compact(289_113_220), "289M");
+check("compact leaves a bare count alone", fmt.compact(940), "940");
+check("compact of zero is zero, not the dash", fmt.compact(0), "0");
+// The rule the whole of format.ts exists to keep: absence is a dash, never 0.
+check("compact of NaN is the dash", fmt.compact(Number.NaN), fmt.NO_DATA);
+check("compact carries a sign", fmt.compact(-2_600_000), "-2.6M");
 
 // --- the contract that must never be optional -------------------------------
 check("activity names every upstream", Object.keys(activity.sources).sort(), [
@@ -332,35 +348,6 @@ check("an unreadable stamp is null", quotaWindow(Number.NaN, NOW), null);
 
 check("a heartbeat nobody wrote is grey", heartbeatTone(Number.NaN, 600).tone, "off");
 check("a stale heartbeat is amber", heartbeatTone(900, 600).tone, "warn");
-
-// --- the UTC daily strip -----------------------------------------------------
-//
-// The trap this exists for: these are gauges conduct resets at UTC midnight, and
-// bucketing them into LOCAL days would take each bar's maximum from the tail of
-// the previous UTC day. Anchor on a known instant rather than "now" so the
-// assertion does not depend on the machine's zone or on the hour it runs at.
-const DAY = 86400;
-const anchor = 1787_000_000 - (1787_000_000 % DAY) + 3600; // 01:00 UTC, some day
-
-console.log("\n-- the daily strip buckets on UTC --");
-const starts = utcDayStarts(3, anchor);
-check("day starts are UTC midnights", starts.map((t) => t % DAY), [0, 0, 0]);
-check("the last bar is today", starts[2], anchor - 3600);
-
-// A resetting counter: 8 late yesterday, then 1 early today. The max reducer
-// must report 8 for yesterday and 1 for today - never 8 for today.
-const peaks = dailyPeaks(
-  [
-    [anchor - DAY - 7200, 5],
-    [anchor - DAY - 3600, 8],
-    [anchor - 1800, 1],
-  ],
-  3,
-  anchor,
-);
-check("yesterday keeps its own peak", peaks[1], 8);
-check("today does not inherit it", peaks[2], 1);
-check("a day with no sample is NaN, not zero", Number.isNaN(peaks[0]), true);
 
 // --- the fleet document ------------------------------------------------------
 console.log("\n-- the fleet document --");

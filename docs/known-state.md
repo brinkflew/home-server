@@ -4458,3 +4458,19 @@ Recorded 2026-09-07, with the board's filter, the step rail and the three render
   `src/health.ts` already existed and is right. The `agents` section has never carried a `fail`, so
   the one finding on that page which pages a phone would have drawn as a warning and no fixture
   could have shown it; the assertion plants one.
+
+### A reducer hid a defect in the thing it reduced, for as long as it existed
+- **The fixture ramp fell off a cliff at the right-hand edge of every window.** `dayRamp` computes
+  `daysAgo` against a `now` frozen when the table is built and cached, while the page keeps asking
+  for a range ending later than that - so every sample past it read `daysAgo = -1`, took a different
+  day's factor, and drew the fleet's run counter dropping from 7 to 3 for no reason. `src/uptime.ts`
+  documents the identical clamp, in the same words, for the same reason, one file over.
+- **It was invisible for as long as the only consumer reduced it with `max`.** A fourteen-bar strip
+  took each UTC day's peak, so a low tail inside today's bucket lost to the day's maximum and the
+  bar was right anyway. Nothing was wrong with the reducer; drawing the raw series over a window is
+  what exposed the input. A reducer is not a check on its own input, and the more forgiving it is
+  the longer it will carry a broken one.
+- **Two readings of one series disagreed on screen throughout.** The headline reads it through an
+  instant query and the lane through a range, so `3 phase runs today` sat above a lane whose own
+  reading said 7. Nothing in this repository compares two consumers of one metric, and a screenshot
+  review had passed over it once already.

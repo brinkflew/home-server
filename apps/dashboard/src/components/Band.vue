@@ -22,8 +22,26 @@ withDefaults(
     label?: string;
     /** 1 stacks; 2 or more is that many equal columns. */
     cols?: number;
+    /**
+     * Make every panel in the band as tall as the tallest one.
+     *
+     * OFF BY DEFAULT, BECAUSE A STRETCHED PANEL IS DEAD AIR. Two panels of
+     * genuinely different length - a ten-row table beside a three-line switch -
+     * must not be equalised; the band rule's answer to that is to give the
+     * taller one its own band, and stretching instead would hide the fact that
+     * it wanted one.
+     *
+     * Set it where the panels are the SAME SHAPE and differ by a line or two of
+     * chrome: two charts on one axis, where a ragged bottom edge reads as one of
+     * them having failed to finish drawing. It absorbs a few tens of pixels, not
+     * a few hundred - if it is closing a large gap, the band is wrong.
+     *
+     * A prop rather than a second component, on ActivityBars' precedent:
+     * everything else about the two is identical.
+     */
+    stretch?: boolean;
   }>(),
-  { label: "", cols: 1 },
+  { label: "", cols: 1, stretch: false },
 );
 </script>
 
@@ -33,7 +51,7 @@ withDefaults(
       <span class="label">{{ label }}</span>
       <span class="aside"><slot name="aside" /></span>
     </div>
-    <div class="body" :style="{ '--cols': cols }">
+    <div class="body" :class="{ stretch }" :style="{ '--cols': cols }">
       <slot />
     </div>
   </section>
@@ -68,6 +86,10 @@ withDefaults(
   gap: var(--gap);
   align-items: start;
   min-width: 0;
+}
+
+.body.stretch {
+  align-items: stretch;
 }
 
 /* The reference viewport is 1360 wide. Below that a three-up band is three

@@ -1509,6 +1509,14 @@ signal read green.
   `checkout_clean`. smoke.mjs now asserts every id against `bin/verify-host.sh`.
 - The containment tone was hand-rolled and mapped `fail` to amber; `checkTone()` was already right.
 
+### A reducer hid a defect in the thing it reduced
+- A fixture ramp fell off a cliff at every window's right edge, and a `max` over the UTC day masked
+  it for as long as that was the only consumer. Drawing the raw series is what exposed it; a reducer
+  is not a check on its own input.
+- The headline and the lane's own reading of one series disagreed on screen the whole time, because
+  one is an instant query and the other a range. Nothing here compares two consumers of one metric.
+
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

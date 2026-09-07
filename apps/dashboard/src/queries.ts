@@ -363,7 +363,20 @@ export const AGENTS = {
 
   intakeLast: "home_server_agent_intake_last_timestamp_seconds",
 
-  /** Gauges that reset at midnight UTC. See the daily strips below. */
+  /**
+   * GAUGES conduct RESETS AT UTC MIDNIGHT, and the fleet page draws all three
+   * of them over the picker's window as lines rather than reducing them.
+   *
+   * The sawtooth IS the metric: it climbs through the day and drops to zero at
+   * midnight, so a 7d window shows seven teeth whose peaks are the daily
+   * totals. Nothing derives a per-bucket increment from them, and nothing
+   * should - there is no cumulative counter behind these anywhere, so an
+   * increment would be client-side reset arithmetic reported as a measurement.
+   *
+   * The reset is at UTC midnight because the host runs UTC, which CLAUDE.md
+   * records the household does not. That is a caption on the panel, not an
+   * adjustment made to the data.
+   */
   tokensToday: "home_server_agent_tokens_today",
   tokensWeek: "home_server_agent_tokens_week",
   runsToday: "home_server_agent_runs_today",
@@ -403,24 +416,6 @@ export const AGENTS = {
    *  is named for what it can prove and the panel must be too. */
   publishConfigured: "home_server_agents_publish_configured",
   conductAge: "home_server_agents_conduct_age_seconds",
-
-  /**
-   * THE DAILY STRIPS, AND THEY BUCKET ON UTC.
-   *
-   * These are gauges that reset at midnight, so the day's peak IS the day's
-   * total and max_over_time is the right reducer. The reset is at UTC midnight
-   * because the host runs UTC - CLAUDE.md records that the household does not -
-   * so a strip bucketed into LOCAL days, which is what src/uptime.ts produces
-   * for the container availability bars, would straddle every reset and report
-   * the previous day's peak. The page buckets these itself and labels the strip
-   * UTC.
-   *
-   * Fetched at a 1h step: 721 points per series over 30 days, well inside
-   * Prometheus' 11,000-point cap, and 24 samples for every bucket.
-   */
-  runsHourly: "max_over_time(home_server_agent_runs_today[1h])",
-  runsFailedHourly: "max_over_time(home_server_agent_runs_failed_today[1h])",
-  tokensHourly: "max_over_time(home_server_agent_tokens_today[1h])",
 } as const;
 
 /** Flattened, so the fixtures can assert they cover every one of them. */

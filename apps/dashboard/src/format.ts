@@ -48,6 +48,36 @@ export function number(n: number, digits = 0): string {
   return n.toFixed(digits);
 }
 
+/**
+ * "289M", "41.2M", "2.1M", "940". A number too long to read as digits.
+ *
+ * BASE 1000, NOT 1024, and the distinction matters because fmt.bytes sits four
+ * lines above this one doing the opposite. These are COUNTS - tokens, runs -
+ * and a token count divided by 1024 is a quantity nobody reports; every source
+ * that publishes one publishes it in thousands.
+ *
+ * The unit letters stop at T on purpose. "B" for billion is one character from
+ * "B" for bytes on a page that draws both, so the ramp runs k / M / G / T and a
+ * reader who knows the byte units reads these the same way.
+ */
+export function compact(n: number, digits = 1): string {
+  if (!Number.isFinite(n)) return NO_DATA;
+
+  const sign = n < 0 ? "-" : "";
+  let v = Math.abs(n);
+  if (v < 1000) return `${sign}${v.toFixed(0)}`;
+
+  const units = ["k", "M", "G", "T"];
+  let unit = -1;
+  while (v >= 1000 && unit < units.length - 1) {
+    v /= 1000;
+    unit += 1;
+  }
+  // Same rule as bytes(): a three-digit value does not need a decimal, so
+  // "289M" rather than "289.1M", and the column stays four characters wide.
+  return `${sign}${v.toFixed(v >= 100 ? 0 : digits)}${units[unit]}`;
+}
+
 export function celsius(n: number): string {
   if (!Number.isFinite(n)) return NO_DATA;
   return `${n.toFixed(0)}C`;

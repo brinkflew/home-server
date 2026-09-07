@@ -26,12 +26,29 @@
  *
  * THIS IS THE ONLY AGENTS VIEW WITH A TIME AXIS, so it is the only one that
  * teleports a window picker. A picker that changes nothing on screen is a lie
- * about a control.
+ * about a control - AND HALF THIS BAND WAS THAT LIE UNTIL 2026-09-07. Runs and
+ * tokens were fourteen hardcoded UTC days of ActivityBars beside a memory chart
+ * that did answer the picker, so moving it moved one card of two.
  *
- * THE INTAKE PANEL IS THE PROVENANCE HALF OF A DELIBERATE DUPLICATION. The
- * board's tile answers "is the fleet armed"; this answers "who said so, and
- * why", and only this one carries the note. Both read useIntake(), so the state
- * word, the chip's label and the command it sends come off one derivation.
+ * SO THE STRIPS BECAME TWO CHART LANES, on SystemPage's shared-timeline idiom.
+ * Three things came with that and the third is the point: a crosshair readout,
+ * which the strips could not have because ActivityBars is documented as "not
+ * meant to be read as a number"; the window; and useCrosshair being
+ * module-level, so hovering the runs lane marks the same instant on tokens AND
+ * on slice memory in the card beside it. A memory spike can finally be read
+ * against the run that caused it.
+ *
+ * NOTHING IS REDUCED OR DERIVED. These are gauges conduct resets at UTC
+ * midnight with no cumulative counter behind them anywhere, so the sawtooth IS
+ * the metric - and a per-bucket "increment" at any rung of the picker would be
+ * client-side reset arithmetic reported as a measurement.
+ *
+ * THE INTAKE PANEL IS THE PROVENANCE HALF OF A DELIBERATE DUPLICATION, AND IT
+ * IS SECOND ON THE PAGE. The board's tile answers "is the fleet armed"; this
+ * answers "who said so, and why", and only this one carries the note. Both read
+ * useIntake(), so the state word, the chip's label and the command it sends come
+ * off one derivation. It sat fifth, under a ten-row table and above a findings
+ * panel - the page's one action, buried in a stack of records.
  */
 import { computed, watch } from "vue";
 
@@ -41,7 +58,6 @@ import StatusDot from "@/components/StatusDot.vue";
 import StatePill from "@/components/StatePill.vue";
 import ChipButton from "@/components/ChipButton.vue";
 import MetricChart from "@/components/MetricChart.vue";
-import ActivityBars from "@/components/ActivityBars.vue";
 import FindingsPanel from "@/components/FindingsPanel.vue";
 import WindowPicker from "@/components/WindowPicker.vue";
 
@@ -54,8 +70,7 @@ import { useHostStore } from "@/stores/host";
 import { useFleetStore } from "@/stores/fleet";
 import { instant, range, value } from "@/api/prometheus";
 import { AGENTS } from "@/queries";
-import { toPoints } from "@/charts";
-import { dailyPeaks, utcDayStarts } from "@/uptime";
+import { latest, peak, toPoints, type ChartSeries } from "@/charts";
 import { heartbeatTone } from "@/health";
 import { leadReading, preconditionRows, preconditionTally, type PreconditionRow } from "@/machine";
 import type { InstantSeries, Tone } from "@/types";
@@ -69,7 +84,14 @@ const metricsStale = useMetricsStale();
 
 const CONDUCT_STALE_S = 600; // agents.conduct_fresh
 const INTAKE_STALE_S = 3600; // agents.intake
-const STRIP_DAYS = 14;
+
+/* THE PLOT'S HEIGHT, AND THE NAME AND READING BESIDE IT ARE CENTRED ON IT.
+   Bound into the grid as a custom property rather than repeated as a literal in
+   the stylesheet: the tokens lane carries an x-axis and the runs lane does not,
+   so a block centred on the whole CELL would sit 13px lower on one than the
+   other. This repository has already paid for a constant in one file that only
+   means anything because of a constant in another. */
+const LANE_H = 50;
 
 // --- the numbers -------------------------------------------------------------
 
@@ -125,27 +147,33 @@ const metrics = usePoll(async (signal) => {
 
 const m = computed(() => metrics.data.value);
 
-// --- charts and strips -------------------------------------------------------
-// THREE RANGES, NOT FIVE. The single page also fetched slicePids and the hourly
-// FAILED counter and drew neither.
+// --- the charts --------------------------------------------------------------
+// FOUR RANGES, ALL ON ONE WINDOW. They were three on two: the memory chart took
+// the picker's and the two strips took a hardcoded fourteen days, which is what
+// made the picker a control over half a band.
+//
+// ONE `options` FOR ALL FOUR IS LOAD-BEARING, not tidiness. useCrosshair holds a
+// TIME, and every plot resolves it against its own from/to - so a lane fetched
+// on a different window would draw its cursor at a different instant while
+// looking exactly as correct.
 
 const charts = usePoll(async (signal) => {
   const options = { window: win.value.seconds, step: win.value.step, signal };
-  const dayOptions = { window: STRIP_DAYS * 86400, step: 3600, signal };
 
-  const [sliceMem, runsHourly, tokensHourly] = await Promise.all([
+  const [sliceMem, runs, runsFailed, tokens] = await Promise.all([
     range(AGENTS.sliceMemory, options),
-    range(AGENTS.runsHourly, dayOptions),
-    range(AGENTS.tokensHourly, dayOptions),
+    range(AGENTS.runsToday, options),
+    range(AGENTS.runsFailedToday, options),
+    range(AGENTS.tokensToday, options),
   ]);
 
-  const peaks = (rows: typeof runsHourly) =>
-    rows[0] ? dailyPeaks(toPoints(rows[0].values), STRIP_DAYS, host.now) : [];
+  const points = (rows: typeof runs) => (rows[0] ? toPoints(rows[0].values) : []);
 
   return {
-    sliceMem: sliceMem[0] ? toPoints(sliceMem[0].values) : [],
-    runs: peaks(runsHourly),
-    tokens: peaks(tokensHourly),
+    sliceMem: points(sliceMem),
+    runs: points(runs),
+    runsFailed: points(runsFailed),
+    tokens: points(tokens),
   };
 }, 60_000);
 
@@ -156,8 +184,62 @@ watch(win, () => {
 const c = computed(() => charts.data.value);
 const from = computed(() => host.now - win.value.seconds);
 
-/** Oldest first, matching dailyPeaks' own indexing so the two cannot drift. */
-const stripDays = computed(() => utcDayStarts(STRIP_DAYS, host.now));
+// --- the two lanes -----------------------------------------------------------
+
+interface Lane {
+  key: string;
+  label: string;
+  sub: string;
+  format: (v: number) => string;
+  /** ONE AXIS PER CARD, under the last lane. Rendering it from MetricChart
+   *  rather than by hand is what makes it the same axis as the memory chart
+   *  beside it, phone rung included - that component already hides alternate
+   *  ticks below 640, and a hand-rolled row would need its own copy. */
+  axis: boolean;
+  /** The one the reading and the peak are taken from. */
+  series: ChartSeries[];
+}
+
+const lanes = computed<Lane[]>(() => {
+  const d = c.value;
+  return [
+    {
+      key: "runs",
+      label: "runs",
+      sub: "resets at UTC",
+      format: (v: number) => fmt.number(v),
+      axis: false,
+      series: [
+        { points: d?.runs ?? [], label: "runs", tone: "ok" },
+        // OPACITY 1, AGAINST THE BRIGHTNESS RAMP. A second series is drawn at
+        // 0.7 by default, which separates two readings of the same thing and is
+        // wrong for this one: dimming the failures says they matter less than
+        // the runs they are a subset of. This is the first time the page can
+        // say WHEN a run failed rather than that one did.
+        { points: d?.runsFailed ?? [], label: "failed", tone: "fail", opacity: 1 },
+      ],
+    },
+    {
+      key: "tokens",
+      label: "tokens",
+      sub: "its own tally",
+      format: fmt.compact,
+      axis: true,
+      series: [{ points: d?.tokens ?? [], label: "tokens", tone: "ok" }],
+    },
+  ];
+});
+
+/** The window's last reading and its high-water mark, off the PRIMARY series.
+ *  Both are NaN on an empty range and both render through format(), so absence
+ *  is a dash - never a zero, which on a counter is a claim. */
+const laneReading = (l: Lane) => l.format(latest(l.series[0].points));
+const lanePeak = (l: Lane) => l.format(peak(l.series[0].points));
+
+/** The band's aside. DERIVED FROM THE PICKER, which is the only place the span
+ *  can be stated without being able to drift - the band was labelled
+ *  `Fourteen days` and named a timeframe the picker was supposed to own. */
+const windowLabel = computed(() => `last ${win.value.label}`);
 
 // --- the lead ----------------------------------------------------------------
 
@@ -219,20 +301,26 @@ const rail = (tone: Tone) => `var(--${tone})`;
  * The caveats, keyed by the same id the row is. A caveat is one sentence saying
  * "this number is not what it looks like", and Tooltip has a slot styled amber
  * for exactly that - which is why the unit caveat below is not in a sub-line.
+ *
+ * SENTENCE CASE, AND THAT IS A RULE RATHER THAN A PREFERENCE. Full caps is the
+ * voice of the comments in this repository, where it is an author arguing with
+ * the next one; on screen it is shouting at a reader who asked a question. Only
+ * acronyms and identifiers keep it - UTC, SQL, PAT, UI, FETCH_HEAD, WORKER_TAGS.
+ * The argument each sentence makes is unchanged; only the register is.
  */
 const CAVEATS: Record<string, string> = {
   "agents.approvals_pending":
-    "An UPPER BOUND. This counts conduct's own suspended steps as well as a person's, and the SQL behind it cannot separate them - both are suspend > 0. The round board is what actually distinguishes them.",
+    "An upper bound. This counts conduct's own suspended steps as well as a person's, and the SQL behind it cannot separate them - both are suspend > 0. The round board is what actually distinguishes them.",
   "agents.worker_lanes":
     "Read back out of Postgres, not from the quadlet. A worker's tags hot-reload from a row the UI can edit, so WORKER_TAGS= is a bootstrap that leaves no trace in git when it is overridden.",
   "agents.mirror_fresh":
-    "FETCH_HEAD's mtime dates the ATTEMPT, not the change - which is the only reason a mirror that stopped fetching can be told from one nobody pushed to.",
+    "FETCH_HEAD's mtime dates the attempt, not the change - which is the only reason a mirror that stopped fetching can be told from one nobody pushed to.",
   "agents.checkout_drift":
-    "THIS IS /var/agents, NOT THIS CHECKOUT. It is conduct's own code, deployed the same way and drifting for the same reason; nothing else on this host looks at it.",
+    "This is /var/agents, not this checkout. It is conduct's own code, deployed the same way and drifting for the same reason; nothing else on this host looks at it.",
   "agents.publish_configured":
-    "Proves a key file and a workspace row EXIST, not that the token is unexpired - a fine-grained PAT expires, and the check is named for what it can prove. The live proof is the push itself.",
+    "Proves a key file and a workspace row exist, not that the token is unexpired - a fine-grained PAT expires, and the check is named for what it can prove. The live proof is the push itself.",
   "agents.runners_leaked":
-    "This watches TWO fleets. conduct-* and ci-* both carry io.home-server.ephemeral, so a CI lane running long shows up here too.",
+    "This watches two fleets. conduct-* and ci-* both carry io.home-server.ephemeral, so a CI lane running long shows up here too.",
 };
 
 function rowTip(r: PreconditionRow) {
@@ -256,7 +344,7 @@ const leadTip = computed(() => ({
     "a gauge conduct resets at UTC midnight",
   ],
   caveat:
-    "A DIFFERENT UNIT FROM THE BOARD. A round is one task through five phases, so six runs could be one round or three - the board counts rounds and this counts phase executions.",
+    "A different unit from the board. A round is one task through five phases, so six runs could be one round or three - the board counts rounds and this counts phase executions.",
 }));
 
 const costTip = computed(() => ({
@@ -269,6 +357,9 @@ const costTip = computed(() => ({
     "Reported, never retained: this comes from fleet.json, which keeps no history. Cost is not what paces the fleet - the quota status is, and there is deliberately no dollar ceiling anywhere.",
 }));
 
+// THE EXACT FIGURES LIVE HERE, because the condition above them is rendered
+// through fmt.compact now: "289M" is what a person reads and 289,113,220 is what
+// they would quote. A tooltip is where the second one belongs.
 const tokensTip = computed(() => ({
   title: "tokens",
   lines: [
@@ -286,14 +377,17 @@ const memoryTip = computed(() => ({
     `MemoryMax ${fmt.bytes(m.value?.sliceMemMax ?? Number.NaN)}`,
   ],
   caveat:
-    "A CEILING IS NOT USAGE. The frame is what the slice may take: it reserves 4,608M against a 30-day median nearer 957 MB, with a phase in flight about 7% of the time.",
+    "A ceiling is not usage. The frame is what the slice may take: it reserves 4,608M against a 30-day median nearer 957 MB, with a phase in flight about 7% of the time.",
 }));
 
-const stripTip = computed(() => ({
-  title: `runs and tokens, last ${STRIP_DAYS} days`,
-  lines: ["one bar per UTC day, peak of the day's counter", "both strips are the same fourteen days"],
+const lanesTip = computed(() => ({
+  title: `runs and tokens, ${windowLabel.value}`,
+  lines: [
+    "the counters themselves, on the window the picker names",
+    "hover any plot: the cursor marks the same instant on all three",
+  ],
   caveat:
-    "UTC, not local. These are gauges conduct resets at midnight and the host runs UTC - bucketing them into local days would take each bar's maximum from the tail of the previous day.",
+    "A running total for the UTC day, not activity in the window. The line climbs through the day and drops to zero at midnight, so a fall to nothing is the reset - and at 7d each tooth's peak is that day's total.",
 }));
 </script>
 
@@ -345,10 +439,13 @@ const stripTip = computed(() => ({
           </span>
         </div>
 
+        <!-- COMPACT, NOT THE DIGITS. This printed 289113220 for a week, which
+             is nine characters nobody reads and the widest thing in the row.
+             The exact figures are one hover away, in tokensTip. -->
         <div class="cond" v-bind="tip.hover('ag-tokens', tokensTip)">
           <span class="label">tokens</span>
-          <span class="mono cvalue">{{ fmt.number(m?.tokensToday ?? Number.NaN) }} today</span>
-          <span class="mono sub">{{ fmt.number(m?.tokensWeek ?? Number.NaN) }} this week</span>
+          <span class="mono cvalue">{{ fmt.compact(m?.tokensToday ?? Number.NaN) }} today</span>
+          <span class="mono sub">{{ fmt.compact(m?.tokensWeek ?? Number.NaN) }} this week</span>
         </div>
 
         <div class="cond" v-bind="tip.hover('ag-memory', memoryTip)">
@@ -360,26 +457,156 @@ const stripTip = computed(() => ({
     </PanelBox>
   </Band>
 
-  <Band label="Fourteen days" :cols="2">
-    <!-- ONE AXIS UNDER BOTH, because they are the same fourteen days. They were
-         two panels, and only one of them had an axis at all. -->
+  <!-- SECOND ON THE PAGE SINCE 2026-09-07, and it was fifth. This is the one
+       thing on this view a person can act on, and it sat under a ten-row table
+       of preconditions and above a findings panel - buried in a stack of
+       records. The order is now the reading, the control that decides whether
+       there will be another one, the history, then the evidence.
+
+       THE AGE IS THE BAND'S ASIDE, not a fact in the panel. An intake that has
+       stopped looks exactly like an empty backlog, so the age is what qualifies
+       every sentence below it - the same argument the conduct heartbeat makes at
+       the top of this page. -->
+  <Band label="Intake">
+    <template #aside>
+      <span class="mono" :class="{ warnish: intakeAge > INTAKE_STALE_S }">
+        last looked {{ Number.isFinite(intakeAge) ? `${fmt.coarse(intakeAge)} ago` : "never" }}
+      </span>
+    </template>
+
+    <PanelBox :stale="fleet.stale">
+      <div v-if="fleet.intake.length" class="intake">
+        <div v-for="i in fleet.intake" :key="i.project" class="irow">
+          <span class="mono iproject">{{ i.project }}</span>
+          <span class="iwhy">{{ i.last_why ?? "no reason recorded" }}</span>
+        </div>
+      </div>
+      <p v-else class="empty mono">The fleet has not looked for work on this host yet.</p>
+
+      <!-- THE SWITCH IN FRONT OF THE PASS THAT CHOOSES, and it says which of
+           the two sources is in force. conduct's descriptor is the shipped
+           default and a control row overrides it without a restart, so "is
+           intake armed" now has an answer and a plausible wrong one. The
+           collector cannot read a Python literal in another repository, so
+           "default" does not claim to know WHICH default. -->
+      <div class="switch">
+        <span class="sname">choose its own work</span>
+        <!-- THE SAME PILL THE BOARD DRAWS, off the same derivation. It was a
+             bare span with two colour classes of its own, so one value had two
+             renderings a tab apart. -->
+        <StatePill
+          class="spill"
+          :label="intake.state.value.state"
+          :tone="intake.state.value.tone"
+          size="sm"
+        />
+        <!-- THE SENTENCE IS THIS DRAWING'S OWN, and the board's is not. This one
+             carries the note, because the panel is the record of who set it and
+             why; the board carries only the age, because it answers a different
+             question. The state, the chip and the command are the parts that
+             must not differ, and those come from one function. -->
+        <span class="sub truncate">{{
+          intake.askedFor.value !== null
+            ? intake.sub.value
+            : intake.state.value.source === "set"
+              ? `set by hand ${fmt.sinceIso(intake.state.value.at)}${
+                  intake.state.value.note ? ` - ${intake.state.value.note}` : ""
+                }`
+              : "conduct's own default, unchanged"
+        }}</span>
+        <span class="sact">
+          <ChipButton
+            :label="intake.state.value.label"
+            :disabled="intake.disabled.value"
+            :act="() => intake.toggle()"
+            :title="intake.state.value.title"
+            :pending="intake.askedFor.value !== null"
+          />
+        </span>
+      </div>
+
+      <p class="note">
+        An intake that has stopped looks exactly like an empty backlog. Both leave every unit
+        active and every container healthy, and only the age of that last look tells them apart -
+        never the sentence.
+      </p>
+    </PanelBox>
+  </Band>
+
+  <!-- THE BAND NAMES THE AXIS AND NOT THE SPAN, so the picker cannot make its
+       label false; it was `Fourteen days` while half of it ignored the picker
+       entirely. The span goes in the aside, derived from the picker itself,
+       which is the one place it can be stated without being able to drift.
+
+       AND IT STRETCHES. Two cards of the same shape ending on different lines
+       read as one of them having failed to finish drawing - see Band.vue for
+       why that is a prop and not the default. It is closing about 25px here;
+       the content is sized to match, and a stretch absorbing more than that
+       would mean the band was wrong rather than the alignment. -->
+  <Band label="Over time" :cols="2" stretch>
+    <template #aside>
+      <span class="mono">{{ windowLabel }}</span>
+    </template>
+
+    <!-- TWO LANES, NOT TWO STRIPS. ActivityBars says of itself that it is
+         "deliberately not a chart: it has no axis and no scale, and it is not
+         meant to be read as a number" - right for sixteen rows of a pod rack,
+         wrong for the only history panel on this page, where there was nothing
+         to hover and nothing to read.
+
+         THE LANE IS SystemPage's, unchanged: a name, a plot, and a reading with
+         the window's peak. What it buys beyond the readout is that all three
+         plots on this band are now on one axis, so the cursor is shared - a
+         memory spike can be read against the run that caused it. -->
+    <!-- THE ASIDE NAMES THE SOURCE, the way `app-agents.slice` does on the card
+         beside it - and it is also what puts the two labels on one baseline.
+         Without it PanelBox's head has no --t-mono-sm child, so its line box is
+         3px shorter and two titles side by side sat 3px apart. -->
     <PanelBox label="Runs and tokens" :stale="metricsStale">
-      <div class="strips" v-bind="tip.hover('ag-strips', stripTip)">
-        <span class="label">runs</span>
-        <ActivityBars :values="c?.runs ?? []" :height="30" stretch />
-        <span class="label">tokens</span>
-        <ActivityBars :values="c?.tokens ?? []" :height="30" stretch />
-        <p class="axis mono">
-          <span>{{ fmt.dayMonth(stripDays[0]) }}</span>
-          <span>{{ STRIP_DAYS }} UTC days</span>
-          <span>{{ fmt.dayMonth(stripDays[stripDays.length - 1]) }}</span>
-        </p>
+      <template #aside><span class="mono">conduct's marker</span></template>
+      <div
+        class="lanes"
+        :style="{ '--lane-h': `${LANE_H}px` }"
+        v-bind="tip.hover('ag-lanes', lanesTip)"
+      >
+        <div v-for="l in lanes" :key="l.key" class="lane">
+          <div class="lname">
+            <div class="ltitle">{{ l.label }}</div>
+            <div class="lsub mono">{{ l.sub }}</div>
+          </div>
+          <!-- NO GRID AND NO Y AXIS. At 50px a gridline is noise, and the
+               reading column plus the cursor carry every number the panel has.
+               `x-axis` on the LAST lane only: one axis per card, drawn by the
+               same component as the memory chart beside it so the two agree at
+               every rung without a second implementation. -->
+          <!-- WRAPPED, BECAUSE A CLASS ON A COMPONENT LANDS ON ITS ROOT, and
+               MetricChart's root already carries `.frame` with rules of its own.
+               The phone rung has to move the plot onto a row of its own, and
+               doing that through the component's own class name is the
+               specificity trap this page paid for on `.msg` a week ago. -->
+          <div class="lplot">
+            <MetricChart
+              :series="l.series"
+              :height="LANE_H"
+              :from="from"
+              :to="host.now"
+              :format="l.format"
+              :x-axis="l.axis"
+              :x-ticks="4"
+            />
+          </div>
+          <div class="lread">
+            <div class="mono lnow">{{ laneReading(l) }}</div>
+            <div class="mono lpeak">peak {{ lanePeak(l) }}</div>
+          </div>
+        </div>
       </div>
       <p class="note">
-        Bucketed on UTC, because these are gauges conduct resets at midnight and the host runs
-        UTC. A grey bar is a day the store has no sample for, not a day nothing ran. The tokens
-        are conduct's own tally of its runs, not the account window - that is the quota status on
-        the board, which is a status and deliberately not a number.
+        Both counters are gauges conduct resets at UTC midnight, so a line climbing through the day
+        and dropping to nothing is the reset rather than a fault. The tokens are conduct's own tally
+        of its runs and not the account window - that is the quota status on the board, which is a
+        status and deliberately not a number. The runs lane draws failures as a second line in red,
+        and the cursor names both.
       </p>
     </PanelBox>
 
@@ -473,76 +700,6 @@ const stripTip = computed(() => ({
 
   </Band>
 
-  <!-- THE AGE IS THE BAND'S ASIDE, not a fact in the panel. An intake that has
-       stopped looks exactly like an empty backlog, so the age is what qualifies
-       every sentence below it - the same argument the conduct heartbeat makes at
-       the top of this page. -->
-  <Band label="Intake">
-    <template #aside>
-      <span class="mono" :class="{ warnish: intakeAge > INTAKE_STALE_S }">
-        last looked {{ Number.isFinite(intakeAge) ? `${fmt.coarse(intakeAge)} ago` : "never" }}
-      </span>
-    </template>
-
-    <PanelBox :stale="fleet.stale">
-      <div v-if="fleet.intake.length" class="intake">
-        <div v-for="i in fleet.intake" :key="i.project" class="irow">
-          <span class="mono iproject">{{ i.project }}</span>
-          <span class="iwhy">{{ i.last_why ?? "no reason recorded" }}</span>
-        </div>
-      </div>
-      <p v-else class="empty mono">The fleet has not looked for work on this host yet.</p>
-
-      <!-- THE SWITCH IN FRONT OF THE PASS THAT CHOOSES, and it says which of
-           the two sources is in force. conduct's descriptor is the shipped
-           default and a control row overrides it without a restart, so "is
-           intake armed" now has an answer and a plausible wrong one. The
-           collector cannot read a Python literal in another repository, so
-           "default" does not claim to know WHICH default. -->
-      <div class="switch">
-        <span class="sname">choose its own work</span>
-        <!-- THE SAME PILL THE BOARD DRAWS, off the same derivation. It was a
-             bare span with two colour classes of its own, so one value had two
-             renderings a tab apart. -->
-        <StatePill
-          class="spill"
-          :label="intake.state.value.state"
-          :tone="intake.state.value.tone"
-          size="sm"
-        />
-        <!-- THE SENTENCE IS THIS DRAWING'S OWN, and the board's is not. This one
-             carries the note, because the panel is the record of who set it and
-             why; the board carries only the age, because it answers a different
-             question. The state, the chip and the command are the parts that
-             must not differ, and those come from one function. -->
-        <span class="sub truncate">{{
-          intake.askedFor.value !== null
-            ? intake.sub.value
-            : intake.state.value.source === "set"
-              ? `set by hand ${fmt.sinceIso(intake.state.value.at)}${
-                  intake.state.value.note ? ` - ${intake.state.value.note}` : ""
-                }`
-              : "conduct's own default, unchanged"
-        }}</span>
-        <span class="sact">
-          <ChipButton
-            :label="intake.state.value.label"
-            :disabled="intake.disabled.value"
-            :act="() => intake.toggle()"
-            :title="intake.state.value.title"
-            :pending="intake.askedFor.value !== null"
-          />
-        </span>
-      </div>
-
-      <p class="note">
-        AN INTAKE THAT HAS STOPPED LOOKS EXACTLY LIKE AN EMPTY BACKLOG. Both leave every unit
-        active and every container healthy, and only the AGE of that last look tells them apart -
-        never the sentence.
-      </p>
-    </PanelBox>
-  </Band>
-
   <FindingsPanel label="Agent checks" section="agents" all />
 </template>
 
@@ -619,26 +776,74 @@ const stripTip = computed(() => ({
   color: var(--fail-text);
 }
 
-/* --- the strips ----------------------------------------------------------- */
+/* --- the lanes ------------------------------------------------------------ */
 
-/* A LABEL COLUMN AND ONE AXIS. The axis sits in column 2 so its ends line up
-   with the bars rather than with the labels - both series are fourteen stretch
-   bars, so equal container widths are what makes the two columns align. */
-.strips {
+/* TWO INDEPENDENT GRIDS WITH IDENTICAL TRACKS, not one grid of six cells. Both
+   resolve `minmax(0, 1fr)` against the same container width, so the plots align
+   exactly - and a lane stays one element, which is what lets `.lane + .lane`
+   carry the rule between them and the phone rung reshape one at a time. */
+/* 110/76, AND BOTH NUMBERS WERE MEASURED IN THE BROWSER RATHER THAN CHOSEN.
+   The first draft's subs were "resets at UTC midnight" and "conduct's own
+   tally" - 154px of text at --t-mono-xs, which wrapped to two lines and broke
+   both phrases mid-clause. THE FIX WAS THE TEXT, NOT THE TRACK: the note under
+   the card already says both facts in full, so the sub is the short form of
+   something stated below rather than the only place it appears, and the plot
+   keeps 396px instead of paying 50px for a caption.
+
+   76 on the reading, where "peak 2.1M" is the widest string at 63px. The whole
+   row folds to two lines at 640 anyway - see the phone rung. */
+.lane {
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  align-items: center;
+  grid-template-columns: 110px minmax(0, 1fr) 76px;
+  align-items: start;
   column-gap: var(--gap);
-  row-gap: 9px;
+  padding: 7px 0;
 }
 
-.axis {
-  grid-column: 2;
+.lane + .lane {
+  border-top: 1px solid var(--line-faint);
+}
+
+/* CENTRED ON THE PLOT, NEVER ON THE CELL. --lane-h is the chart's own height,
+   handed down from the script; the tokens lane's cell is 26px taller because it
+   carries the axis for both, and centring on that would drop its name and
+   reading below the line its plot sits on. */
+.lname,
+.lread {
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  min-height: var(--lane-h);
+  min-width: 0;
+}
+
+.ltitle {
+  font: var(--t-ui-md);
+  color: var(--fg-2);
+}
+
+.lsub {
   font: var(--t-mono-xs);
   color: var(--fg-5);
-  margin-top: 2px;
+}
+
+.lread {
+  text-align: right;
+}
+
+.lnow {
+  font: var(--t-mono-lg);
+  color: var(--fg);
+}
+
+.lpeak {
+  font: var(--t-mono-xs);
+  color: var(--fg-5);
+}
+
+.lplot {
+  min-width: 0;
 }
 
 /* --- the preconditions ---------------------------------------------------- */
@@ -809,6 +1014,29 @@ const stripTip = computed(() => ({
   .irow {
     grid-template-columns: minmax(0, 1fr);
     gap: 2px;
+  }
+
+  /* THE LANE BECOMES TWO ROWS RATHER THAN A SCROLLER. 110 + 90 of fixed width
+     plus two gaps leaves a 390px phone about 130px of plot, which is a stub;
+     SystemPage's lanes carry 288px of chrome and pan inside .hscroll instead.
+     Name and reading take one line, the plot takes the width under them, and
+     nothing is lost or panned to. */
+  .lane {
+    grid-template-columns: minmax(0, 1fr) max-content;
+    row-gap: 7px;
+  }
+
+  /* min-height goes with the columns: a block centred on the plot's height is
+     right beside it and is 50px of air above it. */
+  .lname,
+  .lread {
+    min-height: 0;
+    grid-row: 1;
+  }
+
+  .lplot {
+    grid-column: 1 / -1;
+    grid-row: 2;
   }
 
   /* THE READING AND THE FINDING ARE IN THE NAME CELL NOW, so it is the whole
