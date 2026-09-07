@@ -1259,7 +1259,16 @@ GREENBOOT_STATES = {"green": 0, "red": 1}
 # Facts whose value is a version or a word rather than a number. They become
 # labels on one info series, so a new OS version costs one series a month
 # instead of one per sample.
-FACT_INFO_KEYS = ("booted_version", "staged_version", "driver_version")
+#
+# `next_version`, NOT `staged_version`, AND THIS FILE WAS THE LAST READER LEFT
+# ON THE OLD NAME. bin/verify-host.sh renamed the fact because the old one was
+# only ever right for half the states it was read in - a deployment that has
+# been FINALIZED and not booted is not staged, and index 0 is what boots next in
+# every shape. The dashboard was corrected then; the collector was not, so
+# home_server_status_info carried an empty `staged_version` label for as long as
+# the rename has existed and the fact that says what boots next reached
+# Prometheus not at all. Nothing failed, because a missing key becomes "".
+FACT_INFO_KEYS = ("booted_version", "next_version", "driver_version")
 # FACTS THIS FILE ALREADY PUBLISHES ITSELF, and the bridge below must not
 # republish. `home_server_` + the fact key is the metric name, so a fact named
 # after an existing series is a DUPLICATE SAMPLE in one exposition file - and
