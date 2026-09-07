@@ -208,10 +208,29 @@ fi
 # counting greenboot-healthcheck.service, and as greenboot.verdict before it.
 # Verified against the live host on 2026-08-18, where this refused at 26M free
 # with a pending deployment and would have gone on refusing every Sunday.
-boot_free=$(df -Pm /boot | awk 'NR==2 {print $4}')
+#
+# AND THIS REFUSAL SHOULD NOW BE UNREACHABLE, which is what makes it useful.
+# home-server-boot-reclaim.timer drops the rollback's slot five minutes after
+# every green boot, so /boot sits at ~190M with a staged deployment waiting.
+# Reaching this line means the reclaim is not running or could not act, and
+# deploy.boot_reclaim_run and deploy.boot_reclaim say which. Before it existed
+# this was the whole deadlock: every unattended reboot left two slots spent and
+# every Sunday after it refused here, correctly, for ever.
+boot_free=$(df -Pm /boot 2>/dev/null | awk 'NR==2 {print $4}')
+# GUARDED, because the comparison below is a bare -lt on this value. An
+# unreadable df left it empty, `[` errored on the missing operand, and a gate
+# that decides whether this host reboots unattended fell through as if there
+# were room. bin/verify-host.sh carries the same guard on the same number and
+# says the same thing; this copy did not have it.
+case "${boot_free:-}" in
+	''|*[!0-9]*) refuse "/boot free space could not be read ('${boot_free:-}') - and unknown is not room" ;;
+esac
 next_staged=$(jq -r '.deployments[0] | select(.booted | not) | select(.staged) | .version // empty' <<<"$status_json")
 if [ "$boot_free" -lt "$BOOT_MIN_MB" ] && [ -n "$next_staged" ]; then
-	refuse "/boot has only ${boot_free}M free (want ${BOOT_MIN_MB}M) and $next_staged is STAGED - finalizing it needs a slot"
+	refuse "/boot has only ${boot_free}M free (want ${BOOT_MIN_MB}M) and $next_staged is STAGED - finalizing it needs a slot.
+  home-server-boot-reclaim.timer exists to stop this happening; check it:
+    systemctl --user status home-server-boot-reclaim.service
+    $REPO/bin/reclaim-boot-slot.sh --dry-run"
 fi
 
 pinned=$(jq '[.deployments[] | select(.pinned)] | length' <<<"$status_json")
@@ -242,6 +261,18 @@ backup_state=$(systemctl --user show home-server-backup.service -p ActiveState -
 case "$backup_state" in
 	inactive|failed|"") ;;
 	*) refuse "the backup is $backup_state - rebooting through restic leaves a partial snapshot and a lock in the off-site repository" ;;
+esac
+
+# AND THE RECLAIM, RECIPROCALLY. bin/reclaim-boot-slot.sh refuses while this
+# unit is anything but idle; without the other half, a reclaim that started at
+# 04:59 could still be inside `rpm-ostree cleanup -r` when the window fires at
+# 05:00, and rebooting through that is exactly the transaction nobody wants
+# interrupted. The same allowlist, for the same reason: a state this does not
+# recognise reads as busy.
+reclaim_state=$(systemctl --user show home-server-boot-reclaim.service -p ActiveState --value 2>/dev/null)
+case "$reclaim_state" in
+	inactive|failed|"") ;;
+	*) refuse "the /boot slot reclaim is $reclaim_state - it may be inside 'rpm-ostree cleanup -r'" ;;
 esac
 
 # A PHASE IS MID-FLIGHT, AND ONLY A MARKER CAN SAY SO. conduct is a long-running

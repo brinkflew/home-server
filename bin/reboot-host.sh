@@ -114,18 +114,28 @@ if [ "${boot_free:-0}" -ge "$BOOT_MIN_MB" ]; then
 	ok "/boot ${boot_free}M free"
 elif [ -z "$next_staged" ]; then
 	warn "/boot has only ${boot_free}M free, but nothing staged needs a new kernel written -"
-	warn "this reboot writes no boot entry. 'rpm-ostree cleanup -r' after it reclaims the slot."
+	warn "this reboot writes no boot entry. The reclaim frees the slot afterwards:"
+	warn "  ssh $HOST /var/home-server/bin/reclaim-boot-slot.sh"
 else
 	die "/boot has only ${boot_free}M free and $next_staged is STAGED - finalizing it at
-  shutdown needs a slot. Unpin if anything is pinned, then:
+  shutdown needs a slot, and ostree asks for 152.3 MB before it will write one.
+
+  THIS SHOULD NOT HAPPEN ANY MORE. home-server-boot-reclaim.timer drops the
+  rollback's slot five minutes after every green boot, so reaching this means it
+  is not running or could not act. Ask it why before doing anything by hand:
+
+    ssh $HOST 'systemctl --user status home-server-boot-reclaim.service'
+    ssh $HOST '/var/home-server/bin/reclaim-boot-slot.sh --dry-run'
+
+  The hand remedy is still two lines and still in that order, because
+  'cleanup -r' removes TWO deployments when something is staged and the update
+  it takes does NOT come back on its own - after 2026-08-16 the next two
+  automatic runs re-staged nothing while a newer manifest sat on the registry:
 
     sudo rpm-ostree cleanup -r     # frees a slot - AND TAKES THE STAGED UPDATE WITH IT
-    sudo rpm-ostree upgrade        # re-stage it; this does NOT happen on its own
+    sudo rpm-ostree upgrade        # re-stage it; 22 seconds, from the local repo
 
-  Both lines, in that order. 'cleanup -r' removes TWO deployments when something is
-  staged, and after 2026-08-16 the next two automatic runs re-staged nothing while a
-  newer manifest sat on the registry throughout - so 'cleanup -r' alone silently costs
-  the update it was run to make room for. See docs/known-state.md."
+  See docs/known-state.md."
 fi
 
 # WHAT WILL ACTUALLY BE SELECTED, asked before the typed confirmation rather than
