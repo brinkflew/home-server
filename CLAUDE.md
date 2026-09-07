@@ -1529,6 +1529,33 @@ signal read green.
 - The headline and the lane's own reading of one series disagreed on screen the whole time, because
   one is an instant query and the other a range. Nothing here compares two consumers of one metric.
 
+### The battery renamed a fact, and the fixture hid that nobody listened
+- The page read `staged_version`; `bin/verify-host.sh` emits `next_version` and its own comment names
+  the reader that wanted it. The staged-update chip was dead on the live host for as long as it
+  existed - and perfect in every screenshot, because the fixture was written from the page.
+- **A fixture derived from its consumer cannot contradict the consumer.** The drift check is the fix,
+  and it failed on exactly that key the moment it was written. The backup keys are built by
+  concatenation, so the extraction matches a prefix - leg 9's trap, again.
+
+### Absence read as health in one function and as a failure in the next
+- `fsTone` drew an unmeasurable mount TEAL; `smartLine` drew a drive with no health series RED,
+  "SMART reports the drive as failing". `backupTone` sat between them with the right answer.
+- Three functions, one question, two wrong answers, none reachable by a test: `/system` was the last
+  page with every decision still a computed in a `.vue` file. No fixture carried either state.
+
+### The same hardcoded hue, one page over, the day after it was fixed
+- Both pressure lanes carried `tone: "warn"` as a literal, so they were amber at every value. That is
+  `LANE_TONES` on `/ci`, and that entry already says fixing one call-site instance is not evidence
+  about the others. A saturated encoder is not a fault; a stalled CPU is.
+- Four `SYSTEM.*` queries had no consumer. `load1` catches what `cpuBusy` cannot, and the SMART line
+  never read the one counter an NVMe uses.
+
+### A measured column width is inert the moment its header is hidden
+- With `thead` gone at 640 the widths come from the first BODY row and the remainder splits evenly.
+  On a phone the pressure rack had lost its Reading column outright - the point of the band.
+- Three tables do not fit in one band; the rule is to give one its own, not to squeeze all three. A
+  metric-per-row grid with a column per card is a table drawn sideways - the record is a card.
+
 
 ## Target architecture
 

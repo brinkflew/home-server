@@ -336,7 +336,14 @@ export function statusDocument(): StatusDocument {
       github_runner_runtime_split: "0",
       github_runner_root_label: "container_file_t",
       booted_version: "44.20260810.3.0",
-      staged_version: "44.20260814.3.0",
+      // `next_version`, NOT `staged_version`. This fixture emitted the old key
+      // for as long as it existed, because it was written from the page rather
+      // than from bin/verify-host.sh - so the staged chip rendered in every
+      // screenshot ever taken and on no real host at all. A FIXTURE DERIVED
+      // FROM ITS CONSUMER CANNOT CONTRADICT THE CONSUMER, which is why nothing
+      // here could see it. smoke.mjs asserts the keys against the battery now.
+      next_version: "44.20260814.3.0",
+      next_finalized: null,
       deployments: 2,
       pinned: 0,
       boot_free_mb: 171,

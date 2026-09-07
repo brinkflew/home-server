@@ -4514,3 +4514,72 @@ Recorded 2026-09-07, with the board's filter, the step rail and the three render
   instant query and the lane through a range, so `3 phase runs today` sat above a lane whose own
   reading said 7. Nothing in this repository compares two consumers of one metric, and a screenshot
   review had passed over it once already.
+
+### The battery renamed a fact, said which reader wanted it, and the fixture hid that nobody listened
+- **`SystemPage.vue` read `host.fact("staged_version")` and the host stopped emitting it.**
+  `bin/verify-host.sh:386-390` writes `next_version`, and the comment at the rename names the
+  consumer: *"the old name was only ever right for half of the states it was read in. A consumer
+  keying on staged_version wants this."* Read from the live host on 2026-09-07: `next_version`
+  `44.20260817.3.2`, `staged_version` `null`. So the amber chip whose whole job is to say an OS
+  update is waiting had never once rendered on the machine it describes.
+- **THE FIXTURE IS THE OTHER HALF OF THE BUG AND IS WHY IT LASTED.** `fixtures/model.ts` emitted
+  `staged_version`, because it was written from the page rather than from the battery - so the chip
+  appeared in every `shoot.mjs` capture ever taken. **A fixture derived from its consumer cannot
+  contradict the consumer**, which makes it evidence about the drawing and none at all about the
+  data. The same shape as the `/agents/fleet` checkout caption: the number was right either way.
+- The fix is the assertion, not the key. `fixtures/smoke.mjs` now checks every fact key the page
+  reads against the ids `bin/verify-host.sh` actually emits, the way `PRECONDITION_IDS` and
+  `HOST_IDS` are checked - and it **failed the moment it was written**, on exactly that key, which
+  is the only proof of a drift check anybody needs. Exactly one key in the whole application drifted.
+- **The backup keys are minted by concatenation**, `fact "backup_$key"` inside `check_backup_age`,
+  so a grep for a literal `fact <name>` finds none of the four. That is the trap `bin/lint-repo.sh`
+  leg 9 already paid for - a lint that greps for a literal cannot see a name built by concatenation -
+  and the answer is the same: match the prefix from the call that mints it.
+
+### Absence read as health in one function and as a failure in the next, four lines apart
+- **`fsTone` returned `"ok"` for a ratio that is not a number**, so a mount whose
+  `node_filesystem_size_bytes` or `_avail_bytes` did not come back drew a **teal** bar at a NaN
+  width: an unreadable filesystem as a healthy empty one. `tokens.css` states the rule in capitals -
+  *"GREY IS NEVER GREEN: no health check defined, no history, a check that did not run"* - and this
+  was the case it names.
+- **`smartLine` drew the same absence RED.** `healthy: health.get(device) === 1` collapsed "this
+  drive reports itself unhealthy" into "no `home_server_disk_health_ok` series came back", so a
+  drive enumerated by `home_server_disk_info` and missing from it fired the first branch: *"SMART
+  reports the drive as failing"*, at the loudest tone on the page. Reachable - smartctl can name a
+  model without returning a verdict. `healthy` is `boolean | null` now.
+- **`backupTone` sat between them in the same file and had the right answer all along**, returning
+  `off`. Three functions, one question, two wrong answers, none of them reachable by any test:
+  `/system` was the last page with every decision still a computed in a `.vue` file.
+- **No fixture carried either state**, which is why neither was ever on screen. Both exist now: one
+  drive with no health series and one mount with no `avail`.
+
+### The same hardcoded hue, one page over, the day after it was fixed
+- **`LANES` carried `tone: "warn"` as a literal on both pressure lanes**, so IO and CPU pressure were
+  drawn amber at every value including zero, and their readings were coloured with them. That is
+  `LANE_TONES = ["ok","warn","fail"]` on `/ci`, fixed in `7c75382` the previous day, and the entry
+  recording that one already says why this survived: **fixing one instance of a call-site defect is
+  not evidence about the others.** Neither search was made.
+- Pressure is graded from the value now. **A saturated encoder is not a fault and a stalled CPU is**,
+  which is why the GPU lane grades differently from the two beside it: two NVENC sessions pinning the
+  block at 100% is this host doing exactly the job it exists for.
+- **Four `SYSTEM.*` queries had no consumer at all** - `load1`, `diskMediaErrors`, `memoryUsedRatio`,
+  `bootTime` - the same finding the `/ci` pass made. Two were real gaps: `load1` catches what
+  `cpuBusy` cannot, since a host stalled on IO has every core idle waiting, and the SMART fallback
+  said *"no reallocated or pending sectors"* on an NVMe without ever reading the counter that matters
+  there. The other two were a second spelling of a number already drawn and were deleted.
+
+### A measured column width is inert the moment its header is hidden
+- **With `thead` hidden at 640 the width source is the first BODY row**, and `table-layout: fixed`
+  then splits the remainder evenly - measured at 390: `[30, 99, 99, 99]` on a table whose columns had
+  just been tuned to 116 and 88. `/ci` had restated the rail's width on the cell and nothing else's,
+  so the trap was half-known and the other half was still live.
+- **On a phone the pressure rack lost its Reading column entirely**, which is the whole point of that
+  band: `160px 1fr 128px` is a 320px floor, panned from 900 at a 620px `min-width`, so the readings
+  were off screen at 390. `docs/dashboard.md` had already named it as one of four racks owed a `.tbl`.
+- **Three tables do not fit in one 1360px band.** The band rule's answer is to give one its own band,
+  not to squeeze all three; and the GPU table was a metric-per-row grid with a column per card, which
+  is a table drawn sideways. The record is a card. Reading it the other way is what made `Jellyfin
+  sessions` a row spanning columns it has nothing to do with.
+- The `@media (max-width: 1280px)` block was an invented fourth rung on a three-rung ladder, and
+  `.right-column` inside it is the fold with no floor already recorded here: a column that became a
+  ROW when it could no longer sit beside the cards, and stayed one at 375.

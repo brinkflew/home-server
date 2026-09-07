@@ -72,6 +72,11 @@ const { leadReading, preconditionRows, preconditionTally, PRECONDITION_IDS } =
 // been wrong for as long as the page existed.
 const { laneLead, laneTally, silentLanes, hostRows, hostTally, HOST_IDS } =
   await load("/src/lanes.ts");
+// LOADED FOR THE FIRST TIME ON 2026-09-07, and /system was the last page with no
+// logic under test at all - seventeen computeds and eight functions in the SFC,
+// on the largest page in the application. FOUR of them were wrong. See the block
+// at the foot of this file, and the banner in src/system.ts.
+const sys = await load("/src/system.ts");
 const { statusDocument } = await load("/fixtures/model.ts");
 
 let failures = 0;
@@ -1648,6 +1653,183 @@ if (battery === null) {
     seriesStyle({ points: [], opacity: 0.25 }, 1, {}).opacity, 0.25);
   check("...and the mirror",
     seriesStyle({ points: [], opacity: 0.25 }, 1, { mirror: true }).opacity, 0.25);
+}
+
+
+// --- the host, as /system draws it -------------------------------------------
+//
+// THE FIFTH AND LAST PAGE TO HAVE ITS DECISIONS EXTRACTED, on 2026-09-07. Four
+// of them had a wrong answer that rendered perfectly, and three could not be
+// seen from a screenshot at any width:
+//
+//   - fsTone answered "ok" for a ratio that is not a number
+//   - smartLine answered "the drive is failing", in red, for a drive with no
+//     health series at all
+//   - both pressure lanes carried tone: "warn" as a literal, so they were amber
+//     at every value - LANE_TONES on /ci, one page over, fixed the day before
+//   - the page read a fact key the battery stopped emitting
+{
+  console.log("\n-- the system page's own derivations --");
+
+  const M = {
+    cpuBusy: 0.304,
+    cpuStalled: 0.068,
+    load1: 4.2,
+    // BASE 1024, because fmt.bytes is: 10.3e9 renders "9.6 GB", which is the
+    // rounding artefact charts.ts already refuses on a byte axis.
+    memUsed: 10.3 * 2 ** 30,
+    memTotal: 15.8 * 2 ** 30,
+    swapUsed: 1.4 * 2 ** 30,
+    swapTotal: 4 * 2 ** 30,
+    fullest: { mountpoint: "/var/mnt/media", ratio: 0.91, free: 3.2 * 2 ** 40 },
+    mounts: 3,
+  };
+
+  const condFor = (id, m = M) =>
+    sys.conditionRows(m).find((c) => c.id === id) ?? { value: null, sub: null, tone: null };
+
+  check("the conditions are the exported set", sys.conditionRows(M).map((c) => c.id), sys.CONDITION_IDS);
+
+  // LOAD IS DRAWN NOW. It was one of four SYSTEM queries with no consumer at all,
+  // and it is the one that catches what cpuBusy cannot: a host stalled on IO has
+  // every core idle waiting, so utilisation reads low while load climbs.
+  check("the cpu condition reads busy", condFor("cpu").value, "30.4% busy");
+  check("...and names load and the stall it is graded on", condFor("cpu").sub, "load 4.20, 6.8% stalled");
+  check("the memory condition is bytes, not a ratio", condFor("memory").value, "10.3 GB of 15.8 GB");
+  check("the storage condition names WHICH mount", condFor("storage").value, "91% /var/mnt/media");
+
+  // PRESSURE, NOT UTILISATION. queries.ts: pressure is what was pinned when the
+  // host wedged while still answering ICMP, and a single pinned core is ordinary
+  // here - both long CI jobs are single-threaded.
+  check("an idle host's cpu condition is green", condFor("cpu", { ...M, cpuStalled: 0.01 }).tone, "ok");
+  check("a stalled one is amber", condFor("cpu", { ...M, cpuStalled: 0.15 }).tone, "warn");
+  check("a badly stalled one is red", condFor("cpu", { ...M, cpuStalled: 0.4 }).tone, "fail");
+  check("a 91% media disk is amber", condFor("storage").tone, "warn");
+
+  // A HOST WITH NO SWAP DEVICE GETS A SENTENCE, not "swap - of -". Same rule as
+  // the headline's fourth state one block down.
+  check("no swap device says so", condFor("memory", { ...M, swapTotal: 0 }).sub, "no swap device");
+
+  // GREY IS NEVER GREEN. Every condition off a null reading must be grey, and
+  // none of them may report a zero.
+  {
+    const none = sys.conditionRows(null);
+    check("every condition off nothing is grey", [...new Set(none.map((c) => c.tone))], ["off"]);
+    check("...and none of them reports a number", none.filter((c) => /\d/.test(c.value)).map((c) => c.id), []);
+  }
+
+  // --- the headline, and its four states ---------------------------------------
+  const R = {
+    uptimeS: 41 * 86400 + 6 * 3600,
+    booted: "44.20260810.3.0",
+    next: null,
+    nextFinalized: null,
+  };
+  const conds = sys.conditionRows(M);
+
+  check("the headline is the uptime", sys.hostLead(R, conds).text, "up 41d 06h");
+  // THE TONE IS THE WORST CONDITION'S, NEVER THE NUMBER'S. A count of days is not
+  // itself a fault and a full disk is - /ci's rule, verbatim.
+  check("...and takes the worst condition's tone", sys.hostLead(R, conds).tone, "warn");
+  check("...never the counter's", sys.hostLead(R, sys.conditionRows({ ...M, fullest: null, cpuStalled: 0 })).tone, "off");
+  check("...and never breathes: there is no denominator for uptime", sys.hostLead(R, conds).live, false);
+  check("nothing staged says so", sys.hostLead(R, conds).sub, "44.20260810.3.0, nothing staged");
+
+  // `next_finalized` IS THE DISCRIMINATOR THE OLD KEY COULD NOT EXPRESS: a
+  // deployment that is staged but not finalized has not written its loader entry.
+  check("a staged deployment is named",
+    sys.hostLead({ ...R, next: "44.20260817.3.2" }, conds).sub,
+    "44.20260817.3.2 staged, not finalized yet");
+  check("...and a finalized one says the window applies it",
+    sys.hostLead({ ...R, next: "44.20260817.3.2", nextFinalized: "2026-09-07T01:00:00Z" }, conds).sub,
+    "44.20260817.3.2 staged and finalized, the Sunday window applies it");
+
+  // THE FOURTH STATE IS THE ONE THAT NEEDED WRITING. fmt.duration(NaN) is "-", so
+  // the obvious spelling renders "up -" at the largest type on the page: a
+  // headline claiming a dash was measured.
+  check("an unmeasured uptime is a sentence, not a dash",
+    sys.hostLead({ ...R, uptimeS: Number.NaN }, conds).text, "uptime not measured");
+  check("...and it is grey", sys.hostLead({ ...R, uptimeS: Number.NaN }, conds).tone, "off");
+  check("no facts at all is a different fact", sys.hostLead(null, conds).text, "host unknown");
+  check("...and neither reading is ever `up -`",
+    [sys.hostLead(null, conds), sys.hostLead({ ...R, uptimeS: Number.NaN }, conds)]
+      .filter((l) => l.text.includes("-")).length, 0);
+
+  // --- absence is grey, in both directions -------------------------------------
+  //
+  // TWO FUNCTIONS FOUR LINES APART DISAGREED ABOUT WHAT ABSENCE MEANS, and
+  // backupTone between them had the right answer the whole time.
+  check("a mount that could not be measured is grey", sys.fsTone(Number.NaN), "off");
+  check("...and is not green", sys.fsTone(Number.NaN) === "ok", false);
+  check("a full mount is still red", sys.fsTone(0.96), "fail");
+  check("a healthy one is still green", sys.fsTone(0.4), "ok");
+
+  const drive = { device: "sdb", model: "x", healthy: true, temp: 36, hours: 10,
+    wear: Number.NaN, realloc: 0, pending: 0, mediaErrors: 0 };
+  check("a drive with no SMART verdict is grey", sys.smartLine({ ...drive, healthy: null }).tone, "off");
+  check("...and does not claim it is failing",
+    sys.smartLine({ ...drive, healthy: null }).text.includes("failing"), false);
+  check("a drive that IS failing still says so", sys.smartLine({ ...drive, healthy: false }).tone, "fail");
+
+  // MEDIA ERRORS ARE THE NVMe COUNTER AND WERE NEVER READ. Reallocated and
+  // pending sectors are ATA concepts, so the old fallback sentence was true and
+  // silent about the one number that matters on an NVMe.
+  check("media errors are read", sys.smartLine({ ...drive, mediaErrors: 3 }).text, "3 media error(s)");
+  check("...and the clean sentence now covers them",
+    sys.smartLine(drive).text, "no reallocated, pending or media errors");
+  check("a backup nobody has ever run is grey", sys.backupTone(Number.NaN, 100), "off");
+
+  // --- the lanes, and the hue that was identity --------------------------------
+  const [gpuLane, ioLane] = sys.LANES;
+  check("a saturated encoder is not a fault", sys.laneTone(gpuLane, [1, 0]), "ok");
+  check("a stalled disk is", sys.laneTone(ioLane, [0.16]), "warn");
+  check("...and an idle one is not", sys.laneTone(ioLane, [0.01]), "ok");
+  check("a lane with no series is grey, not idle", sys.laneTone(ioLane, []), "off");
+  // THE WORST CARD, not the first: this host's gpu0 has dead video engines and
+  // reads 0% for ever, so taking the first would answer for the idle card - the
+  // same failure splitBy exists to prevent.
+  check("the worst card decides", sys.laneTone(ioLane, [0.01, 0.4]), "fail");
+  check("both cards are read", sys.laneReading(gpuLane, [0, 0.97]), "0% / 97%");
+  check("no card at all is a dash", sys.laneReading(gpuLane, []), "-");
+  check("the busiest thread is the max, not the mean", sys.busiestCore([0.08, 0.93, 0.11]), 0.93);
+  check("...and no thread at all is not zero", Number.isNaN(sys.busiestCore([])), true);
+
+  // An alert that began before the window is pinned to the left edge rather than
+  // dropped: "has been firing since before this view" is worth seeing.
+  {
+    const mk = (startsAt) => ({ labels: { alertname: "X", severity: "warning" }, startsAt });
+    const marks = sys.eventMarks([mk("2026-09-07T00:00:00Z")], Date.parse("2026-09-07T06:00:00Z") / 1000,
+      Date.parse("2026-09-07T12:00:00Z") / 1000);
+    check("an alert older than the window pins to the edge", marks[0].left, "0.00%");
+    check("...and says so", marks[0].before, true);
+    check("a window with no extent draws nothing", sys.eventMarks([mk("2026-09-07T00:00:00Z")], Number.NaN, 1), []);
+  }
+
+  // --- the fact keys, against the battery that writes them ---------------------
+  //
+  // THIS ASSERTION FAILED THE MOMENT IT WAS WRITTEN, which is why it exists. The
+  // page read `staged_version`; bin/verify-host.sh renamed that key to
+  // `next_version` and its own comment says which reader it meant - "A consumer
+  // keying on staged_version wants this." Nobody updated the consumer, so the
+  // amber staged chip was dead on the live host and perfect in every screenshot:
+  // fixtures/model.ts emitted the old key, because a fixture written from its
+  // consumer cannot contradict the consumer.
+  //
+  // THE BACKUP KEYS ARE BUILT BY CONCATENATION - `fact "backup_$key"` - so a grep
+  // for a literal cannot see them. That is the trap lint-repo.sh leg 9 already
+  // paid for, and the answer is the same: match the prefix from the call that
+  // mints it, never a literal list maintained here.
+  if (battery === null) {
+    console.log("SKIP  bin/verify-host.sh is not readable from here");
+  } else {
+    const facts = new Set([...battery.matchAll(/^\s*fact\s+([a-z_0-9]+)/gm)].map((mm) => mm[1]));
+    for (const mm of battery.matchAll(/check_backup_age\s+\S+\s+"[^"]*"\s+([a-z_0-9]+)/g)) {
+      facts.add(`backup_${mm[1]}`);
+    }
+    check("the battery extraction found the dynamic backup keys too", facts.has("backup_local_at"), true);
+    check("every fact key this page reads is one the battery emits",
+      sys.FACT_KEYS.filter((k) => !facts.has(k)), []);
+  }
 }
 
 await server.close();

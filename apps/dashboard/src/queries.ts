@@ -47,7 +47,6 @@ export const SYSTEM = {
    * misreading CLAUDE.md documents at length for Jellyfin's cgroup.
    */
   memoryUsed: "node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes",
-  memoryUsedRatio: "1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes",
   memoryTotal: "node_memory_MemTotal_bytes",
 
   /**
@@ -80,6 +79,13 @@ export const SYSTEM = {
   swapTotal: "node_memory_SwapTotal_bytes",
   swapUsed: "node_memory_SwapTotal_bytes - node_memory_SwapFree_bytes",
 
+  /**
+   * Runnable plus uninterruptible tasks, one-minute average - and it catches
+   * what cpuBusy cannot. A host stalled on IO is not busy; every core is idle
+   * waiting, so utilisation reads low while load climbs. COLLECTED AND DRAWN
+   * NOWHERE until 2026-09-07, along with three others; two of those were a
+   * second spelling of a number already on the page and were deleted instead.
+   */
   load1: "node_load1",
 
   /** The encoder block, which saturates long before the SM does: CLAUDE.md
@@ -126,10 +132,6 @@ export const SYSTEM = {
   diskPending: "home_server_disk_pending_sectors",
   diskMediaErrors: "home_server_disk_media_errors_total",
 
-  /** NOT home_server_uptime_seconds, which nothing has ever emitted - it
-   *  returned empty for as long as it existed. The page reads uptime from
-   *  status.json's facts; this is the one with a time axis. */
-  bootTime: "node_boot_time_seconds",
 } as const;
 
 export const SERVICES = {

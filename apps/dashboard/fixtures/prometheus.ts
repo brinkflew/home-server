@@ -30,12 +30,26 @@ const FS = [
   { mountpoint: "/boot", device: "/dev/nvme0n1p3", fstype: "ext4", size: 350 * MB, avail: 171 * MB },
   { mountpoint: "/var", device: "/dev/nvme0n1p4", fstype: "xfs", size: 233 * GB, avail: 168 * GB },
   { mountpoint: "/var/mnt/media", device: "/dev/mapper/media-media", fstype: "xfs", size: 36000 * GB, avail: 3200 * GB },
+  // SIZED AND UNMEASURED. node_filesystem_avail_bytes does not come back for
+  // this one, so `ratio` is NaN - the case fsTone used to answer "ok" to, and
+  // therefore drew as a healthy empty mount. `avail: null` is how the table
+  // below skips it, rather than answering 0, which would be a different lie.
+  { mountpoint: "/var/lib/containers", device: "/dev/nvme0n1p4", fstype: "xfs", size: 233 * GB, avail: null },
 ];
 
 const DISKS = [
   { device: "sda", model: "ST8000VN004-2M2101", firmware: "SC60", temp: 38, hours: 41207, realloc: 1, pending: 0 },
   { device: "nvme0", model: "Samsung SSD 980 PRO 250GB", firmware: "5B2QGXA7", temp: 44, hours: 12044, realloc: 0, pending: 0 },
+  // ENUMERATED AND UNGRADED, which is the state that had never been on screen.
+  // smartctl can name a model without returning a health verdict, and
+  // home_server_disk_health_ok is then simply absent for that device - see
+  // HEALTH_GRADED below.
+  { device: "sdb", model: "WDC WD40EFPX-68C6CN0", firmware: "81.00A81", temp: 36, hours: 8912, realloc: 0, pending: 0 },
 ];
+
+/** The drives SMART actually returned a verdict for. sdb is deliberately not
+ *  one of them: absence is a third state and must draw grey, not red. */
+const HEALTH_GRADED = ["sda", "nvme0"];
 
 const INDEXERS = [
   "1337x", "Nyaa", "Nyaa Trusted", "TorrentGalaxy", "YTS", "EZTV", "LimeTorrents",
@@ -72,7 +86,6 @@ function bySeries(): Record<string, SeriesSpec[]> {
 
   // --- host ----------------------------------------------------------------
   table[SYSTEM.cpuBusy] = [{ metric: {}, at: swing("cpu", 0.24, 0.16) }];
-  table[SYSTEM.memoryUsedRatio] = [{ metric: {}, at: swing("memratio", 0.61, 0.06) }];
   table[SYSTEM.memoryUsed] = [{ metric: {}, at: (t) => wave("memratio", t, 0.61, 0.06) * MEM_TOTAL }];
   table[SYSTEM.memoryTotal] = [{ metric: { __name__: "node_memory_MemTotal_bytes" }, at: constant(MEM_TOTAL) }];
   table[SYSTEM.load1] = [{ metric: { __name__: "node_load1" }, at: swing("load", 2.4, 1.6) }];
@@ -150,7 +163,7 @@ function bySeries(): Record<string, SeriesSpec[]> {
     metric: { __name__: "node_filesystem_size_bytes", device: f.device, fstype: f.fstype, mountpoint: f.mountpoint },
     at: constant(f.size),
   }));
-  table[SYSTEM.filesystemAvail] = FS.map((f) => ({
+  table[SYSTEM.filesystemAvail] = FS.filter((f) => f.avail !== null).map((f) => ({
     metric: { __name__: "node_filesystem_avail_bytes", device: f.device, fstype: f.fstype, mountpoint: f.mountpoint },
     at: constant(f.avail),
   }));
@@ -159,14 +172,16 @@ function bySeries(): Record<string, SeriesSpec[]> {
     metric: { __name__: "home_server_disk_info", device: d.device, model: d.model, firmware: d.firmware },
     at: constant(1),
   }));
-  table[SYSTEM.diskHealth] = DISKS.map((d) => ({ metric: { device: d.device }, at: constant(1) }));
+  table[SYSTEM.diskHealth] = DISKS.filter((d) => HEALTH_GRADED.includes(d.device)).map((d) => ({
+    metric: { device: d.device },
+    at: constant(1),
+  }));
   table[SYSTEM.diskTemp] = DISKS.map((d) => ({ metric: { device: d.device }, at: swing(`t${d.device}`, d.temp, 3) }));
   table[SYSTEM.diskHours] = DISKS.map((d) => ({ metric: { device: d.device }, at: constant(d.hours) }));
   table[SYSTEM.diskWear] = [{ metric: { device: "nvme0" }, at: constant(0.04) }];
   table[SYSTEM.diskReallocated] = DISKS.map((d) => ({ metric: { device: d.device }, at: constant(d.realloc) }));
   table[SYSTEM.diskPending] = DISKS.map((d) => ({ metric: { device: d.device }, at: constant(d.pending) }));
   table[SYSTEM.diskMediaErrors] = [{ metric: { device: "nvme0" }, at: constant(0) }];
-  table[SYSTEM.bootTime] = [{ metric: {}, at: constant(now - (41 * 86400 + 6 * 3600)) }];
 
   // --- containers ----------------------------------------------------------
   table[SERVICES.info] = CONTAINERS.map((c) => ({

@@ -1302,3 +1302,98 @@ the fill reproduces `var(--warn)` for a `fail` series, and `bandOpacity` in the 
 `0.42 / 0.30 / 0.20` - which are the exact values off the screenshot. Confirmed in a browser
 afterwards, because no fixture hovers a plot: the legend, the drawn `stroke`/`opacity` and the readout
 now report the same two pairs in the same order, on four plots sharing one cursor and one readout.
+
+## The System page, given the pass the other three had, 2026-09-07
+
+`/agents/rounds`, `/agents/fleet` and `/ci` each had the same pass between 2026-08-29 and this day -
+lead with one reading, racks and card grids become tables, the decisions leave the `.vue` file, the
+evidence goes last - and **`/system` had none of it**. It was also the page `Band.vue`'s docblock
+names as the bento the band rule replaced, still running the twelve-column 7/5 over 4/4/4 grid it
+describes, over a `.bottom` of `1fr 1fr 340px` whose third column held two more panels stacked
+inside it. It was the largest page in the application, at 1369 lines.
+
+**Seven bands, and the reading order is the one the other three settled on.** Right now, Over time,
+Pressure, Hardware, GPU and playback, Alerts, History, then the findings: the reading, the history,
+then the evidence. The findings panel was **first** here - a fixed-height scroller clipping its
+seventh row mid-height as the page's opening statement - and it is unfiltered, deliberately, because
+`/system` is the one place all ninety-four checks live. The tables carry the value; it carries the
+prose.
+
+**The lead is `up 41d 06h`, and the tone is the worst condition's rather than the number's** - /ci's
+rule verbatim, because a count of days is not itself a fault and a full disk is. It was in the shell
+toolbar, in a span capped at `max-width: 210px`, so the live string clipped to `uCore 44.2026...`
+and the uptime was never on screen at all; the OS line is the band's aside now and the whole string
+fits. Three conditions under the hairline on the `.conds` recipe unchanged - cpu, memory, storage -
+and **they follow the crosshair**, which is new: hovering the CPU chart moves the headline's
+conditions, all four chart asides and all three lane readings to the same instant.
+
+**THE STAGED-DEPLOYMENT CHIP HAD BEEN DEAD ON THE LIVE HOST AND PERFECT IN EVERY SCREENSHOT.** The
+page read `host.fact("staged_version")`. `bin/verify-host.sh` emits `next_version` and the comment at
+the rename says which reader it meant - *"the old name was only ever right for half of the states it
+was read in. A consumer keying on staged_version wants this."* Nobody updated the consumer. Read from
+the live host: `next_version` `44.20260817.3.2`, `staged_version` `null`. **The fixture is the other
+half of the bug**: `fixtures/model.ts` emitted `staged_version`, because it was written from the page
+rather than from the battery - *a fixture derived from its consumer cannot contradict the consumer* -
+so the amber chip appeared in every capture ever taken and on no real machine. `smoke.mjs` asserts
+every fact key the page reads against the battery now, the way `PRECONDITION_IDS` is asserted; the
+assertion **failed the moment it was written**, on exactly that key, which is the only proof it
+needed. The backup keys are built by concatenation - `fact "backup_$key"` - so the extraction matches
+the prefix from `check_backup_age`'s own call, which is the trap `lint-repo.sh` leg 9 already paid
+for.
+
+**Absence read as healthy in one function and as a failure in the next, four lines apart.**
+`fsTone` returned `"ok"` for a ratio that is not a number, so a mount whose size or avail series did
+not come back drew a **teal** bar at a NaN width - an unreadable mount as a healthy empty one, against
+the rule `tokens.css` states in capitals. `smartLine` read `healthy: health.get(device) === 1`, so a
+drive enumerated by `disk_info` and absent from `disk_health_ok` collapsed to `false` and fired the
+first branch: **"SMART reports the drive as failing", in red, at the loudest tone on the page**.
+Reachable - smartctl can name a model without returning a verdict. `backupTone`, sitting between the
+two in the same file, had the right answer all along. `healthy` is `boolean | null` now and both
+answer `off`.
+
+**`LANES` carried `tone: "warn"` as a literal on both pressure lanes**, so they were drawn amber at
+every value including zero and their readings were coloured with them. That is `LANE_TONES` on `/ci`,
+**fixed one page over the day before**, and CLAUDE.md's entry on that one says why this survived:
+*"Fixing one instance of a call-site defect is not evidence about the others."* Pressure is graded
+from the value now; a saturated encoder stays green, because two NVENC sessions pinning the block at
+100% is this host doing its job.
+
+**Four `SYSTEM.*` queries had no consumer**, the same finding the `/ci` pass made. `load1` is drawn -
+it catches what `cpuBusy` cannot, since a host stalled on IO has every core idle waiting - and
+`diskMediaErrors` joins the SMART line, whose fallback said *"no reallocated or pending sectors"* on
+an NVMe while never reading the counter that matters there. `memoryUsedRatio` and `bootTime` were a
+second spelling of a number already on the page and were deleted.
+
+**The rack became a table, which `docs/dashboard.md` had already named as its follow-up.** It was
+`160px 1fr 128px` - a 320px floor - panned from 900 at a 620px `min-width`, so **on a phone the
+Reading column was simply off screen**, which is the entire point of that band. It has the `.p3`
+ladder and a fold now, so the peak relocates rather than disappearing, and the reading survives every
+rung. The axis lives in the plot column's own `<th>`, which under `table-layout: fixed` is the only
+place it stays aligned to it; it goes with the header at 640, where seven ticks in ~94px would be a
+grey smear below the type floor and the four charts one band up carry their own x-axis.
+
+**And every one of the measured widths was inert at 640 until the cells carried them too.** With the
+thead hidden the width source is the first *body* row, and `table-layout: fixed` then split the
+remainder evenly - measured at 390: `[30, 99, 99, 99]`, so `CPU pressure` wrapped inside a column
+tuned to 116. The rail had been given this treatment on /ci and nothing else had. Six widths were
+measured in the browser rather than chosen, and three first drafts were wrong: `.c-lane` at 150
+wrapped two of three subs, `.c-read` at 96 wrapped `0% / 89%`, and `.c-mount` at 108 broke
+`/var/lib/containers` mid-path.
+
+**Three tables do not fit in one 1360px band**, which the band rule says to answer by giving one its
+own band rather than by squeezing. Hardware is two - mounts and drives - and the GPU table got its
+own, **transposed**: it was a metric-per-row grid with a column per card, which is a table drawn
+sideways. The record is a card. Reading it the other way is what made `Jellyfin sessions` a row
+spanning columns it has nothing to do with; it is the band's aside now, where a fact belonging to no
+card belongs. Alerts is full width, which is not indulgence - at a third of the page every
+description truncated mid-sentence into a `title` nobody hovers.
+
+**`.bottom`, `.right-column` and the `@media (max-width: 1280px)` block are gone.** That rung was an
+invented fourth on a three-rung ladder, and `.right-column` is the fold with no floor this document
+already named: a column that became a ROW when it could no longer sit beside the cards, and stayed
+one at 375. `Band`'s own 1180 replaces the whole arrangement.
+
+`src/system.ts` is the fifth and last of these extractions. Every new assertion was **proved to fire**
+on the defect it names before it was trusted, and each reproduced the original symptom exactly -
+including `up -`, which is what the obvious spelling of the headline renders on a host with no facts:
+a headline claiming a dash was measured.
