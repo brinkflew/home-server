@@ -216,7 +216,12 @@ export function conditionRows(m: SystemMetrics | null): ConditionRow[] {
     },
     {
       id: "storage",
-      label: "storage",
+      // `disk`, NOT `storage`, AND THE ID DOES NOT MOVE WITH IT. This sits one
+      // rung under a sub-nav whose third segment is Storage, and a column that
+      // announces itself with the name of the view beside it reads as a link to
+      // it - the rule docs/dashboard.md states for the Fleet band. The id is the
+      // stable half and the label is the presentation one.
+      label: "disk",
       // The mountpoint is in the value rather than the label, because WHICH
       // mount is full is half the reading and the label is a fixed word.
       value: fullest ? `${fmt.percent(fullest.ratio, 0)} ${fullest.mountpoint}` : fmt.NO_DATA,
@@ -386,6 +391,46 @@ export function busiestCore(values: number[]): number {
   return finite.length ? Math.max(...finite) : Number.NaN;
 }
 
+/**
+ * /system/load's headline: how hard the machine is working.
+ *
+ * THE READING IS THE AGGREGATE AND THE TONE IS NOT. CPU busy is the number a
+ * person means by "how hard is it working", but it is the wrong thing to grade:
+ * the encoder can sit at 100% while the aggregate reads 12%, and IO pressure -
+ * the number that was actually pinned when this host wedged - moves
+ * independently of both. So the reading comes from one series and the tone from
+ * the worst of everything the view draws, which is hostLead's rule one page
+ * over: a count is not itself a fault.
+ *
+ * `fmt.percent(NaN)` is "-", so an unanswered window would otherwise headline
+ * "- busy" - the same trap `up -` was.
+ */
+export function loadLead(
+  m: SystemMetrics | null,
+  coreCount: number,
+  busiest: number,
+  laneTones: Tone[],
+): LeadReading {
+  const busy = n(m?.cpuBusy);
+  if (m === null || !Number.isFinite(busy)) {
+    return {
+      text: "load not measured",
+      tone: "off",
+      live: false,
+      sub: "prometheus returned no CPU series for this window",
+    };
+  }
+
+  let tone = conditionRows(m).find((c) => c.id === "cpu")?.tone ?? "ok";
+  for (const t of laneTones) if (RANK[t] > RANK[tone]) tone = t;
+
+  const threads = coreCount > 0 ? `${coreCount} threads` : "thread count unknown";
+  const peak = Number.isFinite(busiest) ? `busiest ${fmt.percent(busiest, 0)}` : "busiest thread unknown";
+  const load = Number.isFinite(n(m.load1)) ? `load ${fmt.number(m.load1, 2)}` : "load unknown";
+
+  return { text: `${fmt.percent(busy, 1)} busy`, tone, live: false, sub: `${threads}, ${peak}, ${load}` };
+}
+
 // -----------------------------------------------------------------------------
 // Alerts on the shared axis
 // -----------------------------------------------------------------------------
@@ -477,4 +522,92 @@ export function smartLine(d: Drive): { text: string; tone: Tone } {
 export function backupTone(age: number, limit: number): Tone {
   if (!Number.isFinite(age)) return "off";
   return age > limit ? "fail" : age > limit * 0.75 ? "warn" : "ok";
+}
+
+// -----------------------------------------------------------------------------
+// /system/storage's headline
+// -----------------------------------------------------------------------------
+
+export interface MountReading {
+  mountpoint: string;
+  total: number;
+  free: number;
+  /** Used share, 0..1. Not a number where either half of it did not come back. */
+  ratio: number;
+}
+
+/**
+ * One mount's arithmetic, in one place because two views now do it.
+ *
+ * `ratio` MUST STAY NON-FINITE WHERE EITHER HALF IS. `1 - NaN/x` is NaN and
+ * `1 - x/0` is -Infinity, and both must reach `fsTone` as "not a number" rather
+ * than as 0 - an unreadable mount drawn as an empty one is the defect that
+ * function was rewritten for.
+ */
+export function mountReading(mountpoint: string, total: number, free: number): MountReading {
+  return { mountpoint, total, free, ratio: total > 0 ? 1 - free / total : Number.NaN };
+}
+
+/**
+ * The fullest mount, which is the only one a single reading can be about.
+ *
+ * A NON-FINITE RATIO MUST NOT WIN THE COMPARISON and then be reported as full:
+ * `NaN > x` is false, so a plain reduce happens to survive it, but only by
+ * accident of which operand lands on the left. The filter states it instead.
+ */
+export function fullestMount(mounts: MountReading[]): MountReading | null {
+  const rated = mounts.filter((m) => Number.isFinite(m.ratio));
+  return rated.length ? rated.reduce((a, b) => (b.ratio > a.ratio ? b : a)) : null;
+}
+
+/**
+ * THE READING IS THE FULLEST MOUNT AND THE TONE IS EVERYTHING ON THE VIEW.
+ *
+ * A half-empty disk whose SMART says it is failing must not headline teal, and
+ * a backup that stopped running three days ago is the same kind of fact about
+ * the same data - so all three grade the one headline. This is hostLead's rule
+ * and loadLead's: the reading names one number, the tone answers for the view.
+ *
+ * Two absences, and they are different facts. No mount came back at all means
+ * Prometheus did not answer; mounts that came back with no readable ratio means
+ * it did and the numbers were unusable. Neither is an empty disk.
+ */
+export function storageLead(
+  mounts: MountReading[],
+  drives: Drive[],
+  backupTones: Tone[],
+): LeadReading {
+  const full = fullestMount(mounts);
+
+  let tone: Tone = full ? fsTone(full.ratio) : "off";
+  for (const d of drives) {
+    const t = smartLine(d).tone;
+    if (RANK[t] > RANK[tone]) tone = t;
+  }
+  for (const t of backupTones) if (RANK[t] > RANK[tone]) tone = t;
+
+  if (full === null) {
+    return {
+      text: mounts.length ? "storage not measured" : "no filesystem reported",
+      tone: "off",
+      live: false,
+      sub: mounts.length
+        ? `${mounts.length} mount${mounts.length === 1 ? "" : "s"} answered, none with a readable size and free pair`
+        : "prometheus returned no node_filesystem_size_bytes series",
+    };
+  }
+
+  // "3 drive(s)" in a headline sub-line is a placeholder that shipped. The two
+  // words are cheap and one of them is always right.
+  const drivesSub =
+    drives.length === 0
+      ? "no drive reported"
+      : `${drives.length} drive${drives.length === 1 ? "" : "s"}`;
+
+  return {
+    text: `${fmt.percent(full.ratio, 0)} ${full.mountpoint}`,
+    tone,
+    live: false,
+    sub: `${fmt.bytes(full.free)} free of ${fmt.bytes(full.total)}, ${mounts.length} mounts, ${drivesSub}`,
+  };
 }

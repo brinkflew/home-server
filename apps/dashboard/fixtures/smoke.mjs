@@ -15,7 +15,7 @@ const { sortRows, actionFor, badgeFor, whoLine, stateClass, STATE_LABEL, STATE_T
   await load("/src/media.ts");
 const { posterHeight, posterUrl } = await load("/src/images.ts");
 const { containerTone, laneTone, quotaTone, heartbeatTone } = await load("/src/health.ts");
-const { seriesStyle, bandOpacity } = await load("/src/charts.ts");
+const { seriesStyle, bandOpacity, ceilingTick, yTicks, symmetricExtent } = await load("/src/charts.ts");
 const { fleetDocument, fleetUnreadable } = await load("/fixtures/fleet.ts");
 const {
   roundState,
@@ -1653,6 +1653,95 @@ if (battery === null) {
     seriesStyle({ points: [], opacity: 0.25 }, 1, {}).opacity, 0.25);
   check("...and the mirror",
     seriesStyle({ points: [], opacity: 0.25 }, 1, { mirror: true }).opacity, 0.25);
+
+  // --- the ceiling nothing labelled ----------------------------------------
+  //
+  // A PINNED CHART WHOSE CEILING IS NOT ON THE LADDER HAD NO TOP LABEL, and its
+  // data was welded to that unnamed edge. This host reports MemTotal as
+  // 15.46 GiB, the binary ladder resolves to a 4 GiB step, so the gutter said
+  // 0/4/8/12 and the stack filled to a number the axis never named. Invisible in
+  // every screenshot because the fixture's MemTotal was a round 16 GiB - the
+  // numeric spelling of a fixture that cannot contradict its consumer.
+  {
+    const GiB = 2 ** 30;
+    const frameFor = (max) => ({ width: 900, height: 132, extent: { min: 0, max } });
+
+    const real = frameFor(15.46 * GiB);
+    const plain = yTicks(real, 4, 1024);
+    check("the ladder stops below a ceiling it cannot reach",
+      Math.max(...plain.map((t) => t.value)) < real.extent.max, true);
+
+    const withTop = ceilingTick(plain, real, real.extent.max);
+    check("the ceiling gets a label of its own", withTop.length, plain.length + 1);
+    check("...at the value the frame is actually pinned to", withTop.at(-1).value, real.extent.max);
+    check("...on the top edge, where .y-tick.top shifts it inward", withTop.at(-1).edge, "top");
+
+    // A ROUND CEILING IS ALREADY ON THE LADDER and must not be labelled twice.
+    const round = frameFor(16 * GiB);
+    const roundTicks = yTicks(round, 4, 1024);
+    check("a ceiling the ladder already reached gains nothing",
+      ceilingTick(roundTicks, round, round.extent.max).length, roundTicks.length);
+    check("...which is why the 16 GiB fixture could not show this",
+      Math.max(...roundTicks.map((t) => t.value)), round.extent.max);
+
+    // Two rungs cannot share a label slot.
+    const near = frameFor(12.4 * GiB);
+    check("a ceiling just above the top tick is left alone",
+      ceilingTick(yTicks(near, 4, 1024), near, near.extent.max).length, yTicks(near, 4, 1024).length);
+
+    // A PADDED EXTENT'S TOP IS HEADROOM, NOT A CEILING. Naming it would label
+    // the 8% pad as if it were a fact about the machine.
+    check("no fixed max, no ceiling label",
+      ceilingTick(plain, real, undefined).length, plain.length);
+    check("...and a non-finite one is absent, not a ceiling of NaN",
+      ceilingTick(plain, real, Number.NaN).length, plain.length);
+  }
+
+  // --- the mirror's zero ----------------------------------------------------
+  //
+  // symmetricExtent GIVES EVERY TICK A TWIN AND tickLabel STRIPS THE SIGN, so a
+  // mirrored gutter printed "4.0 MB/s" at the top and "4.0 MB/s" at the bottom
+  // with nothing between them - two identical strings and no anchor, on an axis
+  // whose whole claim is that it runs in two directions. The zero tick used to
+  // be filtered out on the grounds that "the zero rule labels itself"; a rule is
+  // not a label.
+  {
+    const ext = symmetricExtent([{ points: [[0, 8e6]], direction: "up" }], {});
+    const frame = { width: 900, height: 132, extent: ext };
+    const ticks = yTicks(frame, 4, 1024);
+    check("a mirrored axis really is symmetric about zero",
+      Math.round(ext.min + ext.max), 0);
+    check("...so its labels come in identical pairs",
+      ticks.filter((t) => t.value > 0).length, ticks.filter((t) => t.value < 0).length);
+    check("...and the zero that anchors them is a tick the axis has",
+      ticks.some((t) => t.value === 0), true);
+  }
+}
+
+// --- two things about MetricChart that only its source can answer ------------
+// Neither is reachable through a module: one is a template's paint order and the
+// other is a media query. Both were wrong, and both were invisible at the width
+// every screenshot was taken at.
+{
+  const chart = await readFile(new URL("../src/components/MetricChart.vue", import.meta.url), "utf8");
+
+  // A 5%-WHITE HAIRLINE UNDER FOUR FILLS IS NOT A GRIDLINE. The rules were
+  // emitted before the stack, so the memory chart drew four y labels pointing at
+  // nothing while the CPU chart beside it was fine - a line cannot cover a
+  // hairline the way a fill does.
+  const stackOpen = chart.indexOf('<g v-if="stacked">');
+  const stackClose = chart.indexOf("</g>", stackOpen);
+  const stackBlock = chart.slice(stackOpen, stackClose);
+  check("the stack draws its bands before the rules that cross them",
+    stackBlock.indexOf("bandDraw") < stackBlock.indexOf("v-for=\"y in rules\""), true);
+  check("...and the line charts still draw theirs underneath",
+    chart.indexOf('<g v-if="!stacked">') < stackOpen, true);
+
+  // THE MIRROR'S ZERO LABEL IS KEPT NOW. The filter that removed it is gone.
+  check("nothing filters the zero tick out of a mirrored gutter",
+    /filter\(\(t\) => t\.value !== 0\)/.test(chart), false);
+  check("...though its duplicate RULE is still suppressed",
+    /props\.mirror && t\.value === 0/.test(chart), true);
 }
 
 
@@ -1829,6 +1918,95 @@ if (battery === null) {
     check("the battery extraction found the dynamic backup keys too", facts.has("backup_local_at"), true);
     check("every fact key this page reads is one the battery emits",
       sys.FACT_KEYS.filter((k) => !facts.has(k)), []);
+  }
+
+  // --- the two leads the split added ---------------------------------------
+  //
+  // /system BECAME THREE VIEWS, AND SIBLING VIEWS LEAD WITH ONE READING EACH.
+  // hostLead already had four states and a test for each; these two are new and
+  // can make the identical mistake it was written for - fmt.percent(NaN) is "-",
+  // so the obvious spelling headlines "- busy" the way the first draft of the
+  // uptime one headlined "up -".
+
+  const LANE_OK = ["ok", "ok", "ok"];
+
+  check("the load lead reads the aggregate", sys.loadLead(M, 12, 0.93, LANE_OK).text, "30.4% busy");
+  check("...and names the thread the aggregate hides",
+    sys.loadLead(M, 12, 0.93, LANE_OK).sub, "12 threads, busiest 93%, load 4.20");
+
+  // THE READING IS ONE SERIES AND THE TONE IS THE WHOLE VIEW. A saturated
+  // encoder beside a 12%-busy aggregate is the case: grading the headline on its
+  // own number would draw teal over a machine that cannot take more work.
+  check("a quiet host with quiet lanes is green", sys.loadLead(M, 12, 0.93, LANE_OK).tone, "ok");
+  check("...and one bad lane outranks the number beside it",
+    sys.loadLead({ ...M, cpuStalled: 0.01 }, 12, 0.93, ["ok", "fail", "ok"]).tone, "fail");
+  check("...as does the cpu condition, with no lane saying anything",
+    sys.loadLead({ ...M, cpuStalled: 0.4 }, 12, 0.93, LANE_OK).tone, "fail");
+
+  // ABSENCE IS A SENTENCE, NEVER A DASH AT --t-mono-xl.
+  check("no window at all is not a dash", sys.loadLead(null, 0, Number.NaN, []).text, "load not measured");
+  check("...and it is grey", sys.loadLead(null, 0, Number.NaN, []).tone, "off");
+  check("an unanswered cpu series is the same",
+    sys.loadLead({ ...M, cpuBusy: Number.NaN }, 12, 0.93, LANE_OK).text, "load not measured");
+  check("a host whose threads did not resolve still leads",
+    sys.loadLead(M, 0, Number.NaN, LANE_OK).sub,
+    "thread count unknown, busiest thread unknown, load 4.20");
+
+  const MOUNTS = [
+    sys.mountReading("/boot", 350 * 2 ** 20, 171 * 2 ** 20),
+    sys.mountReading("/var/mnt/media", 36 * 2 ** 40, 3.2 * 2 ** 40),
+  ];
+  const DRIVE_OK = { device: "nvme0", model: "", healthy: true, temp: 45, hours: 1,
+                     wear: 0.04, realloc: 0, pending: 0, mediaErrors: 0 };
+
+  check("the storage lead is the fullest mount",
+    sys.storageLead(MOUNTS, [DRIVE_OK], ["ok"]).text, "91% /var/mnt/media");
+  check("...and its sub counts what it is speaking for",
+    sys.storageLead(MOUNTS, [DRIVE_OK], ["ok"]).sub,
+    "3.2 TB free of 36.0 TB, 2 mounts, 1 drive");
+
+  // A HALF-EMPTY DISK THAT IS DYING MUST NOT READ TEAL. Three sources of the one
+  // tone, and the headline takes the worst of all three.
+  check("a fullest mount at 91% is amber", sys.storageLead(MOUNTS, [DRIVE_OK], ["ok"]).tone, "warn");
+  check("a failing drive outranks a roomy disk",
+    sys.storageLead([sys.mountReading("/", 100, 90)], [{ ...DRIVE_OK, healthy: false }], ["ok"]).tone,
+    "fail");
+  check("...and so does a backup that stopped running",
+    sys.storageLead([sys.mountReading("/", 100, 90)], [DRIVE_OK], ["ok", "fail"]).tone, "fail");
+  check("an empty roomy host is green", sys.storageLead([sys.mountReading("/", 100, 90)], [DRIVE_OK], ["ok"]).tone, "ok");
+
+  check("no filesystem at all says so", sys.storageLead([], [], []).text, "no filesystem reported");
+  check("...and is grey", sys.storageLead([], [], []).tone, "off");
+
+  // MOUNTS THAT ANSWERED WITH UNUSABLE NUMBERS ARE A DIFFERENT FACT from none
+  // answering, and neither is an empty disk.
+  const UNREADABLE = [sys.mountReading("/var/lib/containers", 233 * 2 ** 30, Number.NaN)];
+  check("a mount with no free figure is not a full one", sys.storageLead(UNREADABLE, [], []).text,
+    "storage not measured");
+  check("...and it does not win the fullest comparison", sys.fullestMount(UNREADABLE), null);
+  check("...nor is its ratio a number", Number.isFinite(UNREADABLE[0].ratio), false);
+  check("a mount of size zero is unreadable, not empty",
+    Number.isFinite(sys.mountReading("/x", 0, 0).ratio), false);
+
+  // --- the axis every chart in the application shares -----------------------
+  //
+  // MetricChart hides `.x-tick:nth-child(even)` below 640px, under a comment
+  // promising it "leaves first and last - the two that anchor the axis - in
+  // place". THAT HELD ONLY FOR AN ODD COUNT: with four ticks it hides the 2nd
+  // and the 4th, and the 4th is the last. The CSS carries :not(.last) now, and
+  // this asserts the property that made an even count a trap so a future call
+  // site cannot reintroduce it silently.
+  {
+    const chart = await readFile(new URL("../src/components/MetricChart.vue", import.meta.url), "utf8");
+    check("the phone rule spares the last tick whatever the count",
+      /\.x-tick:nth-child\(even\):not\(\.last\)/.test(chart), true);
+
+    const kept = (count) =>
+      Array.from({ length: count }, (_, i) => i + 1).filter((nth) => nth % 2 !== 0 || nth === count);
+    check("an odd count keeps first, middle and last", kept(5), [1, 3, 5]);
+    check("an even count keeps its last one too", kept(4), [1, 3, 4]);
+    check("...which the old rule did not", Array.from({ length: 4 }, (_, i) => i + 1).filter((nth) => nth % 2 !== 0),
+      [1, 3]);
   }
 }
 

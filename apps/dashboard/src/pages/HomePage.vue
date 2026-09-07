@@ -31,7 +31,7 @@ const media = useMediaStore();
 const host = useHostStore();
 
 /** Up to three cards, which is what this host actually runs to. The design draws
- *  two; --cards is SystemPage's existing idiom for a per-item grid, reused rather
+ *  two; --cards was SystemPage's idiom for a per-item grid, reused rather
  *  than reinvented, and it makes zero sessions and three the same mechanism. */
 const MAX_CARDS = 3;
 

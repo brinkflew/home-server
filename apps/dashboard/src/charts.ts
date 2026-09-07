@@ -368,6 +368,40 @@ export function yTicks(frame: Frame, count = 4, base = 10): AxisTickY[] {
   });
 }
 
+/** How close to the tick below it a ceiling label may sit, as a share of the
+ *  step the ladder chose. Measured against the step rather than a pixel count so
+ *  it holds at every chart height in the application. */
+const CEILING_GAP = 0.35;
+
+/**
+ * A FIXED CEILING THAT NO TICK LANDS ON GETS ONE ANYWAY.
+ *
+ * `niceTicks` never emits above the extent and a fixed `yMax` is never padded -
+ * both deliberate, and together they leave a pinned chart with an unlabelled top
+ * edge that its own data is welded to. Memory is the case: this host's MemTotal
+ * is 15.46 GiB, the binary ladder resolves to a 4 GiB step, so the gutter read
+ * 0/4/8/12 while the stack filled to a number the axis never named. CPU escapes
+ * it only because 1.0 happens to sit on the ladder.
+ *
+ * IT WAS INVISIBLE IN EVERY SCREENSHOT because the fixture's MemTotal was a
+ * round 16 GiB, which lands exactly on that ladder. A round number is the
+ * numeric spelling of a fixture that cannot contradict its consumer.
+ *
+ * ONLY FOR A FIXED MAX. A padded extent's top is 8% of headroom above the data,
+ * and naming it would be labelling the padding.
+ */
+export function ceilingTick(ticks: AxisTickY[], frame: Frame, max: number | undefined): AxisTickY[] {
+  if (max === undefined || !Number.isFinite(max) || !ticks.length) return ticks;
+
+  const step = ticks.length > 1 ? Math.abs(ticks[1].value - ticks[0].value) : max;
+  const top = ticks.reduce((a, b) => (b.value > a.value ? b : a));
+  // Two rungs cannot share a label slot, so a ceiling just above the top tick
+  // is left unlabelled rather than printed on top of it.
+  if (!(max - top.value > step * CEILING_GAP)) return ticks;
+
+  return [...ticks, { value: max, y: projectY(max, frame), edge: "top" }];
+}
+
 // =============================================================================
 // Stacked areas
 // -----------------------------------------------------------------------------

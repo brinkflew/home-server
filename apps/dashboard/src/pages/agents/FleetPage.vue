@@ -30,7 +30,8 @@
  * tokens were fourteen hardcoded UTC days of ActivityBars beside a memory chart
  * that did answer the picker, so moving it moved one card of two.
  *
- * SO THE STRIPS BECAME TWO CHART LANES, on SystemPage's shared-timeline idiom.
+ * SO THE STRIPS BECAME TWO CHART LANES, on the shared-timeline idiom that now
+ * lives in pages/system/LoadPage.vue.
  * Three things came with that and the third is the point: a crosshair readout,
  * which the strips could not have because ActivityBars is documented as "not
  * meant to be read as a number"; the window; and useCrosshair being
@@ -554,7 +555,7 @@ const lanesTip = computed(() => ({
          wrong for the only history panel on this page, where there was nothing
          to hover and nothing to read.
 
-         THE LANE IS SystemPage's, unchanged: a name, a plot, and a reading with
+         THE LANE IS /system/load's, unchanged: a name, a plot, and a reading with
          the window's peak. What it buys beyond the readout is that all three
          plots on this band are now on one axis, so the cursor is shared - a
          memory spike can be read against the run that caused it. -->
@@ -1018,7 +1019,7 @@ const lanesTip = computed(() => ({
 
   /* THE LANE BECOMES TWO ROWS RATHER THAN A SCROLLER. 110 + 90 of fixed width
      plus two gaps leaves a 390px phone about 130px of plot, which is a stub;
-     SystemPage's lanes carry 288px of chrome and pan inside .hscroll instead.
+     /system/load's lanes carry 288px of chrome and pan inside .hscroll instead.
      Name and reading take one line, the plot takes the width under them, and
      nothing is lost or panned to. */
   .lane {

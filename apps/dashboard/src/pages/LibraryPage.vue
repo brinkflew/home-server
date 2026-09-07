@@ -227,7 +227,7 @@ const emptiness = computed<"none" | "filtered" | "stale" | "fresh">(() => {
 
           <div class="detail">
             <!-- Rendered even when empty, with a min-height, so every row keeps
-                 one baseline - the same trick SystemPage's axis ticks use. -->
+                 one baseline - the same trick /system/load's axis ticks use. -->
             <span class="note truncate" :title="row.note ?? ''">{{ row.note ?? "" }}</span>
             <span class="src mono truncate">
               {{ [row.source, row.quality].filter(Boolean).join(" / ") }}

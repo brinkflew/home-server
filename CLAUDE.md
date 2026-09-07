@@ -1556,6 +1556,42 @@ signal read green.
 - Three tables do not fit in one band; the rule is to give one its own, not to squeeze all three. A
   metric-per-row grid with a column per card is a table drawn sideways - the record is a card.
 
+### Four charts on one window, one cursor, and four different axes
+- Every axis parameter was a literal per call site - heights 104/104/88/88, ticks 5/4/3/3 - so a
+  time under one chart was above nothing on the one beside it. `/ci` draws the same band at one
+  height with no override. **`Band.stretch` is row-scoped**, so it was hiding 70px of mismatch rather
+  than the "few tens of pixels" its own docblock allows.
+- **`.x-tick:nth-child(even)` promised it "leaves first and last" and that held only for an ODD
+  count**: with four ticks the 4th is hidden and the 4th IS the last. Two call sites passed 4 and
+  lost their right-hand anchor on a phone and nowhere else.
+
+### The axis was printed on the page background, at every width, for as long as it existed
+- **`Y_GUTTER` was 46px under a comment claiming "a label like `14.2 GB` still fits".** It is 49px,
+  and `16.0 MB/s` is 63 - so the disk chart's axis sat 6px past the panel's own left edge on a
+  desktop and 18px on a phone. Sized from the widest string any format can produce now. It cannot be
+  `auto`: the lanes share one x-mapping. Coarsening the axis was not available - it shares ONE
+  `format` with the readout and the legend, deliberately.
+- **A rule is not a label**: the mirror's zero tick was filtered out because "the zero rule labels
+  itself", leaving two identical magnitudes with no anchor. The label is kept and the duplicate RULE
+  is suppressed instead. And a stack's gridlines were emitted BEFORE the bands, so four y labels
+  pointed at nothing - a line cannot cover a hairline the way a fill does.
+
+### A round number is the numeric spelling of a fixture that cannot contradict its consumer
+- **A fixed ceiling no tick lands on had no label** and its data was welded to that unnamed edge:
+  MemTotal 15.46 GiB against a 4 GiB ladder. Invisible because the fixture's `MEM_TOTAL` was
+  `16 * GB`, which lands exactly on it. Same family as `staged_version`, in a different type.
+- **A shared cursor only a keyboard could strand.** `pointerleave` is the only thing that clears it,
+  and reaching the sub-nav with a mouse moves the pointer off the chart on the way; a keyboard
+  navigation does not. Reachable only because /system is three routes now.
+
+### /system became three views, and the alerts came up
+- 1,553 lines answering three questions, so an alert was band six of seven. `/system/health`,
+  `/system/load`, `/system/storage`, alerts second on the one `/system` lands on. Second nested
+  record; the name stays on the default child. Health asks for nine instants and NO ranges, so it has
+  no cursor - and `system.ts` did not change to allow that, which is the return on the extraction.
+- **Three sibling views cannot all open on the same word**, and the `storage` condition is labelled
+  `disk` under a sub-nav whose third segment is Storage. The id does not move with the label.
+
 
 ## Target architecture
 

@@ -19,13 +19,14 @@
  *
  * THE POINTER TARGET IS `.plot`, NEVER `.frame`. The frame now includes a
  * left gutter, and a getBoundingClientRect taken on it would skew every
- * reported time by gutter/plotWidth of the window - 46px of a 600px panel on a
- * 6h window is 28 minutes, in the direction of "the spike was earlier than it
+ * reported time by gutter/plotWidth of the window - 70px of a 600px panel on a
+ * 6h window is 42 minutes, in the direction of "the spike was earlier than it
  * was", which is exactly the kind of wrong that looks plausible.
  */
 import { computed, ref, useId } from "vue";
 import {
   areaPath,
+  ceilingTick,
   extent,
   linePath,
   latest,
@@ -131,12 +132,34 @@ const props = withDefaults(
 );
 
 const VIEW_W = 900;
-const Y_GUTTER = 46;
-/* The same gutter below the phone rung. A label like "14.2 GB" still fits at
-   --t-mono-xs; what goes is the air between it and the plot. It is a constant
+
+/* MEASURED AGAINST THE WIDEST LABEL THIS APPLICATION CAN DRAW, WHICH IS NOT THE
+   ONE THESE NUMBERS WERE CHOSEN AGAINST.
+
+   These were 46 and 34, under a comment claiming "a label like 14.2 GB still
+   fits at --t-mono-xs". It does not: 14.2 GB is 49px. Measured in the browser
+   at both rungs, the y labels were leaving the gutter and then the CARD - on
+   /system, "16.0 MB/s" (63px) sat 23px outside its 46px gutter and 6px past the
+   panel's own left edge on a desktop, 18px past it on a phone, and even
+   "12 GB" (35px) spilled 7px at the phone rung. Two charts on every /system
+   screenshot ever taken had their axis printed on the page background.
+
+   THE CEILING IS A RATE AT THREE SIGNIFICANT FIGURES: fmt.bytes drops its
+   decimal at 100 and above, so "99.9 GB/s" - 9 characters, 63px - is the widest
+   string any format on any page can produce. 63 + 6px of air is 69.
+
+   IT CANNOT BE `auto` AND IT CANNOT BE PER-CHART: every lane of the shared
+   timeline must share one x-mapping, or the four charts that stack into one
+   column on a phone would each start their time axis somewhere different. The
+   CPU chart pays 42px of empty gutter for the disk chart's label, and that is
+   the trade this constant exists to make. */
+const Y_GUTTER = 70;
+
+/* The same gutter below the phone rung, where the only thing that can go is the
+   air: the labels are the same strings at the same 11px floor. It is a constant
    rather than a media query on .y-tick because the GRID TRACK is what has to
    move, and the track is set inline from showYAxis. */
-const Y_GUTTER_SM = 34;
+const Y_GUTTER_SM = 66;
 
 const cross = useCrosshair();
 
@@ -256,10 +279,16 @@ const showYAxis = computed(() => props.yAxis && typeof props.format === "functio
  *  data is not. */
 const ticksY = computed<AxisTickY[]>(() => {
   if (!showYAxis.value || empty.value) return [];
-  const all = yTicks(frame.value, props.grid || 4, props.tickBase);
-  // On a mirrored chart the zero rule labels itself, so a "0" in the gutter is
-  // a third thing saying the same one.
-  return props.mirror ? all.filter((t) => t.value !== 0) : all;
+  const all = ceilingTick(yTicks(frame.value, props.grid || 4, props.tickBase), frame.value, fixed.value.max);
+
+  // THE ZERO TICK IS WHAT MAKES A MIRROR READABLE, and it used to be filtered
+  // out here on the grounds that "the zero rule labels itself, so a 0 in the
+  // gutter is a third thing saying the same one". A RULE IS NOT A LABEL. The
+  // two halves are symmetric by construction and `tickLabel` strips the sign,
+  // so the gutter read "4.0 MB/s" at the top and "4.0 MB/s" at the bottom with
+  // nothing between them - two identical strings and no anchor, on an axis
+  // whose whole claim is that it runs in two directions.
+  return all;
 });
 
 /**
@@ -272,7 +301,13 @@ const ticksY = computed<AxisTickY[]>(() => {
  */
 const rules = computed<number[]>(() => {
   if (showYAxis.value && ticksY.value.length) {
-    return ticksY.value.filter((t) => t.edge === null).map((t) => t.y);
+    return ticksY.value
+      .filter((t) => t.edge === null)
+      // The mirror's zero is drawn below, solid and brighter. A hairline under
+      // it at the same y is a second line saying the same thing - which is the
+      // objection that was mistakenly aimed at the LABEL.
+      .filter((t) => !(props.mirror && t.value === 0))
+      .map((t) => t.y);
   }
   return Array.from({ length: props.grid }, (_, i) => ((i + 1) * props.height) / (props.grid + 1));
 });
@@ -516,17 +551,26 @@ function onLeave(): void {
           </linearGradient>
         </defs>
 
-        <line
-          v-for="y in rules"
-          :key="y"
-          x1="0"
-          :y1="y"
-          :x2="VIEW_W"
-          :y2="y"
-          stroke="oklch(1 0 0 / 0.05)"
-          stroke-width="1"
-          vector-effect="non-scaling-stroke"
-        />
+        <!-- UNDER THE LINES, OVER THE BANDS. A 5%-white hairline beneath four
+             stacked fills at 0.42/0.3/0.2/0.12 is invisible, so the memory
+             chart drew four y labels pointing at nothing while the CPU chart
+             beside it was fine - a line cannot cover a hairline the way a fill
+             does. Drawn after the stack in the `stacked` case and before the
+             lines otherwise, because a gridline OVER a data line is the
+             opposite mistake. -->
+        <g v-if="!stacked">
+          <line
+            v-for="y in rules"
+            :key="y"
+            x1="0"
+            :y1="y"
+            :x2="VIEW_W"
+            :y2="y"
+            stroke="oklch(1 0 0 / 0.05)"
+            stroke-width="1"
+            vector-effect="non-scaling-stroke"
+          />
+        </g>
 
         <!-- Solid and brighter than a gridline, so it is never mistaken for one
              or for the dashed median. Hidden when empty: a confident line
@@ -553,6 +597,19 @@ function onLeave(): void {
             :stroke="b.fill"
             stroke-width="1"
             :opacity="b.edgeOpacity"
+            vector-effect="non-scaling-stroke"
+          />
+          <!-- Brighter than the line-chart rules above, because these cross a
+               fill rather than a background. -->
+          <line
+            v-for="y in rules"
+            :key="y"
+            x1="0"
+            :y1="y"
+            :x2="VIEW_W"
+            :y2="y"
+            stroke="oklch(1 0 0 / 0.11)"
+            stroke-width="1"
             vector-effect="non-scaling-stroke"
           />
         </g>
@@ -752,13 +809,26 @@ function onLeave(): void {
    a prop and several call sites pass their own; changing it here would change
    what the axis claims on a desktop too. Hiding every second one is a
    presentation fix that leaves first and last - the two that anchor the axis -
-   in place, which is why the nth-child runs from the second element. */
+   in place, which is why the nth-child runs from the second element.
+
+   AND THAT GUARANTEE HELD ONLY FOR AN ODD COUNT, which is the count it was
+   written against. With four ticks the rule hides the 2nd and the 4th, and the
+   4th IS the last one - so the memory chart on /system and the lane axis on
+   /agents/fleet, both passing 4, lost their right-hand anchor on a phone and
+   nowhere else. `:not(.last)` restores what the paragraph above claims for
+   every count; the class was already on the element. */
 @media (max-width: 640px) {
   .frame {
     grid-template-columns: var(--y-gutter-sm, 0px) minmax(0, 1fr);
   }
 
-  .x-tick:nth-child(even) {
+  /* The 4px the small gutter gives back. The label is the same string at the
+     same size here, so the air is the only thing there is to take. */
+  .y-tick {
+    right: 2px;
+  }
+
+  .x-tick:nth-child(even):not(.last) {
     display: none;
   }
 

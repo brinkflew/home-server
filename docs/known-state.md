@@ -638,7 +638,7 @@ nothing points at is one nobody reads.
   ephemeral - otherwise the normal case filters out all twenty-five containers and PASSes with
   *"0 containers up, none unhealthy"*. The failure appears only when nothing is wrong.
 - **DO NOT "FIX" THE SKIP BY GIVING A RUNNER A UNIT LABEL.** This is the trap the skips create and
-  it is invisible for thirty days. `apps/dashboard/src/pages/SystemPage.vue` renders the **worst
+  it is invisible for thirty days. `apps/dashboard/src/pages/system/HealthPage.vue` renders the **worst
   five** containers by 30-day availability, sorted ascending on
   `avg_over_time(home_server_container_running[1h])`. A runner that lived twenty minutes and emitted
   that series would score about 0% for its day, **evicting a real row from the strip for a month** -
@@ -4583,3 +4583,61 @@ Recorded 2026-09-07, with the board's filter, the step rail and the three render
 - The `@media (max-width: 1280px)` block was an invented fourth rung on a three-rung ladder, and
   `.right-column` inside it is the fold with no floor already recorded here: a column that became a
   ROW when it could no longer sit beside the cards, and stayed one at 375.
+
+### Four charts on one window, one cursor, and four different axes
+- Every axis parameter was a literal per call site - heights 104/104/88/88, tick counts 5/4/3/3 - so
+  `10:58` under the CPU chart was above nothing at all on the memory chart beside it, and the two
+  rows of the 2x2 were different depths. `/ci` draws the identical band at one height with no tick
+  override and reads even because of it. The overrides are deletions, not additions.
+- **`Band.stretch` cannot equalise across rows**: it is `align-items`, so it is row-scoped, and it
+  grows the box without redistributing. Its own docblock sets the test - "a few tens of pixels, not a
+  few hundred" - and it was hiding about 70px, which is the failure that sentence describes. It is
+  correct again once the heights match.
+
+### A CSS rule that was right for the number it was written against
+- **`.x-tick:nth-child(even)` promised it "leaves first and last - the two that anchor the axis - in
+  place".** True only for an ODD count: with four ticks it hides the 2nd and the 4th, and the 4th IS
+  the last. The memory chart on /system and the lane axis on /agents/fleet both passed 4 and lost
+  their right-hand anchor **on a phone and nowhere else**. `:not(.last)` restores the claim for every
+  count and the class was already on the element.
+
+### The axis was printed on the page background, at every width, for as long as it existed
+- **`Y_GUTTER` was 46px under a comment claiming "a label like `14.2 GB` still fits".** Measured:
+  `14.2 GB` is 49px and `16.0 MB/s` is 63. The disk chart's axis sat 23px outside its gutter and 6px
+  past the panel's own left edge on a DESKTOP, 18px past it on a phone; even `12 GB` spilled 7px at
+  the phone rung. The gutter is sized from the widest string any format can produce - `99.9 GB/s`,
+  63px, because `fmt.bytes` drops its decimal at 100 - and is 70/66.
+- It cannot be `auto` and it cannot be per-chart: the lanes of the shared timeline must share one
+  x-mapping. The CPU chart pays 42px of empty gutter for the disk chart's label; that is the trade,
+  and it was simply sized wrong. **Coarsening the axis to save width was not available**: the axis,
+  the readout and the legend deliberately share ONE `format`, so the hover value would have gone with
+  it.
+
+### Three deliberate decisions composing into an unreadable axis
+- `symmetricExtent` gives every mirrored tick a twin, `tickLabel` strips the sign, and the zero tick
+  was filtered out because "the zero rule labels itself, so a `0` in the gutter is a third thing
+  saying the same one". **A rule is not a label**: the gutter read `4.0 MB/s` above and `4.0 MB/s`
+  below with no anchor between them, on an axis whose whole claim is that it runs two ways. The label
+  is kept and the duplicate RULE is suppressed instead, which is what that sentence was about.
+- **A stack's gridlines were painted over.** Rules are emitted before the bands at 5% white, under
+  four fills at 0.42/0.3/0.2/0.12, so the memory chart drew four y labels pointing at nothing while
+  the CPU chart beside it was fine - a line cannot cover a hairline the way a fill does.
+
+### A round number is the numeric spelling of a fixture that cannot contradict its consumer
+- **A fixed ceiling that no tick lands on had no label**, and its data was welded to that unnamed
+  edge. `niceTicks` never emits above the extent and a fixed `yMax` is never padded, both deliberate.
+  MemTotal here is 15.46 GiB, the ladder resolves to 4 GiB, so the gutter said 0/4/8/12. CPU escapes
+  it only because 1.0 sits on the ladder.
+- **The fixture's `MEM_TOTAL` was `16 * GB`, which lands exactly on that ladder**, so the ceiling was
+  always the top label and the defect could not appear in any capture at any width. A machine "with
+  16 GB" reports 16208128 kB. Same family as `staged_version` one commit earlier, in a different
+  type. `ceilingTick` went to `charts.ts` rather than the SFC and `/ci` gained the fix for free - its
+  lane-disk chart now names the `20.0 GB` budget its own aside always claimed.
+
+### A shared cursor that only a keyboard could strand
+- `useCrosshair` is module-level and the ONLY thing that clears it is `pointerleave` on a plot, so a
+  mouse user can never strand it: reaching the sub-nav moves the pointer off the chart on the way. A
+  keyboard user does not. Without an `onUnmounted` clear, focus the sibling segment, press Enter and
+  come back, and every value slot on the view reports an instant nobody chose.
+- Measured both ways, and only reachable at all because `/system` is three routes now. Same family as
+  the drawer that opened perfectly for a mouse and not at all for a keyboard.

@@ -78,7 +78,7 @@ const width = () =>
 }
 
 /* The moving band that says "this is still going", over whatever colour the
-   state chose. Same construction as SystemPage's timeline sweep - full width,
+   state chose. Same construction as /system/load's timeline sweep - full width,
    band painted as a background, so translateX(100%) is one whole lane - and
    tokens.css owns --sweep-band, the keyframe and the reduced-motion opt-out. */
 .sweep {

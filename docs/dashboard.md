@@ -1139,7 +1139,7 @@ on slice memory in the card beside it: a memory spike can finally be read agains
 caused it. That is why all four ranges are fetched on **one** `options` - a lane on a different
 window would draw its cursor at a different instant while looking exactly as correct.
 
-The lane is `SystemPage.vue`'s shared timeline unchanged - a name, a plot, a reading with the
+The lane is the shared timeline unchanged - `pages/system/LoadPage.vue`'s now - a name, a plot, a reading with the
 window's peak - with two things it does not do. **Only the last lane passes `x-axis`**, so the one
 axis per card is rendered by the same component as the memory chart beside it, phone rung included,
 rather than by a hand-rolled row needing its own copy of the alternate-tick rule. And **the runs
@@ -1397,3 +1397,134 @@ one at 375. `Band`'s own 1180 replaces the whole arrangement.
 on the defect it names before it was trusted, and each reproduced the original symptom exactly -
 including `up -`, which is what the obvious spelling of the headline renders on a host with no facts:
 a headline claiming a dash was measured.
+
+## The System page became three views, and its charts stopped disagreeing, 2026-09-08
+
+**`SystemPage.vue` had reached 1,553 lines**, which made it the largest file in the application -
+longer than the 1,476-line `AgentsPage.vue` whose split one week earlier is the precedent. It carried
+the same defect that commit names: seven bands answering three different questions, so somebody
+opening it because their phone had buzzed scrolled past four bands of machinery to reach the alert
+that had sent them.
+
+| Route | Answers |
+|---|---|
+| `/system/health` | is anything wrong? |
+| `/system/load` | what is it working on? |
+| `/system/storage` | will the disks hold? |
+
+`router.ts` gained its second nested record, and its comment saying Agents "IS THE ONLY SECTION THAT
+IS" was rewritten rather than left to rot. `pages/system/SystemLayout.vue` carries the sub-navigation
+and the toolbar note; the three children are bare fragments. **The name `system` stays on the default
+child** and the parent has none - a record that only redirects is not a destination.
+
+**The alerts are band two on the view `/system` lands on**, under a lead that is one line and three
+conditions and costs about 90px. They were band six of seven. The lead keeps its place because it is
+what tones the page; everything with detail in it comes after. The list also lost its `max-height:
+320px` inner scroller, which existed only because six bands sat below it.
+
+**Splitting cost no freshness and saved most of the fetching.** The stores stay in `App.vue` for the
+reason `AgentsLayout` gives - `usePoll` resets `lastOk` on unmount - and only the Prometheus polls are
+per view. The single page fetched sixteen range queries and eighteen instants on every pass; health
+asks for nine instants and **no ranges at all**, load for sixteen ranges, storage for ten instants.
+Health has no chart, so it has no cursor and reads "now" without qualification - and `src/system.ts`
+did not change to allow that, because `conditionRows` takes a struct and does not care whether the
+numbers came from a range or an instant. That is the return on having extracted it.
+
+**Two more leads, on the one rule already established: one reading, toned by the worst thing on the
+view.** `loadLead` reads CPU busy and grades on the worst of the CPU condition and the three pressure
+lanes, because the encoder can sit at 100% while the aggregate reads 12%. `storageLead` reads the
+fullest mount and grades on it, every drive's `smartLine` and every backup age, because a half-empty
+disk that is failing must not headline teal. Both can make `hostLead`'s original mistake -
+`fmt.percent(NaN)` is `-`, so the obvious spelling headlines `- busy` the way the first draft
+headlined `up -` - and both are asserted in all their absence states.
+
+**Three sibling views cannot all open on the same word.** The lead bands are `Right now`, `Working`
+and `Headroom`, and the `storage` condition is labelled `disk` while keeping its id, because it sits
+one rung under a sub-nav whose third segment is Storage. This document already records the same
+correction for the Fleet band.
+
+### The four charts shared one window, one cursor, and no axis at all
+
+Every axis parameter was a hand-picked literal per call site:
+
+| | height | x-ticks | |
+|---|---|---|---|
+| CPU | 104 | **5** | ticks 6h apart |
+| Memory | 104 | **4** | ticks 8h apart |
+| Network | 88 | **3** | 12h apart, `mirror` |
+| Disk I/O | 88 | **3** | 12h apart, `mirror` |
+
+So `10:58` under the CPU chart was above nothing at all on the memory chart beside it, and the two
+rows were different depths. `/ci` draws the identical 2x2 band at `:height="132"` with **no** tick
+override and reads even because of it. The overrides are deleted; the component's default of five is
+odd, which matters below.
+
+**`stretch` is only defensible now that the heights match.** `Band.vue`'s docblock sets the test - "it
+absorbs a few tens of pixels, not a few hundred - if it is closing a large gap, the band is wrong" -
+and it was hiding about 70px of mismatch, which is the failure that sentence describes. What is left
+is the memory panel's legend and swap meter, about 45.
+
+### Five defects in `MetricChart`, three of which no screenshot at any width could show
+
+**THE PHONE RULE'S OWN GUARANTEE HELD ONLY FOR THE COUNT IT WAS WRITTEN AGAINST.** Below 640 it hides
+`.x-tick:nth-child(even)` under a comment promising it "leaves first and last - the two that anchor
+the axis - in place". With **four** ticks it hides the 2nd and the 4th, and the 4th *is* the last:
+the memory chart here and the lane axis on `/agents/fleet`, both passing 4, lost their right-hand
+anchor on a phone and nowhere else. `:not(.last)` restores the claim for every count, and the class
+was already on the element.
+
+**THE Y LABELS WERE LEAVING THE GUTTER AND THEN THE CARD.** `Y_GUTTER` was 46px under a comment
+claiming "a label like `14.2 GB` still fits at `--t-mono-xs`". It does not - measured in the browser,
+`14.2 GB` is 49px and `16.0 MB/s` is 63. On a desktop the disk chart's axis sat 23px outside its
+gutter and **6px past the panel's own left edge**; on a phone, 18px past it, and even `12 GB` spilled
+7px. Two charts on every screenshot of this page ever taken had their axis printed on the page
+background, which is the defect the redesign was asked for. The ceiling is a rate at three
+significant figures - `fmt.bytes` drops its decimal at 100, so `99.9 GB/s` at 63px is the widest
+string any format on any page can produce - and the gutters are 70 and 66 against it. The CPU chart
+pays 42px of empty gutter for the disk chart's label; that is the trade a fixed gutter exists to
+make, and it was simply sized wrong. **The axis and the readout share one `format` deliberately**, so
+coarsening the axis to save width would have coarsened the hover value with it.
+
+**THE MIRROR PRINTED THE SAME STRING TWICE WITH NOTHING BETWEEN THEM.** Three deliberate decisions
+compose into it: `symmetricExtent` gives every tick a twin, `tickLabel` strips the sign, and the zero
+tick was filtered out because "the zero rule labels itself, so a `0` in the gutter is a third thing
+saying the same one". **A rule is not a label** - without it, `4.0 MB/s` above and `4.0 MB/s` below
+have no anchor at all, on an axis whose whole claim is that it runs in two directions. The label is
+kept; the duplicate *rule* is still suppressed, which is what that sentence was actually about.
+
+**THE STACK'S GRIDLINES WERE PAINTED OVER.** Rules are emitted before the bands, at
+`oklch(1 0 0 / 0.05)`, under four fills at 0.42/0.3/0.2/0.12 - so the memory chart drew four y labels
+pointing at nothing while the CPU chart beside it was fine. A line cannot cover a hairline the way a
+fill does. They are drawn after the bands when `stacked`, and brighter, because they cross a fill.
+
+**A FIXED CEILING THAT NO TICK LANDS ON NOW GETS A LABEL.** `niceTicks` never emits above the extent
+and a fixed `yMax` is never padded, both deliberate; together they leave a pinned chart with an
+unlabelled top edge its own data is welded to. This host's MemTotal is 15.46 GiB, the binary ladder
+resolves to a 4 GiB step, so the gutter read 0/4/8/12 and the stack filled to a number the axis never
+named. CPU escapes it only because 1.0 sits on the ladder. `ceilingTick` lives in `charts.ts` rather
+than the SFC, for the reason every one of these extractions exists, and `/ci` gained the same fix for
+free - its lane-disk chart now names the `20.0 GB` budget its own aside always claimed.
+
+**AND THE FIXTURE WAS AGAIN THE OTHER HALF OF THE BUG.** `MEM_TOTAL` was `16 * GB`, which lands
+*exactly* on that ladder, so the ceiling was always the top label and this defect could not appear in
+any capture at any width. It is the host's own `16208128 * 1024` now. A machine "with 16 GB" never
+reports 16 GiB, and **a round number is the numeric spelling of a fixture that cannot contradict its
+consumer** - the same failure as `staged_version`, one commit later, in a different type.
+
+### Two more found by looking at the result
+
+**The mountpoint wrapped mid-path on a phone**, as `/var/lib/contai / ners` - the exact failure
+`.c-mount`'s measured 176px exists to prevent, one rung down where the rule set it to `auto`. It is
+`.p2` with a `.fold2` line now, which is what the priority ladder is for: the column goes and the
+fact it carried relocates.
+
+**The shared cursor survived a route change, for keyboard users only.** `useCrosshair` is
+module-level and the only thing that clears it is `pointerleave` on a plot - so a mouse user can
+never strand it, because reaching the sub-nav moves the pointer off the chart on the way. A keyboard
+user does not. Measured both ways: focus the Health segment, press Enter, come back, and without the
+`onUnmounted` clear the band aside reads `7 Sep 19:48` instead of `last 6h`, with every value slot on
+the view reporting that instant rather than now. The same family as the drawer that opened for a
+mouse and not for a keyboard, and only reachable at all because `/system` is three routes now.
+
+Nine defect families, each **proved to fire** by planting the original back before the assertion was
+trusted, and each reproducing the original symptom.

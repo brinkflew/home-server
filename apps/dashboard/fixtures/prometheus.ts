@@ -24,7 +24,20 @@ const swing = (key: string, base: number, amplitude: number): At => (t) => wave(
 
 const GB = 1024 ** 3;
 const MB = 1024 ** 2;
-const MEM_TOTAL = 16 * GB;
+
+/**
+ * THE HOST'S OWN NUMBER, NOT A ROUND ONE, AND THE DIFFERENCE IS A DEFECT THIS
+ * HID. `/proc/meminfo` on the server reports 16208128 kB - about 15.46 GiB -
+ * because MemTotal excludes what the firmware and the kernel reserve. A machine
+ * "with 16 GB" never reports 16 GiB.
+ *
+ * This was `16 * GB`, which lands exactly on the binary tick ladder, so the
+ * memory chart's ceiling was always the top label and the missing-ceiling
+ * defect could not appear in any screenshot at any width. Same family as the
+ * `staged_version` key: a fixture that cannot contradict its consumer is not
+ * evidence about it, and a round number is the numeric spelling of that.
+ */
+const MEM_TOTAL = 16208128 * 1024;
 
 const FS = [
   { mountpoint: "/boot", device: "/dev/nvme0n1p3", fstype: "ext4", size: 350 * MB, avail: 171 * MB },

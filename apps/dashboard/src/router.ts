@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory } from "vue-router";
 
 /**
- * Seven nav entries, and the last one is three views.
+ * Seven nav entries, and two of them are several views each.
  *
  * `/` lands on Home now. It used to land on System, because Home was the stub and
  * sending someone to a page that says "not built" would have been a strange front
@@ -16,10 +16,37 @@ export const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: "/", redirect: "/home" },
+    // SYSTEM IS NESTED, FOR THE REASON AGENTS IS. SystemPage.vue reached 1,553
+    // lines - longer than the AgentsPage that was split a week earlier - and
+    // answered three questions at once, so somebody opening it because their
+    // phone had buzzed scrolled past four bands of machinery to reach the alert
+    // that sent them. The parent carries the sub-navigation and the toolbar
+    // note; the children are the three answers. See pages/system/SystemLayout.vue.
+    //
+    // THE NAME STAYS ON THE DEFAULT CHILD, and the parent has none: a record
+    // that only redirects is not a destination, and anything resolving
+    // { name: "system" } must keep landing somewhere real.
     {
       path: "/system",
-      name: "system",
-      component: () => import("@/pages/SystemPage.vue"),
+      component: () => import("@/pages/system/SystemLayout.vue"),
+      children: [
+        { path: "", redirect: "/system/health" },
+        {
+          path: "health",
+          name: "system",
+          component: () => import("@/pages/system/HealthPage.vue"),
+        },
+        {
+          path: "load",
+          name: "system-load",
+          component: () => import("@/pages/system/LoadPage.vue"),
+        },
+        {
+          path: "storage",
+          name: "system-storage",
+          component: () => import("@/pages/system/StoragePage.vue"),
+        },
+      ],
     },
     {
       path: "/services",
@@ -50,11 +77,12 @@ export const router = createRouter({
       name: "ci",
       component: () => import("@/pages/CiPage.vue"),
     },
-    // AGENTS IS NESTED, AND IT IS THE ONLY SECTION THAT IS. One page had grown
-    // to nine panels answering three different questions - is the fleet
+    // AGENTS IS NESTED, AND IT WAS THE FIRST SECTION THAT WAS. One page had
+    // grown to nine panels answering three different questions - is the fleet
     // working, what did this round do, and what is the machinery costing. The
     // parent carries the sub-navigation and the toolbar note; the children are
-    // the three answers. See pages/agents/AgentsLayout.vue.
+    // the three answers. See pages/agents/AgentsLayout.vue. /system followed it
+    // for the same reason, so this is no longer the only one.
     //
     // A ROUND'S KEY IS THE COLLECTOR'S OWN FILENAME KEY, built by roundKey() in
     // src/api/round.ts from the worktree id and the round's start. It is

@@ -1,7 +1,8 @@
 // =============================================================================
 // The two staleness reasons every page hands to its panels
 // -----------------------------------------------------------------------------
-// These were duplicated VERBATIM in SystemPage.vue and ServicesPage.vue. Home
+// These were duplicated VERBATIM in SystemPage.vue (now pages/system/) and
+// ServicesPage.vue. Home
 // and Library need them too, and four copies of a sentence that has to stay
 // consistent is how a panel ends up claiming the collector is fine while the
 // banner above it says otherwise. The strings are moved unchanged, so the diff
