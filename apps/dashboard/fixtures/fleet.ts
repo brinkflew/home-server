@@ -344,6 +344,52 @@ export function fleetDocument(): FleetDocument {
         tokens_in: 210300,
         tokens_out: 9814,
       },
+      // A PULL REQUEST THAT WAS CLOSED RATHER THAN MERGED - the outcome that
+      // had NEVER been in a fixture, so nothing had ever drawn it. It is the
+      // shape `cancel` produces: _control_cancel PATCHes the pull request shut,
+      // and until 2026-09-07 that put the round on the board for ever with no
+      // control on it. GitHub answered, so the round is finished; contrast
+      // `wt-55ee02` two rows up, where nobody answered anything.
+      {
+        worktree_id: "wt-c105ed",
+        project: "upskald",
+        odoo_task: 1521,
+        ref: "agents/task-1521",
+        phase: "ship",
+        opened_at: iso(78 * 3600),
+        started_at: iso(78 * 3600),
+        ended_at: iso(72 * 3600),
+        attempts: 1,
+        max_attempts: 3,
+        flow_job_id: "job-mmm",
+        head: "5c1o5ed",
+        resumed_at: null,
+        waiting_on: null,
+        link: null,
+        summary: "Cap the size of a request body",
+        kind: null,
+        closed_at: iso(72 * 3600),
+        closed_why: "cancelled from the dashboard",
+        done: PHASES,
+        phases: PHASES,
+        latest_on_worktree: true,
+        odoo_url: "https://avanserv.com/odoo/project.task/1521",
+        branch: "agents/task-1521",
+        branch_url: "https://github.com/avanserv/upskald/tree/task-1521",
+        pr_url: "https://github.com/avanserv/upskald/pull/231",
+        pr_number: 231,
+        pr_state: "closed",
+        published: true,
+        eta_seconds: null,
+        eta_samples: null,
+        held: false,
+        held_at: null,
+        held_why: null,
+        error: null,
+        cost_usd: 13.93,
+        tokens_in: 415800,
+        tokens_out: 19022,
+      },
       // SUPERSEDED: closed, opened no pull request, and a LATER round on the
       // same task did. Its work is inside that pull request, so it owes nobody
       // anything - and it used to draw the amber "not published" above, asking

@@ -81,7 +81,7 @@ export function isSettled(r: FleetRound): boolean {
 }
 
 /**
- * Which of four classes a round is in, which is what decides whether it is on
+ * Which of five classes a round is in, which is what decides whether it is on
  * the board by default.
  *
  * A CLASS RATHER THAN THE LABEL `roundState` PRODUCES. There are eleven states
@@ -118,9 +118,14 @@ export function roundOutcome(r: FleetRound): RoundClass {
   if (state === "waiting on you") return "owed";
   if (r.closed_at === null) return "live";
 
-  // A ROUND IS FINISHED WHEN ITS WORK HAS LANDED, WHICH IS `merged` AND NOTHING
-  // ELSE. The first version called every closed state but `stopped` finished,
-  // and that was wrong in the direction that empties a board: `in review` is a
+  // A ROUND IS FINISHED WHEN GITHUB HAS ANSWERED, AND THERE ARE TWO ANSWERS.
+  // `merged` is the work landing and `closed` is somebody deciding it will not.
+  // Both are POSITIVE EVIDENCE in the sense `isSettled`'s comment demands - the
+  // question was asked and something came back - while "unknown" is the ABSENCE
+  // of an answer and has to keep its row.
+  //
+  // THE FIRST VERSION CALLED EVERY CLOSED STATE BUT `stopped` FINISHED, and
+  // that was wrong in the direction that empties a board: `in review` is a
   // pull request open on GitHub waiting for a person, and hiding it is hiding
   // the one thing the round produced. Measured on the live host the day it
   // shipped - 19 rounds, of which the ONLY one on the current lane was in
@@ -129,9 +134,24 @@ export function roundOutcome(r: FleetRound): RoundClass {
   // `isSettled` HAD THE RULE RIGHT ALL ALONG. It is `closed_at !== null &&
   // pr_state === "merged"`, and its own comment says hiding requires POSITIVE
   // EVIDENCE - `pr_state` is "unknown" whenever GitHub could not be asked, so a
-  // round nobody could confirm stays. That is why `published` and
-  // `not published` are visible too: neither is a claim that the work landed.
+  // round nobody could confirm stays. That is why `published` is visible too:
+  // it is not a claim that the work landed, it is nobody having asked.
   if (state === "merged") return "finished";
+
+  // A CLOSED PULL REQUEST IS AN ANSWER, AND THE CLASS IT LEAVES HAD NO FLOOR.
+  // `_control_cancel` ends by PATCHing the pull request to `closed`, so from
+  // the day the board grew a cancel button every round anybody cancelled landed
+  // in `unmerged` - on the board, with nothing to press, for ever. The change
+  // that made a round actionable is what filled the class this clause drains.
+  //
+  // `not published` DELIBERATELY DOES NOT JOIN IT, and that is the next
+  // question a reader asks. It has two causes and `roundState` cannot tell them
+  // apart: a person declining is a decision, but conduct's seven-day
+  // HUMAN_TIMEOUT is a miss nobody chose. Once the round closes,
+  // agents.approvals_pending stops warning and the phone stops reminding, so
+  // the row is the last visible trace of an approval that went unanswered.
+  // Hiding an absence of a decision is what the positive-evidence rule refuses.
+  if (state === "pr closed") return "finished";
 
   // SUPERSEDED IS THE ONE EXCEPTION AND IT IS NOT AN INCONSISTENCY. A later
   // round carried the same work, so the thing to look at IS on the board -
@@ -147,9 +167,9 @@ export function roundOutcome(r: FleetRound): RoundClass {
     return r.latest_on_worktree === true ? "recoverable" : "finished";
   }
 
-  // EVERYTHING ELSE ENDED WITHOUT LANDING: a pull request under review, one
-  // that was closed, a publication nobody could confirm, a flow that opened
-  // none. All of them stay on the board and none of them offers a control -
+  // EVERYTHING ELSE IS STILL AN OPEN QUESTION: a pull request under review, a
+  // publication nobody could confirm, a gate that ended without opening one.
+  // All of them stay on the board and none of them offers a control -
   // what happens next to a round that reached the publish path happens
   // somewhere else, and the row already links to it.
   return "unmerged";

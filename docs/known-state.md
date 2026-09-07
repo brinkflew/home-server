@@ -4395,3 +4395,42 @@ Recorded 2026-09-07, with the board's filter, the step rail and the three render
   at the LEFT of its share and the second at the RIGHT of the next, so the first gap is nearly two
   shares wide. The first step takes only its node's width and the segments after it divide the
   rest; its label then has to leave the flow, or `plan` renders as `p.`.
+
+### A class with no floor, and the button that filled it
+
+- **`pr closed` was `unmerged`: on the board, offering nothing, for ever.** `_control_cancel` ends
+  by PATCHing the pull request shut, so from the day the board grew a cancel button - 2026-09-07 -
+  every round anybody cancelled joined a class that could only grow. Fixed the next day, and the
+  change that created it is the change that made a round actionable at all.
+- **`closed` IS AN ANSWER AND `unknown` IS THE ABSENCE OF ONE.** `merged` and `closed` both finish a
+  round because GitHub was asked and something came back; `in review` and `unknown` are the two open
+  questions. That is `isSettled`'s own positive-evidence rule, which had stopped one state short.
+- **`not published` DELIBERATELY DID NOT JOIN THEM.** It has two causes and `roundState` cannot tell
+  them apart: declining is a decision, but conduct's seven-day `HUMAN_TIMEOUT` is a miss nobody
+  chose - and once the round closes, `agents.approvals_pending` stops warning and the phone stops
+  reminding, so the row is the last visible trace of an approval that went unanswered.
+- **No fixture had ever carried `pr_state: "closed"`.** The state was in `roundState` from the
+  beginning and nothing had ever rendered it, so the class it belonged in was never a decision
+  anybody made. Same family as every other blind spot here: the case with no fixture is the case
+  nobody chose.
+- **The two rounds reading `published` were real pull requests all along** - task 1266 -> #252 and
+  task 1222 -> #250, both closed 2026-08-25 - with `publication.pr_url` NULL only because those
+  columns arrived on 2026-08-28. Each branch is the head ref of exactly one pull request, so the
+  backfill had one answer and no judgement in it.
+- **The collector's own comment named the wrong one.** `FLEET_PR_RECORDED_FROM` cited
+  `avanserv/upskald#249` as one of the two pre-cutover rows; #249's head ref is
+  `agents/upskald-ship-53bc429883a7`, which has **no publication row at all** - the table starts
+  after it. A worked example is only worth writing down if somebody checks it.
+- **The backfill makes them RESOLVABLE, not hidden.** `_fleet_pull_requests` fails open, so a lapsed
+  `GITHUB_PR_READ_TOKEN` returns both to `unknown` and puts them back on the board as `published`.
+  That is the argument for repairing the data rather than special-casing the filter.
+
+### The fleet stopped for seven days and the reason was bookkeeping
+
+- **`review_count()` counts the Odoo `Review` STAGE, and a merged pull request does not leave it** -
+  `odoo.py` says so in its own docstring, because the fleet moves a task to Review and never past
+  it. So `REVIEW_CAP = 3` held the whole fleet from 2026-08-30 to 2026-09-07 on three tasks, one of
+  which (1271) had merged as #272 on 2026-09-01.
+- **Every signal was correct and none of them said this.** `agents.intake` reported the hold and its
+  reason verbatim, the marker was fresh, no unit failed. Nothing anywhere correlates "in Review"
+  with "its pull request landed", so a stale slot and a real one read identically.

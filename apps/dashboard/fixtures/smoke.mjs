@@ -684,6 +684,14 @@ console.log("\n-- which rounds the board keeps --");
     classOf("wt-lane01", 1503), "recoverable");
   check("a merged round is finished", classOf("wt-3311cd"), "finished");
 
+  // AND A CLOSED PULL REQUEST IS THE SECOND ANSWER. No fixture carried
+  // `pr_state: "closed"` until 2026-09-07 - roundState had the state and
+  // nothing had ever rendered it - which matters because _control_cancel ends
+  // by PATCHing the pull request shut, so from the day the board grew a cancel
+  // button every cancelled round sat in `unmerged` for ever with nothing on it.
+  check("a round whose pull request was closed is finished too",
+    classOf("wt-c105ed"), "finished");
+
   // MERGED IS THE ONLY THING THAT FINISHES A ROUND ON ITS OWN ACCOUNT, and the
   // first version of this called every closed state but `stopped` finished.
   // That is wrong in the direction that empties a board: measured on the live
@@ -697,6 +705,11 @@ console.log("\n-- which rounds the board keeps --");
   // nobody could confirm merged stays on the board.
   check("a publication nobody could confirm is not hidden",
     classOf("wt-0044ab"), "unmerged");
+  // AND THE ASYMMETRY WITH `pr closed` IS DELIBERATE, asserted here so it
+  // cannot be tidied into consistency later. That state is GitHub answering;
+  // this one is either a person declining or conduct's seven-day HUMAN_TIMEOUT
+  // and nothing can tell which - so hiding it would hide an approval nobody
+  // ever answered, on the one surface still showing it.
   check("a round that opened none is not hidden", classOf("wt-55ee02"), "unmerged");
 
   // THE TWO EXCEPTIONS, AND NEITHER CONTRADICTS THE RULE. A superseded round's

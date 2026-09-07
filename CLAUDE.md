@@ -1490,6 +1490,18 @@ signal read green.
 - `quotaSub` captioned that same window "no window recorded" while its reset time sat in the tooltip
   one line down, and the derivation was a computed inside a `.vue` file, which smoke cannot reach.
 
+### A class with no floor, and the button that filled it
+- `_control_cancel` PATCHes the pull request shut, so every cancelled round joined `pr closed` -
+  on the board, offering nothing, for ever. `closed` is an ANSWER where `unknown` is the absence of
+  one, and `not published` stays visible because a seven-day timeout is a miss nobody chose.
+- No fixture had ever carried `pr_state: "closed"`. The two live rounds reading `published` were
+  #252 and #250 all along; the collector's own comment named #249, which has no publication row.
+
+### The fleet stopped for seven days and the reason was bookkeeping
+- `review_count()` counts the Odoo Review STAGE and a merged pull request does not leave it, so
+  `REVIEW_CAP` held the fleet on three tasks, one of which had merged six days earlier. Every
+  signal was correct; nothing correlates "in Review" with "its pull request landed".
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

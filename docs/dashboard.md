@@ -312,17 +312,35 @@ most of them stopped, with the live one somewhere in the list. `roundOutcome` in
 a round in one of five classes and the toggle says `show N finished`, still printing its count
 whether or not it is on.
 
-**A ROUND IS FINISHED WHEN ITS WORK HAS LANDED, WHICH IS `merged` AND NOTHING ELSE - AND THE FIRST
-VERSION OF THIS EMPTIED THE LIVE BOARD.** It called every closed state but `stopped` finished, which
-is wrong in the direction that hides the thing a person is meant to act on: `in review` is a pull
+**A ROUND IS FINISHED WHEN GITHUB HAS ANSWERED, AND THERE ARE TWO ANSWERS - AND THE FIRST VERSION
+OF THIS EMPTIED THE LIVE BOARD.** It called every closed state but `stopped` finished, which is
+wrong in the direction that hides the thing a person is meant to act on: `in review` is a pull
 request open on GitHub waiting for somebody. Measured on the live host the day it shipped - **19
 rounds, of which the only one on the current lane was in review** - so the page drew an empty table
 and offered `show 19 finished` over a fleet with two pull requests outstanding.
 
 **`isSettled` HAD THE RULE RIGHT ALL ALONG** and its own comment says why: hiding requires POSITIVE
 EVIDENCE. `pr_state` is `unknown` whenever GitHub could not be asked, so a round nobody could confirm
-stays - which is also why `published` and `not published` are on the board. Neither is a claim that
-the work landed.
+stays - which is why `published` is on the board. It is not a claim that the work landed; it is
+nobody having asked.
+
+**`merged` IS ONE ANSWER AND `pr closed` IS THE OTHER, SINCE 2026-09-07.** Both are the question
+having been asked and something having come back, which is what `unknown` is the absence of. This
+was not a tidy-up: `_control_cancel` ends by PATCHing the pull request shut, so from the day the
+board grew a cancel button **every round anybody cancelled landed in `unmerged` and stayed there** -
+on the board, with nothing to press, for ever. The class the button fills had no floor.
+
+**`not published` DELIBERATELY DID NOT JOIN THEM**, and that is the next question a reader asks. It
+has two causes and `roundState` cannot tell them apart: a person declining is a decision, but
+conduct's seven-day `HUMAN_TIMEOUT` is a miss nobody chose. Once the round closes,
+`agents.approvals_pending` stops warning and the phone stops reminding, so the row is the last
+visible trace of an approval that went unanswered - and hiding an absence of a decision is exactly
+what the positive-evidence rule refuses. `fixtures/smoke.mjs` asserts the asymmetry rather than
+leaving it to be tidied into consistency later.
+
+**NO FIXTURE HAD EVER CARRIED `pr_state: "closed"`.** The state was in `roundState` from the
+beginning and nothing had ever rendered it, so the class it belonged in was never a decision
+anybody made. There is one now, on its own worktree, so `shoot.mjs` draws it.
 
 **TWO EXCEPTIONS, AND NEITHER CONTRADICTS IT.** A `superseded` round's work is on the board under
 the round that carried it, so drawing both is the defect that made one task render twice, once

@@ -3026,19 +3026,29 @@ FLEET_GITHUB_TIMEOUT = 8
 #
 # A DATE IN CODE, AND THE ALTERNATIVE WAS A LIE. A migration is a moment in
 # time: every publication row closed before it holds NULL whether or not it
-# opened a pull request, and this host had two - one of which is
-# avanserv/upskald#249, which demonstrably did. Without this cutover both read
-# "not published" for ever, which is the confident, permanent, never-corrected
-# mis-statement this whole repository is organised against.
+# opened a pull request, and this host had two - both of which demonstrably
+# did. Without this cutover both read "not published" for ever, which is the
+# confident, permanent, never-corrected mis-statement this whole repository is
+# organised against.
 #
 # So a NULL means "the flow opened none" only ON THE FAR SIDE OF THIS STAMP.
 # Before it the answer is "unknown", which the board renders as "published" -
 # a true statement about a publication row that closed, and no claim at all
 # about a pull request.
 #
-# It expires by itself: the board carries FLEET_ROUNDS rounds and these two age
-# out of that window, after which this constant stops matching anything. Do not
-# "tidy" it away before then - it is doing work until it isn't.
+# THE TWO ROWS WERE BACKFILLED BY HAND ON 2026-09-07 and this constant matches
+# nothing on the live host today. They are `01a038c5` (task 1266) -> #252 and
+# `01a035fd` (task 1222) -> #250, both closed on 2026-08-25, each branch the
+# head ref of exactly one pull request. The line above used to name
+# avanserv/upskald#249 as one of them and that was WRONG: #249's head ref is
+# `agents/upskald-ship-53bc429883a7`, which has no publication row at all - the
+# table starts after it. A worked example is only worth writing down if
+# somebody checks it, and nobody had.
+#
+# KEEP IT ANYWAY. It is what the fail-open path lands on when GitHub cannot be
+# asked, and it still guards any pre-migration row this collector could read -
+# a restored backup, a re-derived round. It also expires by itself: the board
+# carries FLEET_ROUNDS rounds and these age out of that window.
 FLEET_PR_RECORDED_FROM = "2026-08-28T14:00:00Z"
 
 
