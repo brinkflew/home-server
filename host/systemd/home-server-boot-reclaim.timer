@@ -1,0 +1,44 @@
+# ==============================================================================
+# Five minutes after a boot, then every thirty
+# ------------------------------------------------------------------------------
+# FIVE, AND THE NUMBER IS SET BY AN ALERT RATHER THAN BY THE MACHINE. The signal
+# it is racing is home-server-verify.timer, which is OnBootSec=10min then hourly;
+# deploy.boot_free FAILs while two slots are spent, and CheckFailing is
+# `home_server_check_status == 3`, for: 10m, severity critical. Reclaim at +15
+# and the +10 battery publishes the FAIL, the next battery is not until +70, and
+# the phone gets paged for an hour every Sunday about a condition that was fixed
+# five minutes into the boot. At +5 the battery never sees it, and the script
+# kicks the battery itself once it has finished.
+#
+# It buys nothing to wait longer in any case: greenboot writes its verdict about
+# two minutes in and nothing on this host produces a fresh opinion about boot
+# health between minute three and minute fifteen. The real gate is not the clock
+# - it is the script's refusal to act unless greenboot's green verdict is from
+# THIS boot.
+#
+# OnBootSec= in a user manager is relative to the user manager's start rather
+# than to the boot, which is why that gate reads /proc/uptime and not this.
+#
+# THEN EVERY THIRTY MINUTES, which costs one df on all but a handful of runs -
+# the script checks free space before it touches D-Bus. Thirty rather than daily
+# because it is also the repair path: a host that reaches the wedged state is
+# unwedged within the half hour instead of waiting for a nightly slot that might
+# itself collide with the 00:00 update check.
+#
+# Persistent=false. There is nothing to catch up on - the condition is read from
+# the machine every time it runs - and it sidesteps both traps this repository
+# has paid for: a Persistent timer writes its stamp on `enable` and so does not
+# fire, and widening its calendar later fires it immediately on daemon-reload.
+# ==============================================================================
+
+[Unit]
+Description=Reclaim the rollback deployment's /boot slot, shortly after boot and periodically
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

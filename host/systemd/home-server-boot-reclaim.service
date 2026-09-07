@@ -1,0 +1,45 @@
+# ==============================================================================
+# Give /boot its second slot back after a green boot
+# ------------------------------------------------------------------------------
+# The step bin/reboot-when-staged.sh structurally cannot take. It reboots, and
+# the process that would clean up afterwards dies with the machine - so unlike
+# the attended bin/reboot-host.sh, which ends in `rpm-ostree cleanup -r`, the
+# unattended path left two /boot slots spent. The next image then staged into a
+# partition with no room to finalize it, the window refused every Sunday, and a
+# person ran the reclaim by hand. This is that step, on a timer.
+#
+# EVERY GATE IS IN THE SCRIPT, NOT HERE. Ordering buys nothing across job
+# transactions - host/systemd/home-server-reboot.service:26-34 records that at
+# length after claiming otherwise - so the busy checks for the reboot window,
+# the backup and the nightly update check are `systemctl show` calls inside
+# bin/reclaim-boot-slot.sh where they can actually be enforced.
+#
+# NO Before= ON ANYTHING, EVER. The 2026-08-30 outage was an ordering cycle that
+# systemd broke by DELETING conduct's job, with every container healthy and no
+# failed unit; `systemd-analyze verify` is silent on cycles because they belong
+# to the job transaction rather than to a unit file, so no lint leg can catch
+# the next one. The only defence is not writing the edge.
+#
+# TimeoutStartSec= because the script talks to rpm-ostreed over D-Bus, which
+# blocks while a deployment is staging. Its own calls are timeout-wrapped; this
+# is the backstop for the case where they are not the thing that hangs. A
+# Type=oneshot in `activating` for ever is invisible to host.failed_units.
+#
+# EXIT 0 IS NOT "IT RECLAIMED". Almost every path here is a refusal and all of
+# them exit 0, deliberately: on all but a handful of runs there is nothing to
+# do, and a unit that goes red on a quiet week is a unit people stop reading.
+# What it did is in the journal, and the durable record is boot_reclaim_* in
+# /var/lib/home-server/boot-state, which deploy.boot_reclaim grades.
+#
+# Symlinked into ~/.config/systemd/user/ - see host/systemd/README.md.
+# ==============================================================================
+
+[Unit]
+Description=Reclaim the rollback deployment's /boot slot after a green boot
+Documentation=file:/var/home-server/bin/reclaim-boot-slot.sh
+After=home-server-reboot.service
+
+[Service]
+Type=oneshot
+ExecStart=/var/home-server/bin/reclaim-boot-slot.sh
+TimeoutStartSec=5min
