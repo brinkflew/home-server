@@ -52,8 +52,39 @@ LIMIT="${HOME_SERVER_GREENBOOT_TIMEOUT:-120}"
 # ------------------------------------------------------------------------------
 # Same shape as the backup state file: key=value, ISO-8601 UTC, written to a
 # temporary and moved into place so a reader never sees a half-written file.
-# red_boot_at is preserved rather than rewritten - it is set by the red.d hook
-# and cleared by a human, and this run has nothing to say about it.
+#
+# THIS REPLACES THE FOUR KEYS IT OWNS AND PRESERVES EVERY OTHER, and until
+# 2026-09-08 it did the opposite: it wrote a fresh file carrying only
+# `red_boot_at`, so every other key was destroyed on every boot. The comment
+# here named red_boot_at and stopped, which is how a whitelist of one came to
+# read as deliberate.
+#
+# TWO CHECKS HAD BEEN DEAD FOR AS LONG AS THIS FILE HAS EXISTED, and both
+# reported green the whole time:
+#
+#   unattended_reboot_at  bin/reboot-when-staged.sh writes it immediately before
+#                         `systemctl reboot`, because afterwards there is no
+#                         process left to write anything. greenboot runs on the
+#                         way back up, BEFORE the hourly battery, so it was
+#                         always gone by the time bin/verify-host.sh looked.
+#                         reboot.last_applied could never reach its "this boot
+#                         was applied by the unattended window" branch, and said
+#                         "has not applied a deployment yet" after every window
+#                         that has ever run - measured on 2026-09-07, eight days
+#                         after one applied a deployment.
+#   red_boot_csum         written by 50-record-red-boot.sh to say WHICH
+#                         deployment greenboot rejected. Dropping it while
+#                         keeping red_boot_at is exactly the "a marker with no
+#                         checksum" case, which bin/reboot-when-staged.sh treats
+#                         as blocking EVERY deployment for ever. The identity
+#                         added to stop that hold becoming permanent survived
+#                         zero boots.
+#
+# The merge is the idiom 50-record-red-boot.sh was already using one file over:
+# grep out the keys this writer owns, then append them. A writer that rewrites
+# the whole file has to know every other writer's keys, and this one did not
+# and could not - reboot-when-staged.sh's three refusal counters are also in
+# here now and were not when this was written.
 record() {  # <green|red|timeout|missing>
 	local now booted_ver booted_sum status_json
 	now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -65,11 +96,12 @@ record() {  # <green|red|timeout|missing>
 
 	mkdir -p "$(dirname "$STATE")"
 	{
+		grep -vE '^(greenboot_result|greenboot_checked_at|booted_version|booted_checksum)=' \
+			"$STATE" 2>/dev/null
 		echo "greenboot_result=$1"
 		echo "greenboot_checked_at=$now"
 		echo "booted_version=${booted_ver:-?}"
 		echo "booted_checksum=${booted_sum:-?}"
-		grep -E '^red_boot_at=' "$STATE" 2>/dev/null
 	} >"$STATE.tmp"
 	mv "$STATE.tmp" "$STATE"
 }

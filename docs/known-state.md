@@ -4641,3 +4641,29 @@ Recorded 2026-09-07, with the board's filter, the step rail and the three render
   come back, and every value slot on the view reports an instant nobody chose.
 - Measured both ways, and only reachable at all because `/system` is three routes now. Same family as
   the drawer that opened perfectly for a mouse and not at all for a keyboard.
+
+### The file that records every boot was rewritten by one of its writers on every boot
+- **`40-home-server.sh`'s `record()` wrote a fresh `boot-state` preserving `red_boot_at` and nothing
+  else**, so all twelve other keys were destroyed on every boot. It was not a whitelist anybody chose:
+  the comment above it named `red_boot_at`, argued correctly that this run has nothing to say about
+  it, and never asked what else was in the file. `host/greenboot/README.md` documented six keys while
+  the code carried thirteen, which is why nothing looked wrong.
+- **TWO CHECKS HAD BEEN DEAD SINCE THE FILE EXISTED, both reading green.** `reboot.last_applied`
+  reads `unattended_reboot_at`, written by `bin/reboot-when-staged.sh` seconds before
+  `systemctl reboot`; greenboot runs on the way back up, BEFORE the hourly battery, so the key was
+  always gone by the time anything read it. Measured 2026-09-07: the check said *"the reboot window
+  has not applied a deployment yet"* eight days after the window applied one, and the journal has the
+  `rebooting into 44.20260802.3.1` line to prove it. The comment at that check calls the marker
+  "finally earning its keep"; it never had.
+- **`red_boot_csum` never survived the one boot it exists for.** `50-record-red-boot.sh` writes it to
+  say WHICH deployment was rejected, and the rollback boot's `record()` dropped it while keeping
+  `red_boot_at` - which is exactly the "a marker with no checksum" case `bin/reboot-when-staged.sh`
+  treats as holding EVERY deployment for ever. The identity added on 2026-08-18 to stop that hold
+  becoming permanent survived zero boots, and restored the permanent hold it was written to remove.
+- **The contract is now stated in the file the writers share**: `grep -vE` the keys you own, then
+  append them - the idiom `50-record-red-boot.sh` was already using one file over. A writer that
+  rewrites the whole file has to know every other writer's keys, and none of these three can: the
+  three refusal-counter pairs were added to this file long after `record()` was written.
+- Proved both directions before it was trusted: a planted file with five foreign keys keeps all five
+  and gets the four owned ones replaced rather than duplicated, and a green boot after a red one now
+  leaves `red_boot_csum` in place.

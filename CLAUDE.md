@@ -1593,6 +1593,11 @@ signal read green.
   `disk` under a sub-nav whose third segment is Storage. The id does not move with the label.
 
 
+### The file that records every boot was rewritten by one of its writers on every boot
+- `record()` preserved `red_boot_at` and destroyed the other twelve keys, so `reboot.last_applied`
+  and `red_boot_csum` had both been dead since the file existed, green throughout. Every writer owns
+  its own keys and must `grep -vE` them out rather than rewrite the file.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

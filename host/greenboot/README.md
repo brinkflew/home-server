@@ -163,13 +163,35 @@ in the MOTD by `bin/verify-host.sh`. `ExecMainExitTimestamp` is runtime state th
 wipes, which is useless when the subject is the reboot.
 
 ```
+# 40-home-server.sh owns these four and replaces them on every boot
 greenboot_result=green|red|timeout|missing
 greenboot_checked_at=2026-08-14T09:53:11Z
 booted_version=44.20260720.3.1
 booted_checksum=25319705c9ff
-red_boot_at=...            # set by red.d, cleared by a human, never aged out
-unattended_reboot_at=...   # set by bin/reboot-when-staged.sh just before it reboots
+
+# 50-record-red-boot.sh owns these two. Cleared by bin/clear-red-boot.sh, never aged out.
+red_boot_at=2026-08-16T05:12:44Z
+red_boot_csum=25319705c9ff   # WHICH deployment was rejected; absent means "hold everything"
+
+# bin/reboot-when-staged.sh owns these. The counters are day-keyed and reset on a new UTC day.
+unattended_reboot_at=...     # written just before `systemctl reboot`
+phase_refusals=2
+phase_refused_on=2026-09-06
+ci_refusals=1
+ci_refused_on=2026-09-06
+playback_refusals=0
+playback_refused_on=2026-09-06
 ```
+
+**EVERY WRITER OWNS ITS OWN KEYS AND MUST PRESERVE THE REST**, and that was not true until
+2026-09-08. `40-home-server.sh`'s `record()` wrote a fresh file preserving only `red_boot_at`,
+so every other key was destroyed on every boot - and this section documented six keys while the
+code carried thirteen, which is how it went unnoticed. It had killed two checks silently, both
+of them reading green the whole time: `reboot.last_applied` could never see
+`unattended_reboot_at`, because greenboot runs before the hourly battery; and `red_boot_csum`
+never survived the rollback boot, which is the only boot on which it means anything. The
+contract is `grep -vE` the keys you own, then append them. A writer that rewrites the whole file
+has to know every other writer's keys, and none of these three can.
 
 **The key is `red_boot_at`, not `rollback_at`** - this file said the latter until 2026-08-14
 and no code ever wrote it. That is worse than a stale name: it is the exact string someone
@@ -252,7 +274,18 @@ refuses on it, and `bin/reboot-host.sh` warns before the confirmation and assert
 the deployment it wanted is the one that booted.
 
 **Rollback needs somewhere to roll back to.** `/boot` holds exactly two kernel slots and
-cannot be grown. That is enough, because slots are counted per distinct kernel+initramfs and
-rpm-ostree drops the rollback when it stages the next update - but a host that has just run
-`rpm-ostree cleanup -r` has **one** deployment and no rollback target at all. Check with
-`rpm-ostree status` before expecting greenboot to be able to do anything.
+cannot be grown, and slots are counted per distinct kernel+initramfs.
+
+**STAGING DOES NOT DROP THE ROLLBACK, and this file said it did until 2026-09-08.** The claim
+was that two slots are always enough because "rpm-ostree drops the rollback when it stages the
+next update". It does not. Measured on 2026-09-07: `[staged, booted, rollback]`, three
+deployments, `/boot` at 26 M. Staging writes nothing to `/boot` at all - `ostree-finalize-staged`
+does, at shutdown - so the third slot is demanded at the reboot, ostree refuses for want of
+152.3 MB, and the unattended window refuses ahead of it. That deadlock had held since
+2026-09-06 and the sentence above is why it read as impossible.
+
+A host with **one** deployment has no rollback target at all, which is what an attended reboot
+leaves behind: `bin/reboot-host.sh` ends in `rpm-ostree cleanup -r`. That is the ordinary state
+here rather than a fault - the cover is restored the moment a second deployment boots, which is
+the only boot that can need it. Check with `rpm-ostree status` before expecting greenboot to be
+able to do anything.
