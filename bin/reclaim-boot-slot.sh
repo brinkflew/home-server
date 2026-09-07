@@ -233,6 +233,7 @@ done
 # retains [booted] plus pins, so on four deployments it removes three - the "-2"
 # in docs/known-state.md is a measurement of one case, not a law. A shape this
 # does not enumerate is a shape it must not run a destructive command in.
+mode="" out_idx=""
 if [ "${boot_entries:-0}" -lt 2 ]; then
 	# ONE /boot ENTRY AND STILL SHORT, which is not a shape with a slot to
 	# reclaim - it is a shape whose shortage this script cannot explain. It
@@ -246,7 +247,14 @@ if [ "${boot_entries:-0}" -lt 2 ]; then
 	# over.
 	refuse "there is ${boot_entries:-0} /boot entry and only ${boot_free}M free - no deployment is holding a second slot, so the space is held by something this script does not model. Start with 'sudo du -sh /boot/*'."
 elif [ "$booted_idx" -eq 0 ] && [ "$depl_count" -eq 2 ]; then
-	:  # [booted, rollback] - the preventive case, below
+	# [booted, rollback]. The ordinary case, and the one the timer exists for:
+	# this is what every applied deployment leaves behind.
+	mode=preventive out_idx=1
+elif [ "$booted_idx" -eq 1 ] && [ "$depl_count" -eq 3 ] && [ -n "$top_staged" ]; then
+	# [staged, booted, rollback] - the wedged shape, and the one that took three
+	# days and six Critical advisories in September 2026. It is only reachable
+	# when the preventive arm did not run, or could not.
+	mode=repair out_idx=2
 elif [ -z "$top_booted" ] && [ -z "$top_staged" ]; then
 	# PENDING: finalized, entered in /boot, holding a slot, and not booted.
 	# `cleanup -r` cannot reclaim this - it exits 0 saying "Deployments
@@ -260,24 +268,126 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# The preventive reclaim
+# The reclaim
 # ------------------------------------------------------------------------------
-out_csum=$(jq -r '.deployments[1].checksum // empty' <<<"$status_json" 2>/dev/null)
-out_ver=$(jq -r '.deployments[1].version // "unknown"' <<<"$status_json" 2>/dev/null)
-out_dig=$(jq -r '.deployments[1]["container-image-reference-digest"] // empty' <<<"$status_json" 2>/dev/null)
-[ -n "$out_csum" ] || refuse "could not read the rollback deployment's checksum"
+out_csum=$(jq -r --argjson i "$out_idx" '.deployments[$i].checksum // empty' <<<"$status_json" 2>/dev/null)
+out_ver=$(jq -r --argjson i "$out_idx" '.deployments[$i].version // "unknown"' <<<"$status_json" 2>/dev/null)
+out_dig=$(jq -r --argjson i "$out_idx" '.deployments[$i]["container-image-reference-digest"] // empty' <<<"$status_json" 2>/dev/null)
+[ -n "$out_csum" ] || refuse "could not read the outgoing deployment's checksum"
 
 pin_ref="$PIN_PREFIX/${out_ver}-$(printf '%s' "$out_csum" | cut -c1-12)"
 
+# ONE MERGE, SO A KEY THIS SCRIPT DOES NOT OWN IS NEVER LOST. Same contract as
+# host/greenboot/40-home-server.sh's record(), which did the opposite until
+# 2026-09-08 and silently killed two checks by it.
+write_state() {  # <action> <freed_mb> <rollback_ref> <destroyed_digest> <restaged_digest> <error>
+	{
+		grep -vE '^boot_reclaim_(at|action|freed_mb|rollback_ref|destroyed_digest|restaged_digest|error)=' "$STATE" 2>/dev/null
+		echo "boot_reclaim_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+		echo "boot_reclaim_action=$1"
+		echo "boot_reclaim_freed_mb=$2"
+		echo "boot_reclaim_rollback_ref=$3"
+		echo "boot_reclaim_destroyed_digest=$4"
+		echo "boot_reclaim_restaged_digest=$5"
+		echo "boot_reclaim_error=$6"
+	} | priv tee "$STATE.tmp" >/dev/null
+	priv mv "$STATE.tmp" "$STATE"
+}
+
+# THE OBJECT CHECKSUMS OF A DEPLOYMENT'S KERNEL AND INITRAMFS, read out of the
+# repo's metadata rather than by hashing 150 MB twice. This is the only honest
+# way to ask whether two deployments need separate /boot slots: a package diff
+# cannot answer it - uCore rebuilds the initramfs on every image build, and
+# 2026-08-24's staged deployment differed by one perl package, carried an
+# IDENTICAL kernel version, reported regenerate-initramfs false, and still
+# produced an initramfs one byte different and a different bootcsum.
+kern_id() {  # <commit checksum>
+	local c="$1" kv
+	kv=$(priv ostree ls --repo="$OSTREE_REPO" "$c" /usr/lib/modules 2>/dev/null \
+		| awk '$1 ~ /^d/ && $NF != "/usr/lib/modules" {print $NF}' | head -1)
+	[ -n "$kv" ] || return 1
+	priv ostree ls -C --repo="$OSTREE_REPO" "$c" "$kv/vmlinuz" "$kv/initramfs.img" 2>/dev/null \
+		| awk '{print $5}' | paste -sd- -
+}
+
+staged_dig=""
+if [ "$mode" = repair ]; then
+	# ------------------------------------------------------------------------
+	# The repair arm is destructive in a way the preventive one is not
+	# ------------------------------------------------------------------------
+	# It gives up the staged update to get the slot, because nothing keeps one.
+	# `rpm-ostree cleanup -r` takes the pending deployment along with the
+	# rollback - deployment count change: -2 - and so does
+	# `ostree admin undeploy` on the rollback index alone, measured on this host
+	# on 2026-09-08 in the hope that it would not. Any write_deployments on a
+	# sysroot with a staged deployment unstages it, so there is no single-slot
+	# spelling of this and the update has to be put back afterwards.
+	#
+	# AND IT DOES NOT COME BACK ON ITS OWN. After 2026-08-16 the next two
+	# automatic runs staged nothing while a newer manifest sat on the registry,
+	# because `rpm-ostree upgrade --check` can be wrong and the nightly updater
+	# believes it. So the re-stage is this script's job, not the timer's.
+	staged_csum=$(jq -r '.deployments[0].checksum // empty' <<<"$status_json" 2>/dev/null)
+	staged_dig=$(jq -r '.deployments[0]["container-image-reference-digest"] // empty' <<<"$status_json" 2>/dev/null)
+	booted_csum=$(jq -r --argjson i "$booted_idx" '.deployments[$i].checksum // empty' <<<"$status_json" 2>/dev/null)
+
+	# ONCE PER IMAGE, NOT ONCE PER HALF HOUR. Without this a shape that survives
+	# the repair would destroy and re-pull the same image every cycle - and each
+	# re-stage rewrites /run/ostree/staged-deployment's mtime, which is the clock
+	# bin/reboot-when-staged.sh reads for staged_age_d. That would silently
+	# starve the 14-day encoder escalation, leaving only the uptime backstop,
+	# which is the clause that exists BECAUSE the other one can be starved.
+	#
+	# Keyed on the container digest and never on .checksum: a re-stage of the
+	# same image produces a DIFFERENT layered commit checksum - measured,
+	# 5858c3b7b9d0 became 84120b9db526 for one digest f7b6e02b1a5b.
+	prev_gone=$(sed -n 's/^boot_reclaim_destroyed_digest=//p' "$STATE" 2>/dev/null | tail -1)
+	prev_at=$(sed -n 's/^boot_reclaim_at=//p' "$STATE" 2>/dev/null | tail -1)
+	if [ -n "$prev_gone" ] && [ "$prev_gone" = "$staged_dig" ]; then
+		prev_epoch=$(date -d "${prev_at:-}" +%s 2>/dev/null || echo 0)
+		if [ "$(( now_epoch - prev_epoch ))" -lt 604800 ]; then
+			refuse "this same image was already destroyed and re-staged at ${prev_at:-an unknown time} and /boot is short again - something other than the rollback is taking the space, and re-pulling it weekly will not find out what"
+		fi
+	fi
+	# DOES IT ACTUALLY NEED A SLOT? If the staged deployment carries the same
+	# kernel and initramfs as the booted one it needs no new bootcsum directory,
+	# and destroying an update to make room it does not want is the worst
+	# outcome available here. Both sides must be readable: an unanswerable
+	# comparison refuses, rather than defaulting to the destructive branch.
+	sk=$(kern_id "$staged_csum") bk=$(kern_id "$booted_csum")
+	if [ -z "$sk" ] || [ -z "$bk" ]; then
+		refuse "could not compare the staged and booted kernels - this arm must not destroy an update it cannot prove needs the space"
+	fi
+	if [ "$sk" = "$bk" ]; then
+		refuse "the staged $(jq -r '.deployments[0].version' <<<"$status_json") carries the same kernel and initramfs as the booted deployment, so it needs no new /boot slot - whatever is short here, it is not that"
+	fi
+
+	# IS THE REGISTRY REACHABLE RIGHT NOW? Ordering matters more than the check:
+	# destroying a staged update and THEN discovering the pull cannot be redone
+	# leaves the host with no rollback, nothing staged, 190M free and a green
+	# battery - a loud condition converted into a quiet one. The re-stage below
+	# usually resolves from the local repo in about twenty seconds, but nothing
+	# guarantees it will.
+	probe_ref=$(jq -r --argjson i "$booted_idx" '.deployments[$i]["container-image-reference"] // empty' <<<"$status_json" 2>/dev/null)
+	probe_ref=${probe_ref#*:}; probe_ref=${probe_ref#docker://}
+	if [ -n "$probe_ref" ]; then
+		timeout 20 skopeo inspect --raw "docker://$probe_ref" >/dev/null 2>&1 \
+			|| refuse "cannot reach the registry for $probe_ref - refusing to destroy a staged update that might not come back"
+	fi
+
+fi
+
 if [ -n "$DRY" ]; then
+	note "mode: $mode"
 	note "would pin $out_ver ($(printf '%s' "$out_csum" | cut -c1-12)) as $pin_ref"
 	note "would run 'rpm-ostree cleanup -r', freeing about 145M of the ${boot_free}M-free /boot"
+	[ "$mode" = repair ] && note "would then run 'rpm-ostree upgrade' to put back the staged ${staged_dig:0:19} it takes"
 	exit 0
 fi
 
 # PIN BEFORE DROPPING, in that order, because the ref is the only thing that
 # stops the prune taking the objects with the deployment. Created first and the
-# older pins deleted afterwards: the reverse order has a window in which neither
+# older pins deleted afterwards: the reverse has a window in which neither
 # exists, and there is no --force to make the create idempotent.
 if ! priv ostree refs --repo="$OSTREE_REPO" --create="$pin_ref" "$out_csum" 2>/dev/null; then
 	note "could not pin $out_ver as $pin_ref - continuing, and recording that the rollback is registry-only"
@@ -291,11 +401,29 @@ if [ -n "$pin_ref" ]; then
 	done
 fi
 
+# THE DESTRUCTION IS RECORDED BEFORE IT HAPPENS. If this process dies between
+# the cleanup and the re-stage - a reboot, an OOM, a SIGTERM - the record
+# already says an update was destroyed and none put back, which is the one
+# state deploy.boot_reclaim FAILs on. Writing it afterwards would make the
+# crash indistinguishable from a run that never started.
+[ "$mode" = repair ] && write_state repair "" "${pin_ref:-${out_dig:-}}" "$staged_dig" "" "in progress"
+
 note "reclaiming the slot held by $out_ver ($(printf '%s' "$out_csum" | cut -c1-12))"
-if ! priv rpm-ostree cleanup -r 2>&1; then
-	err="rpm-ostree cleanup -r failed"
-else
-	err=""
+err=""
+priv rpm-ostree cleanup -r 2>&1 || err="rpm-ostree cleanup -r failed"
+
+restaged=""
+if [ "$mode" = repair ] && [ -z "$err" ]; then
+	note "re-staging the update that cleanup took"
+	# Ten minutes rather than the ro() sixty seconds: this one can be a cold
+	# pull. Measured warm at 21.9s, resolving entirely from the local repo.
+	if timeout 600 priv rpm-ostree upgrade 2>&1; then
+		restaged=$(rpm-ostree status --json 2>/dev/null \
+			| jq -r '.deployments[0] | select(.booted | not) | .["container-image-reference-digest"] // empty' 2>/dev/null)
+		[ -n "$restaged" ] || err="rpm-ostree upgrade reported success but nothing is staged"
+	else
+		err="rpm-ostree upgrade failed - a staged update was destroyed and not put back"
+	fi
 fi
 
 boot_after=$(df -Pm /boot 2>/dev/null | awk 'NR==2 {print $4}')
@@ -304,19 +432,10 @@ freed=$(( boot_after - boot_free ))
 
 # FREEING NOTHING IS A FINDING, not a quiet success. It means the slot was held
 # by something other than the deployment that was just dropped, which is the same
-# blind spot the one-deployment refusal above names.
+# blind spot the one-entry refusal above names.
 [ "$freed" -gt 0 ] || err="${err:-cleanup reported success but freed nothing (${boot_free}M before, ${boot_after}M after)}"
 
-now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-{
-	grep -vE '^boot_reclaim_(at|action|freed_mb|rollback_ref|destroyed_digest|restaged_digest|error)=' "$STATE" 2>/dev/null
-	echo "boot_reclaim_at=$now"
-	echo "boot_reclaim_action=rollback"
-	echo "boot_reclaim_freed_mb=$freed"
-	echo "boot_reclaim_rollback_ref=${pin_ref:-${out_dig:-}}"
-	echo "boot_reclaim_error=$err"
-} | priv tee "$STATE.tmp" >/dev/null
-priv mv "$STATE.tmp" "$STATE"
+write_state "${mode}" "$freed" "${pin_ref:-${out_dig:-}}" "${staged_dig}" "${restaged}" "$err"
 
 if [ -n "$err" ]; then
 	printf 'reclaim-boot-slot: %s\n' "$err" >&2
@@ -324,6 +443,7 @@ if [ -n "$err" ]; then
 fi
 
 note "/boot ${boot_after}M free (was ${boot_free}M); rollback recoverable as ${pin_ref:-the published digest ${out_dig:-unknown}}"
+[ "$mode" = repair ] && note "re-staged ${restaged:0:19}"
 
 # REPUBLISH THE FINDING RATHER THAN WAITING UP TO AN HOUR FOR IT. status.json is
 # rewritten hourly, and deploy.boot_free FAILs at two slots - so without this the

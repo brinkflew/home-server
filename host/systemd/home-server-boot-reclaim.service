@@ -25,6 +25,13 @@
 # is the backstop for the case where they are not the thing that hangs. A
 # Type=oneshot in `activating` for ever is invisible to host.failed_units.
 #
+# FIFTEEN RATHER THAN FIVE, and the number is set by the repair arm's re-stage.
+# Every other path is seconds, but `rpm-ostree upgrade` can be a cold pull; it
+# bounds itself at ten minutes, and this has to be longer than that or systemd
+# kills the re-stage and leaves the host with a destroyed update and nothing
+# put back - the one state deploy.boot_reclaim FAILs on, caused by the timeout
+# meant to protect it.
+#
 # EXIT 0 IS NOT "IT RECLAIMED". Almost every path here is a refusal and all of
 # them exit 0, deliberately: on all but a handful of runs there is nothing to
 # do, and a unit that goes red on a quiet week is a unit people stop reading.
@@ -42,4 +49,4 @@ After=home-server-reboot.service
 [Service]
 Type=oneshot
 ExecStart=/var/home-server/bin/reclaim-boot-slot.sh
-TimeoutStartSec=5min
+TimeoutStartSec=15min
