@@ -80,7 +80,26 @@ export function roundDocument(key: string): RoundDocument {
     ],
     report: {
       card: CARD,
-      verdict: '{"status": "done", "title": "feat: gate prose length and tense"}',
+      // THE FOUR SCHEMAS' OWN SHAPE, not the two-key stub this carried. It was
+      // enough while the panel dumped the string and is not enough now that it
+      // is read: `concerns` and `follow_ups` are the two lists that matter -
+      // the second becomes tasks in somebody's backlog the moment the pull
+      // request opens - and neither had ever been rendered.
+      verdict: JSON.stringify({
+        status: "done",
+        title: "feat: gate prose length and tense",
+        summary: "The prose gate now measures sentence length and tense in bin/lint-repo.sh.",
+        reasoning: "Leg 4 already walked every markdown file, so the check is a filter on a list it was building anyway.",
+        concerns: [
+          "The tense heuristic is a word list and will miss a passive construction spelled unusually.",
+        ],
+        follow_ups: [
+          {
+            title: "Measure the prose gate against docs/ before it is made blocking",
+            why: "It has only ever run over CLAUDE.md, which is one author's voice.",
+          },
+        ],
+      }),
       body: "Adds a prose gate.\n\nCloses #1260.",
       title: "feat: gate prose length and tense",
       autopublish: false,
@@ -105,12 +124,71 @@ export function roundDocument(key: string): RoundDocument {
           usage: { output_tokens: 27748 },
         },
         gate: null,
+        // ONE OF EVERY SHAPE src/transcript.ts READS, because the panel now
+        // reads them rather than printing them: a prompt long enough to clamp,
+        // markdown in an assistant turn, an Edit whose diff overflows five
+        // lines, a Bash call with a description, a refusal carrying a reason,
+        // and the renderer's own note. A fixture that only carried the four
+        // easy ones would screenshot a page nobody could check.
         turns: [
-          { kind: "ask", text: "Plan the change for task 1260." },
+          {
+            kind: "ask",
+            text:
+              "Plan the change for task 1260.\n\nThe gate's prose rules live in " +
+              "bin/lint-repo.sh. Read leg 4 before proposing anything, and do not " +
+              "add a dependency: this repository has no test suite and every " +
+              "check is a shell leg.\n\nThe repository is ASCII throughout and " +
+              "that is checked rather than hoped for. Prose and output here are " +
+              "ASCII, so a rule that emits a unicode quotation mark fails the " +
+              "leg above it.\n\nAnswer in the schema you were given.",
+          },
           { kind: "say", text: "Reading the gate's existing prose rules first." },
-          { kind: "tool", name: "Read", input: '{"file_path":"bin/lint-repo.sh"}' },
-          { kind: "denied", text: '{"subtype":"permission_denied","tool":"WebFetch"}' },
-          { kind: "say", text: "The floor is in lint-repo.sh leg 4. Plan written." },
+          { kind: "tool", name: "Read", input: '{"file_path":"bin/lint-repo.sh","offset":40}' },
+          {
+            kind: "tool",
+            name: "Bash",
+            input: JSON.stringify({
+              command: "grep -n 'leg 4' bin/lint-repo.sh",
+              description: "Find the prose leg",
+            }),
+          },
+          {
+            kind: "tool",
+            name: "Edit",
+            // ONE REMOVAL AND SIX ADDITIONS, so the diff carries both signs
+            // and overflows the five-line cap - the two things about it worth
+            // asserting. A change that fitted would prove neither.
+            input: JSON.stringify({
+              file_path: "bin/lint-repo.sh",
+              old_string:
+                "# leg 4: prose\nfor f in $FILES; do\n  check_ascii \"$f\"\ndone\n",
+              new_string:
+                "# leg 4: prose\nfor f in $FILES; do\n  check_ascii_strict \"$f\"\n" +
+                "  check_sentence_length \"$f\"\n  check_tense \"$f\"\n" +
+                "  check_voice \"$f\"\n  check_hedging \"$f\"\n" +
+                "  check_heading_case \"$f\"\ndone\n",
+            }),
+          },
+          {
+            kind: "denied",
+            text: JSON.stringify({
+              subtype: "permission_denied",
+              tool: "WebFetch",
+              reason: "WebFetch is not granted to a planning phase - it reads the tree and nothing else",
+            }),
+          },
+          { kind: "note", text: "log truncated at 12000000 bytes of 41200418" },
+          {
+            kind: "say",
+            text:
+              "The floor is in `bin/lint-repo.sh` leg 4.\n\n" +
+              "### What I will change\n\n" +
+              "- add `check_sentence_length`, over the same file list leg 4 already walks\n" +
+              "- add `check_tense`, as a word list rather than a parser\n" +
+              "- leave the leg **non-blocking** until it has been measured against `docs/`\n\n" +
+              "See [the compare view](https://github.com/avanserv/upskald/compare/main...agents/feat) " +
+              "for the shape of the diff.",
+          },
         ],
       },
       {

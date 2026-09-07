@@ -2509,6 +2509,95 @@ held step, and `CONDUCT_TIMEOUT` is 86400 - so a hold left over a weekend does n
 it is young, because a deliberate pause must not read as a fault, and a `warn` past 20 hours, because
 the inverse is a hold that expires in silence.
 
+### The fleet gained a way back, and the target it takes names a lane rather than a round
+
+**A STOPPED ROUND HAD NO WAY BACK AT ALL.** `_control_restart` refused one - `chain_get` returns
+only an open row - and the board offered nothing on anything closed. Recovery was moving the task in
+Odoo by hand and running `conduct ship --task N --resume` over ssh, which five tasks needed after
+one bad day. `resume`, `cancel` and `cancel_requeue` join the seven, and `restart` now accepts a
+closed round.
+
+**THE REFUSAL THAT WIDENED BECAME NARROWER RATHER THAN DISAPPEARING.** It read *"starting one from
+here would be a second way to spend a round's worth of model time"*, and the objection was real. What
+answers it is that the money is still spent through the same dispatch loop, so `quota.refusal` and
+`REVIEW_CAP` both still apply - and that the round must now be the one the caller is looking at, no
+round may be open on the lane, and the floor still holds.
+
+**THE TARGET NAMES A LANE AND NOT A ROUND, WHICH IS THE GUARD ALL FOUR SHARE.** `chain` is
+`INSERT OR REPLACE` on `worktree_id` and the worktree is reused, so it holds one row against eleven
+rounds - measured on this host - and a control action that trusted the target alone would act on
+whichever change ran there last. `control_envelope` takes an `odoo_task`, and `_control_round`
+refuses when it disagrees, when the caller named none, and when the round is in the wrong state for
+the verb. That is `chain_open`'s own discriminator re-asked: *"a round belongs to a task, and a
+different task is a different round"*. **`hold` and `release` are exempt and that is deliberate** -
+they stop dispatch for a LANE, read by worktree every cycle, and "hold whatever is running here" is
+what pressing them means.
+
+**A RESUME CANNOT GO THROUGH `chain_open`, AND THE FIRST DRAFT OF THIS WOULD HAVE.**
+`chain_finished` reads `chain_get`, which is open-rounds-only, and `chain_open` is
+`INSERT OR REPLACE` - so re-opening a closed round through it returns `done` and `head` as NULL,
+`_may_skip` skips nothing, and the resume is a full round at full price wearing the wrong name.
+`state.chain_reopen` clears `closed_at` while keeping `attempts`, `done`, `head` and **`resumed_at`**
+- the last of those because a round that already spent its one automatic resume must not get it back
+by being resumed by hand. `_plan_step`'s skip sits ahead of `chain_open`, so a resume past the plan
+never re-counts an attempt and one that has to re-plan legitimately does.
+
+**A RESUME WITH NOTHING TO SKIP IS REFUSED IN THOSE WORDS.** It is a restart under a name promising
+it would be cheap, and the board says so on a disabled chip rather than sending one.
+
+**`cancel` REFUSING A CLOSED ROUND WAS TRUE OF THE FLOW AND FALSE OF EVERYTHING ELSE.** A round that
+stopped on its own leaves a worktree on disk, a task parked where intake cannot reach it and possibly
+a pull request; somebody deciding not to retry has exactly that to do. So the flow cancel and the
+chain close are the two steps guarded on the round still being open, and the payload names what it
+actually did rather than promising a fixed list. The alternative was a second verb differing from
+this one only in which steps it skipped.
+
+**THE WORKTREE IS ONLY REMOVED WHEN NOTHING IS RUNNING ON IT.** Removing a tree under a live
+container is the hazard `reconcile`'s first step exists for, and `abandon_runs` would mark a run
+`killed` while its container is still writing to the log. A lease held by a live pid means the tree
+is left alone and the payload SAYS so - the round is closed and the flow cancelled either way, so the
+phase finishes into nothing and the reconciler reclaims the tree on its own schedule. Silently
+skipping it would be a thing that did not happen, reported as though it had.
+
+**`odoo.move` STILL MAY NOT WRITE `Pending`, AND `odoo.requeue` MAY.** *"A failed round parks its
+task where intake cannot reach it, by design"* stays true of everything automatic; what changed is
+that a person pressing `cancel+requeue` can say otherwise. Three bounds, all structural: exactly one
+caller, never the poll loop or the reconciler or a phase, and `TERMINAL` still refuses to come back
+out of Review. `tests/test_odoo.py` still asserts that `move` raises on `Pending`.
+
+**CLOSING A PULL REQUEST HAPPENS IN WINDMILL, BECAUSE conduct HOLDS NO CREDENTIAL THAT CAN.** A
+read/write deploy key has no REST API surface at all, which is what makes *"conduct cannot publish on
+its own"* structural rather than a scope choice. So the close goes where the token already lives:
+`f/agents/control` gained a `close_pr` module after conduct's own, reading `results.conduct_control`,
+exactly as `flows/ship.py` opens one. `PR_TOKEN_VARIABLE` moved into `flows/common.py` so two flows
+cannot drift into two spellings of one variable path.
+
+**WHAT THAT COSTS, STATED RATHER THAN IMPLIED.** `WINDMILL_DASHBOARD_TOKEN` is scoped
+`run:flow/f/agents/control`, and that flow now holds `pull_requests: write`. What bounds it is that
+**the caller cannot name a pull request**: the browser sends an action, a lane, a task id and a note,
+and conduct resolves the number from the `publication` row of the round it just cancelled. So the
+widest thing this route can now do is close the pull request of a round it is allowed to cancel. A
+caller that could pass a number would have turned a route scoped to one flow into a way to close
+anything on the remote. `conduct_control` raises on `ok: false`, so a refused cancel never reaches
+the module at all - and it reads the pull request before it writes, because GitHub accepts a PATCH
+against a merged one without complaining and *"the merged change was closed"* is the worst sentence
+this could produce.
+
+**NO LABEL AND NO COMMENT, EVER**, for the reason `PUBLISH_SCRIPT` already gives one flow over:
+`auto-merge.yml` arms on `merge: ready` or a `/merge` comment from a non-Bot sender, and this token
+acting as the owner is precisely that. Closing a pull request must not be able to merge one.
+
+**ALL FOUR STAY OUT OF `MIDPHASE_ACTIONS`.** Every one of them cancels a Windmill flow, and from
+inside `_await_phase` that is conduct cancelling the flow whose phase it is running. `cancel` is
+worse again - it can remove the worktree the container is writing into - so that tuple and the live-
+lease guard face the same hazard from two directions. The allowlist means a new action defers by
+default, and three verbs have now been added since that was written with the default doing its job
+each time.
+
+**`bin/conduct control` TAKES `--odoo-task` FOR THE SAME REASON THE FLOW DOES.** It is the escape
+hatch when the control plane is down, it reaches the same `control_envelope` and `_control_step`
+pair, and a field only the flow knew about would be one guard with two implementations.
+
 ### A restart cancels first, and the ordering is the only thing that is not interchangeable
 
 Closing the chain stops conduct's bookkeeping and leaves the Windmill job exactly where it was -

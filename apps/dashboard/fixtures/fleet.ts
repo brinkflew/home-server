@@ -75,6 +75,7 @@ export function fleetDocument(): FleetDocument {
         closed_why: null,
         done: ["plan", "dev", "verify", "review"],
         phases: PHASES,
+        latest_on_worktree: true,
         odoo_url: "https://avanserv.com/odoo/project.task/1572",
         branch: "agents/task-1572",
         branch_url: "https://github.com/avanserv/upskald/tree/task-1572",
@@ -114,6 +115,7 @@ export function fleetDocument(): FleetDocument {
         closed_why: null,
         done: ["plan"],
         phases: PHASES,
+        latest_on_worktree: true,
         odoo_url: "https://avanserv.com/odoo/project.task/1601",
         branch: "agents/feat/1601-intake-form",
         branch_url: "https://github.com/avanserv/upskald/tree/feat/1601-intake-form",
@@ -153,6 +155,7 @@ export function fleetDocument(): FleetDocument {
         closed_why: null,
         done: [],
         phases: PHASES,
+        latest_on_worktree: true,
         odoo_url: "https://avanserv.com/odoo/project.task/1610",
         branch: null,
         branch_url: null,
@@ -194,6 +197,7 @@ export function fleetDocument(): FleetDocument {
         closed_why: "reached the publish path",
         done: PHASES,
         phases: PHASES,
+        latest_on_worktree: true,
         odoo_url: "https://avanserv.com/odoo/project.task/1588",
         branch: "agents/task-1588",
         branch_url: "https://github.com/avanserv/upskald/tree/task-1588",
@@ -235,6 +239,7 @@ export function fleetDocument(): FleetDocument {
         closed_why: "reached the publish path",
         done: PHASES,
         phases: PHASES,
+        latest_on_worktree: true,
         odoo_url: "https://avanserv.com/odoo/project.task/1544",
         branch: "agents/task-1544",
         branch_url: "https://github.com/avanserv/upskald/tree/task-1544",
@@ -278,6 +283,7 @@ export function fleetDocument(): FleetDocument {
         closed_why: "reached the publish path",
         done: PHASES,
         phases: PHASES,
+        latest_on_worktree: true,
         odoo_url: "https://avanserv.com/odoo/project.task/1266",
         branch: "agents/task-1266",
         branch_url: "https://github.com/avanserv/upskald/tree/task-1266",
@@ -320,6 +326,7 @@ export function fleetDocument(): FleetDocument {
         closed_why: "reached the publish path",
         done: PHASES,
         phases: PHASES,
+        latest_on_worktree: true,
         odoo_url: "https://avanserv.com/odoo/project.task/1566",
         branch: "agents/task-1566",
         branch_url: "https://github.com/avanserv/upskald/tree/task-1566",
@@ -363,6 +370,7 @@ export function fleetDocument(): FleetDocument {
         closed_why: null,
         done: PHASES,
         phases: PHASES,
+        latest_on_worktree: true,
         odoo_url: "https://avanserv.com/odoo/project.task/1271",
         branch: "agents/fix/1271-settle-three-field-behaviours",
         branch_url:
@@ -413,6 +421,7 @@ export function fleetDocument(): FleetDocument {
         closed_why: "reached the publish path",
         done: PHASES,
         phases: PHASES,
+        latest_on_worktree: true,
         odoo_url: "https://avanserv.com/odoo/project.task/1254",
         branch: "agents/feat/1254-audit-pilot-waiting-list",
         branch_url:
@@ -456,6 +465,7 @@ export function fleetDocument(): FleetDocument {
         closed_why: "the rounds are used up",
         done: ["plan", "dev", "verify"],
         phases: PHASES,
+        latest_on_worktree: true,
         odoo_url: "https://avanserv.com/odoo/project.task/1530",
         branch: "agents/fix/1520-file-download",
         branch_url: "https://github.com/avanserv/upskald/tree/fix/1520-file-download",
@@ -498,6 +508,7 @@ export function fleetDocument(): FleetDocument {
         closed_why: "reached the publish path",
         done: PHASES,
         phases: PHASES,
+        latest_on_worktree: true,
         odoo_url: "https://avanserv.com/odoo/project.task/1501",
         branch: "agents/task-1501",
         branch_url: "https://github.com/avanserv/upskald/tree/task-1501",
@@ -514,6 +525,101 @@ export function fleetDocument(): FleetDocument {
         cost_usd: 2.47,
         tokens_in: 74100,
         tokens_out: 3458,
+      },
+      // TWO ROUNDS ON ONE LANE, WHICH IS WHAT THE LIVE HOST LOOKS LIKE AND
+      // WHAT NO FIXTURE CARRIED. Every round here had a distinct worktree id -
+      // the mirror of a host where ten of eleven share one - which is how the
+      // duplicate `v-for` key got through, and it is also the shape every
+      // control action has to be safe against: conduct keeps ONE chain row per
+      // worktree, so a restart aimed at the older of these two would land on
+      // the newer. The older one is `latest_on_worktree: false` and must be
+      // offered nothing at all.
+      {
+        worktree_id: "wt-lane01",
+        project: "upskald",
+        odoo_task: 1499,
+        ref: "agents/task-1499",
+        phase: "verify",
+        opened_at: iso(52 * 3600),
+        started_at: iso(52 * 3600),
+        ended_at: iso(50 * 3600),
+        attempts: 2,
+        max_attempts: 3,
+        flow_job_id: "job-lane-a",
+        head: null,
+        resumed_at: null,
+        waiting_on: null,
+        link: null,
+        summary: "Cache the base gate against the runner image",
+        kind: null,
+        closed_at: iso(50 * 3600),
+        closed_why: "the flow failed: the gate went red on a target the base passes",
+        done: ["plan", "dev"],
+        phases: PHASES,
+        // THE OLDER ROUND ON THIS LANE. conduct's row has moved on to task
+        // 1503 below, so nothing here can be acted on and roundOutcome calls
+        // it finished however recoverable it looks.
+        latest_on_worktree: false,
+        odoo_url: "https://avanserv.com/odoo/project.task/1499",
+        branch: "agents/task-1499",
+        branch_url: "https://github.com/avanserv/upskald/tree/task-1499",
+        pr_url: null,
+        pr_number: null,
+        pr_state: null,
+        published: false,
+        eta_seconds: null,
+        eta_samples: null,
+        held: false,
+        held_at: null,
+        held_why: null,
+        error: "the gate refused: make check failed on api-checks",
+        cost_usd: 11.4,
+        tokens_in: 302118,
+        tokens_out: 14882,
+      },
+      // THE RECOVERABLE ONE, and the row every new chip exists for: stopped,
+      // nothing merged, two phases finished and the lane's own conduct row. It
+      // is offered `resume`, `restart` and both cancels; before this change it
+      // was a permanent red line on the board with nothing to press.
+      {
+        worktree_id: "wt-lane01",
+        project: "upskald",
+        odoo_task: 1503,
+        ref: "agents/task-1503",
+        phase: "dev",
+        opened_at: iso(6 * 3600),
+        started_at: iso(6 * 3600),
+        ended_at: iso(5 * 3600),
+        attempts: 1,
+        max_attempts: 3,
+        flow_job_id: "job-lane-b",
+        head: null,
+        resumed_at: null,
+        waiting_on: null,
+        link: null,
+        summary: "Give the runner image a pip for the parallel python",
+        kind: null,
+        closed_at: iso(5 * 3600),
+        closed_why: "the flow failed: conduct was restarted mid-phase",
+        done: ["plan", "dev"],
+        phases: PHASES,
+        latest_on_worktree: true,
+        odoo_url: "https://avanserv.com/odoo/project.task/1503",
+        branch: "agents/task-1503",
+        branch_url: "https://github.com/avanserv/upskald/tree/task-1503",
+        pr_url: null,
+        pr_number: null,
+        pr_state: null,
+        published: false,
+        eta_seconds: null,
+        eta_samples: null,
+        held: false,
+        held_at: null,
+        held_why: null,
+        error: "the phase exited on SIGTERM",
+        cost_usd: 6.02,
+        tokens_in: 180440,
+        tokens_out: 8801,
       },
       // A ROUND WHOSE RUNS PREDATE run.odoo_task. The collector cannot know
       // which task it was for - run.task holds the prompt, and reading an id
@@ -542,6 +648,7 @@ export function fleetDocument(): FleetDocument {
         closed_why: null,
         done: ["plan", "dev"],
         phases: PHASES,
+        latest_on_worktree: true,
         odoo_url: null,
         branch: null,
         branch_url: null,
@@ -588,6 +695,7 @@ export function fleetDocument(): FleetDocument {
           "the flow failed: the gate failed in the pristine tree (exit 2, e2e-test)",
         done: ["plan", "dev", "verify"],
         phases: PHASES,
+        latest_on_worktree: true,
         odoo_url: "https://avanserv.com/odoo/project.task/1601",
         branch: "agents/feat/1601-intake-form",
         branch_url: "https://github.com/avanserv/upskald/tree/feat/1601-intake-form",
@@ -711,6 +819,22 @@ export function fleetDocument(): FleetDocument {
       holds: [
         { subject: "wt-77d3e0", value: "on", at: iso(20 * 60),
           note: "reading the diff" },
+      ],
+      // A LANE STARTED BY HAND INSIDE conduct's OWN FLOOR, which is the state
+      // the board could not see at all until 2026-09-07: `restart:*` reached no
+      // reader, so src/control.ts measured the floor against the ROUND'S start
+      // and offered an enabled chip on a lane conduct would then refuse. 90
+      // seconds against a 600-second floor, so wt-77d3e0 draws a disabled
+      // restart beside an enabled release and an enabled cancel.
+      //
+      // THE HELD LANE RATHER THAN wt-9f21c4 OR wt-lane01, and both exclusions
+      // are deliberate: wt-9f21c4 is waiting on a person, so its restart is
+      // already withheld for a different reason and the floor would be
+      // untestable behind it; and wt-lane01 is the recoverable round, whose new
+      // chips have to be seen WORKING in a screenshot.
+      stamps: [
+        { subject: "wt-77d3e0", value: "on", at: iso(90),
+          note: "restarted from the board" },
       ],
       // A LIVE OVERRIDE OVER A REJECTED WINDOW, which is the combination worth
       // pinning: fixtures/prometheus.ts holds quotaStatus at 2 deliberately, so

@@ -464,6 +464,23 @@ export interface FleetRound {
    */
   superseded?: boolean;
 
+  /**
+   * Whether this is the newest round on its worktree, and so the only one on
+   * that lane a control action can reach.
+   *
+   * A WORKTREE IS REUSED AND conduct KEEPS ONE ROW PER WORKTREE, so every
+   * control action aimed at a lane reaches whichever round ran there LAST.
+   * conduct refuses on the task id and that is the guard that counts; this is
+   * what stops the board offering nine buttons on one lane that all answer
+   * "this lane now holds task N, not task M".
+   *
+   * MAY BE `undefined` ON A DOCUMENT WRITTEN BY AN OLDER COLLECTOR, exactly as
+   * `superseded` may. Treat absence as false: an older collector cannot tell
+   * you which round is current, and guessing "probably this one" in front of a
+   * destructive button is the whole thing this field exists to prevent.
+   */
+  latest_on_worktree?: boolean;
+
   /** Seconds until the round is expected to finish, or null. Measured from the
    *  document's `generated_at`, not from now. */
   eta_seconds: number | null;
@@ -535,6 +552,24 @@ export interface FleetControl {
   restart_floor_sec: number;
   intake: FleetControlEntry[];
   holds: FleetControlEntry[];
+  /**
+   * When a round on each worktree was last started BY HAND, keyed by lane.
+   *
+   * THE BOARD USED TO COMPUTE conduct'S FLOOR FROM THE ROUND'S OWN START, which
+   * is a different clock: conduct debounces on this row, so a round started
+   * three hours ago and restarted sixty seconds ago offered an enabled chip
+   * that conduct then refused. `restart:*` reached no reader until 2026-09-07
+   * and the collector's own comment said nothing on the board drew it.
+   *
+   * ONE LIST FOR RESTART AND RESUME. conduct writes both under `restart:` -
+   * the hazard is two flows on one worktree, and a resume pressed a second
+   * after a restart produces it just as well.
+   *
+   * OPTIONAL, because the collector and this bundle deploy separately. Absent
+   * means the floor cannot be checked, which the offer treats as "no stamp" -
+   * conduct refuses again on the host either way.
+   */
+  stamps?: FleetControlEntry[];
   /**
    * The quota hold's override, or null when nobody has lifted it.
    *

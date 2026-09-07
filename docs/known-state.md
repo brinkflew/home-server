@@ -4264,3 +4264,96 @@ three of them are the same mistake in different clothes.
   structurally cannot reach, so neither direction of it had ever been asserted. `quotaWindow` is
   pure and out here now, and the composable was loaded by the smoke test for the first time - the
   same blind spot, and the same repair, as `roundboard.ts` the day before.
+
+### A stopped round had no way back, and four things stood between it and one
+
+Recorded 2026-09-07, with the board's filter, the step rail and the three renderers.
+
+- **`roundControls` returned an empty list for every closed round**, so the one row a person most
+  wants to act on was the one with nothing to press. The argument for it was sound as far as it
+  went - holding a finished round stops nothing, and `_control_restart` refused one outright
+  because `chain_get` returns only an open row - but the consequence was that recovery meant moving
+  the task in Odoo by hand and running `conduct ship --task N --resume` over ssh. Five tasks needed
+  exactly that after one bad day.
+- **A CONTROL TARGET NAMES A LANE AND NOT A ROUND.** `chain` is `INSERT OR REPLACE` on
+  `worktree_id` and the worktree is reused, so it holds one row against eleven rounds - and every
+  control action aimed at a worktree reaches whichever change ran there last. `restart`, `resume`
+  and the two cancels now carry `odoo_task` and refuse when it disagrees, which is `chain_open`'s
+  own discriminator re-asked: *"a round belongs to a task, and a different task is a different
+  round"*. The board's half is `latest_on_worktree`, so nine dead rounds on one lane are offered
+  nothing rather than nine buttons that all answer with a paragraph.
+- **A RESUME CANNOT GO THROUGH `chain_open`.** `chain_finished` reads `chain_get`, which is
+  open-rounds-only, and `chain_open` is `INSERT OR REPLACE` - so re-opening a closed round through
+  it returns `done` and `head` as NULL, `_may_skip` skips nothing, and the "resume" is a full round
+  at full price wearing the wrong name. `state.chain_reopen` clears `closed_at` while keeping
+  `attempts`, `done`, `head` and `resumed_at`; the last of those matters because a round that has
+  already spent its one automatic resume must not get it back by being resumed by hand.
+- **THE BOARD MEASURED conduct's RESTART FLOOR AGAINST THE WRONG CLOCK, and could not have
+  measured it against the right one.** `src/control.ts` compared `round.started_at` against
+  `restart_floor_sec`; conduct debounces on the `restart:<worktree>` control row. So a round
+  started three hours ago and restarted sixty seconds ago offered an **enabled** chip that conduct
+  then refused. The row reached no reader at all - `_fleet_control` dropped it under a comment
+  saying *"nothing on the board draws it"* - so this was the board answering a different question
+  rather than getting this one wrong. `control.stamps` carries it now.
+- **`cancel` REFUSING A CLOSED ROUND WAS TRUE OF THE FLOW AND FALSE OF EVERYTHING ELSE.** A round
+  that stopped on its own leaves a worktree on disk, a task parked where intake cannot reach it and
+  possibly a pull request; somebody deciding not to retry has exactly that to do. The flow cancel
+  and the chain close are guarded on the round still being open and the payload names what it
+  actually did, rather than a second verb differing only in which steps it skipped.
+- **THE WORKTREE IS ONLY REMOVED WHEN NOTHING IS RUNNING ON IT.** Removing a tree under a live
+  container is the hazard `reconcile`'s first step exists for, and `abandon_runs` would mark a run
+  `killed` while its container is still writing. A live lease means the tree is left alone and the
+  payload SAYS so - the round is closed and the flow cancelled either way, so the phase finishes
+  into nothing and the reconciler reclaims it.
+- **`odoo.move` MAY STILL NOT WRITE `Pending`, AND `odoo.requeue` MAY.** The refusal is deliberate
+  and stays asserted in `tests/test_odoo.py`; what changed is that a person pressing
+  `cancel+requeue` can say it. Three bounds, all structural: one caller, never the poll loop or the
+  reconciler or a phase, and `TERMINAL` still refuses to come back out of Review.
+- **CLOSING A PULL REQUEST HAPPENS IN WINDMILL, BECAUSE conduct HOLDS NO CREDENTIAL THAT CAN.**
+  A deploy key has no REST surface at all, which is what makes *"conduct cannot publish on its
+  own"* structural. `f/agents/control` gained a `close_pr` module reading
+  `results.conduct_control`, so the widest thing the dashboard's control token can now do is close
+  the pull request of a round it is allowed to cancel - conduct resolves the number from its own
+  `publication` row, and the browser sends only an action, a lane, a task id and a note.
+
+### Four ways a round's own page said less than the host had recorded
+
+- **`report.card` is markdown and was rendered in a `<pre>`** - around 7,500 bytes of headings,
+  bullets and links shown as source, in the one panel on that page whose whole job is to be read.
+  `src/markdown.ts` returns a token tree rather than an HTML string, so there is **no `v-html` on a
+  path model output takes**: `marked` would need a sanitiser beside it and would still be one
+  mistake away from executing whatever a phase wrote. The link filter is an **allowlist** of `http`
+  and `https`, not a `javascript:` denylist, and a refused scheme keeps its text.
+- **`report.verdict` is a JSON string and was shown as one**, under a heading promising an account
+  of the run. `conduct/card.py` already renders it and `src/verdict.ts` mirrors that rather than
+  inventing a second reading - three outcomes, none of them silent: absent gets a sentence, an
+  answer outside the schema is kept **verbatim** because the pinned CLI can retract structured
+  output, and a key this bundle has never heard of is drawn under its own name because the schemas
+  move in another repository. `types.ts`'s *"do not parse it"* forbids branching FLEET STATE on it,
+  which nothing here does.
+- **A transcript was a `kind` label and its payload as itself.** The prompt, the phase's prose, a
+  tool call's JSON and a refused permission all sat in one ladder - `Read
+  {"file_path":"bin/lint-repo.sh","offset":40}`. Every shape is read now, an `Edit` shows a
+  five-line diff with what it did not show counted beside it, and the refusal names the tool and
+  the reason: it is the fleet's own record of a boundary holding, which is why it already had the
+  one colour on that page.
+- **The `result` event was fetched and drawn nowhere at all.** It is the CLI's own scalars, and
+  `subtype` is the only thing that tells a phase which hit `--max-budget-usd` from a broken
+  `make install`.
+
+### A class on a component lands on its root, and so does the component's own
+
+- **`class="rail"` on `<PhaseSteps>` matched PhaseSteps' OWN scoped `.rail`** - the rule for its
+  `<ol>` - because the root element carries both components' scope attributes. The component's root
+  became a flex container, its label and its rail sat side by side, and the rail collapsed to 142px
+  of a 620px panel. Nothing warned; it renders as a design decision rather than as a fault.
+- **This is the mirror of the case already recorded**, where a fold class on a component lost to
+  the component's own more-specific rule. Same mechanism, opposite direction, and neither is
+  visible in a diff.
+- **`base.css` resets `list-style: none` on every `ul` and `ol`**, correctly - every other list in
+  the application is a rack or a strip - so a card's bullets and a verdict's concerns rendered as an
+  unexplained indent until the two renderers asked for the marker back.
+- **Equal columns are not equal segments.** A step rail drawn as N equal shares puts the first node
+  at the LEFT of its share and the second at the RIGHT of the next, so the first gap is nearly two
+  shares wide. The first step takes only its node's width and the segments after it divide the
+  rest; its label then has to leave the flow, or `plan` renders as `p.`.

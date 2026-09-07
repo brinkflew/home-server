@@ -25,7 +25,7 @@ import { fetchControl } from "@/api/control-doc";
 import { SignedOutError } from "@/api/http";
 import { freshness, type Freshness } from "@/freshness";
 import { coarse, isoToUnix } from "@/format";
-import { isSettled } from "@/fleet";
+import { isSettled, roundOutcome } from "@/fleet";
 import { useHostStore } from "@/stores/host";
 import type {
   ControlDocument,
@@ -153,6 +153,29 @@ export const useFleetStore = defineStore("fleet", () => {
 
   const settledCount = computed(() => rounds.value.length - openRounds.value.length);
 
+  /**
+   * What the board shows by default: live, owed, or still recoverable.
+   *
+   * `openRounds` WAS THE ONLY FILTER AND IT WAS TOO WEAK. It hides a finished
+   * round whose pull request is merged and nothing else, so `stopped`,
+   * `superseded`, `not published` and `in review` all sat on the board for ever
+   * - eleven rounds on one worktree, most of them dead, with the live one
+   * somewhere in the list. This asks the question the page exists for: is this
+   * a round the machine is working on, one that owes me an answer, or one I can
+   * still do something about.
+   *
+   * `openRounds` STAYS, because two counts in the band header answer two
+   * different questions and neither is this one.
+   */
+  const activeRounds = computed<FleetRound[]>(() =>
+    rounds.value.filter((r) => roundOutcome(r) !== "finished"),
+  );
+
+  /** How many rows the default view is holding back. Printed beside the toggle
+   *  whether or not it is on: a filter a reader cannot see is a filter that
+   *  lies to them. */
+  const finishedCount = computed(() => rounds.value.length - activeRounds.value.length);
+
   /** Keyed by phase. Empty rather than absent, so a caller need not guard. */
   const phaseStats = computed(() => doc.value?.phase_stats ?? {});
 
@@ -200,6 +223,8 @@ export const useFleetStore = defineStore("fleet", () => {
     rounds,
     openRounds,
     settledCount,
+    activeRounds,
+    finishedCount,
     phaseStats,
     generatedAt,
     publications,

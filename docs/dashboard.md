@@ -306,6 +306,107 @@ watcher, where nothing on the page showed it. The drawer opened perfectly for an
 and not at all for anyone using a keyboard. `shoot.mjs` reports `pageerror`, which is how it was
 found; it is a `querySelector` now.
 
+**THE BOARD SHOWS WHAT IS LIVE, OWED OR STILL RECOVERABLE, SINCE 2026-09-07.** The only filter was
+`isSettled` - closed AND merged - which is far too weak to be the only one: `stopped`,
+`superseded`, `not published` and `in review` all stayed for ever, so eleven rounds sat on one
+worktree, most of them dead, with the live one somewhere in the list. `roundOutcome` in
+`src/fleet.ts` puts a round in one of four classes and the toggle now says `show N finished`,
+still printing its count whether or not it is on.
+
+**IT DERIVES FROM `roundState` RATHER THAN FROM ITS CONDITIONS AGAIN, and the first version proved
+why.** Re-testing `pr_url`, `superseded` and the rest got two of eleven states wrong on its first
+live rendering - `published` and `not published` both fell through to recoverable, so the board
+offered to restart rounds that had reached the publish path and ended. Eleven states in one function
+and a subset of its conditions in another is a drift no fixture can see. **This is not the
+`closed_why` habit**: that rule refuses conduct's PROSE, written in another repository; this asks
+this application's own vocabulary, which is derived structurally two functions down.
+
+**AND `recoverable` IS DEFINED AS THE CLASS `roundControls` OFFERS SOMETHING ON.** The two must not
+drift, because a button on a row nobody can see is the failure the pairing exists to prevent - and
+`fixtures/smoke.mjs` asserts exactly that over every fixture round.
+
+**A ROUND CAN BE ACTED ON FROM THE ROW NOW, AND A STOPPED ONE COULD NOT BE AT ALL.**
+`roundControls` returned an empty list for anything closed, so the row a person most wants to act on
+was the one with nothing to press; recovery meant moving the task in Odoo by hand and running
+`conduct ship --task N --resume` over ssh. `resume`, `restart`, `cancel` and `cancel+requeue` are
+new control actions - see `docs/agents.md` for what each does on the host and what closing a pull
+request costs.
+
+**EVERY ACTIONABLE ROW OFFERS EXACTLY THREE PRIMARY CHIPS, AND THAT NUMBER IS THE COLUMN'S WIDTH.**
+At 132px four of them wrapped onto four lines and made every row of the table 130px tall, which is a
+list nobody can scan. `ControlOffer.primary` is a **declared property rather than two lists** - the
+board's row and the round's own page still read one derivation, because the last time this
+application derived one control two ways the two drawings disagreed, and here the disagreement would
+be a chip reading `cancel` that sent `restart`. Only `cancel+requeue` is non-primary: everything it
+does `cancel` does too except the one tracker write, and somebody deciding to put work back has gone
+to read the round first.
+
+**A ROUND WAITING FOR YOUR ANSWER WILL NOT BE RESTARTED BY ONE CLICK.** conduct would accept it,
+which is exactly why the board must not offer it as though it were the obvious move: a restart
+cancels the flow that is holding the question. `resume` and `restart` are drawn **disabled with a
+sentence** rather than dropped - a control that vanishes teaches nothing, and somebody really may
+want to restart a round whose card they do not like. `cancel` stays enabled, because it is a decline
+that also cleans up.
+
+**THE RESTART FLOOR WAS MEASURED AGAINST THE WRONG CLOCK AND COULD NOT HAVE BEEN MEASURED AGAINST
+THE RIGHT ONE.** `src/control.ts` compared `round.started_at` against `restart_floor_sec`; conduct
+debounces on its own `restart:<worktree>` control row. So a round started three hours ago and
+restarted sixty seconds ago offered an **enabled** chip that conduct then refused. The row reached
+no reader at all - `_fleet_control` dropped it under a comment saying nothing on the board drew it -
+so the board was answering a different question rather than getting this one wrong. It arrives as
+`control.stamps`, and `lastStartedAgo` is the one reader.
+
+**THE WHOLE ROW LEADS TO THE ROUND, WHICH ITS OWN COMMENT HAD CLAIMED SINCE THE PAGE WAS SPLIT.**
+Only the ~110px state pill was a link while the `<tr>` carried `.hov`, so the row took a hover
+background across its full width and then did nothing for most of it. The link stays - it is the
+keyboard path, the middle-click path and what `fixtures/shoot.mjs` reads to find a deep link - and
+a click handler covers the rest, skipping anything inside `a, button, input, label, [data-noclick]`.
+The disabled chips render as spans and match none of those, which is what `data-noclick` is for.
+
+**THE PROGRESS BAR BECAME A RAIL OF NAMED STEPS.** `done 5/5` was already the line above it, so the
+bar drew the same number as a shape and added nothing; a round has five named steps in a fixed
+order and which one it is on is what a reader is looking for. `ProgressBar` stays - four other call
+sites are genuine ratios, and its null-versus-zero contract is right. The names print above the 900
+rung and are dropped below it, where the cell is 200px; each node keeps its own `title`.
+
+**AND THE `Right now` CONDITIONS ARE THREE EQUAL COLUMNS AT AND ABOVE 900.** The argument against
+that was about a different panel: the header it replaced WAS five facts - conduct, phase, quota,
+worktrees, intake - each handed a fifth of 1360 with no primary among them, and the complaint was
+never the geometry but that nothing led. The headline has led since 2026-08-29. What packing left
+actually produced on a laptop was all three crowded into about 600px of a 1360-1600px panel with the
+rest empty - the band's own measurement said they sit on one line from 1360 down to 760, which is a
+description of where the row ran out rather than of a layout. Below 900 it packs left again; below
+640 the label-left readout takes over unchanged.
+
+**THE ROUND'S PAGE READS WHAT THE HOST RECORDED, WHERE IT USED TO PRINT IT.** Three panels, three
+raw dumps:
+
+- **The card is markdown and was a `<pre>`** - ~7,500 bytes of headings, bullets and links shown as
+  source, in the one panel on that page whose whole job is to be read. `src/markdown.ts` returns a
+  token tree and `MarkdownBody.vue` draws it through ordinary elements, so **there is no `v-html`
+  anywhere on a path model output takes**. That is the deciding argument rather than the house
+  no-library preference: `marked` returns an HTML string, which means a sanitiser beside it and a
+  page behind the household's passkey that is one mistake away from executing whatever a phase
+  wrote. The link filter is an **allowlist** of `http` and `https` - `JaVaScRiPt:`, a leading tab
+  and `data:text/html` are three ways past a denylist - and a refused scheme keeps its text, because
+  dropping the node would hide a destination somebody is being asked to trust.
+- **The verdict is a JSON string and was a `<pre>`**, under a heading promising an account of the
+  run. `conduct/card.py` already renders the same string and `src/verdict.ts` **mirrors** it rather
+  than inventing a second reading: absent gets a sentence, an answer outside the schema is kept
+  verbatim because the pinned CLI can retract structured output, and a key this bundle has never
+  heard of is drawn under its own name because the four schemas live in another repository.
+  `types.ts`'s *"do not parse it"* forbids branching fleet STATE on it, which nothing here does.
+- **A transcript was a `kind` label and its payload as itself.** `src/transcript.ts` reads each
+  shape: the prompt is the other side of the conversation, clamped to six lines; assistant prose
+  goes through the same markdown renderer; a tool call is one line with its input behind a
+  disclosure; an `Edit` shows at most five diff lines with what it did not show counted beside them;
+  and a refusal names the tool and the reason, keeping the one colour that page already gave it. The
+  `result` event - what it cost, how long it took, and the `subtype` that is the only thing telling
+  a spent budget from a broken `make install` - was fetched and drawn nowhere at all.
+
+**NOTHING IN ANY OF THE THREE RE-REDACTS.** The host already dropped every tool result and replaced
+every `.env` value; a guard in a browser is one an attacker has already got past.
+
 **The design project's `templates/dashboard-page/` is STALE against its own README** and should not
 be followed. It still shows a 12-column bento with bespoke spans and still says *"nothing above
 22px"* - both of which the README explicitly replaced. The README and `tokens/` are authoritative.

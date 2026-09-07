@@ -1437,6 +1437,37 @@ signal read green.
   `publication.job_id` is exact and was already joined. `waiting_on: "person"` is now independent of
   `closed_at`; `"conduct"` and `moving` are deliberately not.
 
+### A stopped round had no way back, and four things stood between it and one
+- `roundControls` offered nothing on a closed round, so the row somebody most wants to act on was
+  the one with nothing to press. Recovery was moving the task in Odoo by hand and running conduct
+  over ssh; five tasks needed exactly that after one bad day.
+- **A control target names a LANE and not a round.** `chain` holds one row against eleven rounds, so
+  the four round actions carry `odoo_task` and refuse when it disagrees - `chain_open`'s own
+  discriminator re-asked - and the board offers only `latest_on_worktree`.
+- **A resume cannot go through `chain_open`**: it is INSERT OR REPLACE, so re-opening returns `done`
+  and `head` NULL and the resume skips nothing. `chain_reopen` keeps them, and `resumed_at` too.
+- **The board measured conduct's restart floor against the round's start**, while conduct debounces
+  on the `restart:<worktree>` row - which reached no reader at all, so the board was answering a
+  different question rather than getting this one wrong.
+- `cancel` refusing a closed round was true of the FLOW and false of the worktree, the task and the
+  pull request. The tree is only removed when no live lease holds it, and the payload says which.
+- `odoo.move` still may not write `Pending`; `odoo.requeue` may, from one caller a person presses.
+- **Closing a pull request happens in Windmill**, because a deploy key has no REST surface - which
+  is what makes "conduct cannot publish on its own" structural. conduct names the number.
+
+### Four ways a round's own page said less than the host had recorded
+- The card is markdown and was a `<pre>`; the verdict is JSON and was a `<pre>`; a transcript was a
+  `kind` label and its payload as itself. No `v-html` on a path model output takes, and the link
+  filter is an allowlist rather than a `javascript:` denylist.
+- An answer outside its schema is kept VERBATIM, and a key this bundle has never heard of is still
+  drawn: the schemas move in another repository. The `result` event was drawn nowhere at all.
+
+### A class on a component lands on its root, and so does the component's own
+- `class="rail"` on `<PhaseSteps>` matched the component's OWN `.rail`, made its root a flex
+  container and collapsed the rail to 142px of 620. The mirror of the fold-class trap already here.
+- `base.css` resets `list-style` on every list, so a rendered card's bullets are an indent until
+  asked for back. And equal columns are not equal segments: the first node needs its own rule.
+
 ### The window came back and one reader of three never heard
 - The quota status describes ONE model call and carries its own `resets_at`. `agents.quota_headroom`
   clears on it and `AgentQuotaRejected` will not fire past it; `quotaTone` read the status ALONE, so

@@ -36,13 +36,16 @@ import StatusDot from "@/components/StatusDot.vue";
 import StatePill from "@/components/StatePill.vue";
 import ChipLink from "@/components/ChipLink.vue";
 import ChipButton from "@/components/ChipButton.vue";
-import ProgressBar from "@/components/ProgressBar.vue";
+import PhaseSteps from "@/components/PhaseSteps.vue";
+import RoundControls from "@/components/RoundControls.vue";
+import MarkdownBody from "@/components/MarkdownBody.vue";
+import VerdictBody from "@/components/VerdictBody.vue";
+import PhaseTurn from "@/components/PhaseTurn.vue";
 
 import { DocumentNeverWritten } from "@/api/document";
 import { fetchRound, roundKey } from "@/api/round";
 import { approve as sendApprove } from "@/api/approve";
 import type { ApproveDecision } from "@/api/approve";
-import { control } from "@/api/control";
 import { useHostStore } from "@/stores/host";
 import { useFleetStore } from "@/stores/fleet";
 import { boardRow } from "@/roundboard";
@@ -128,11 +131,6 @@ function act(decision: ApproveDecision): () => Promise<unknown> {
   };
 }
 
-async function send(action: "hold" | "release" | "restart", target: string): Promise<void> {
-  await control({ action, target });
-  await fleet.refresh();
-}
-
 // --- phases ------------------------------------------------------------------
 
 const phases = computed<RoundPhase[]>(() => doc.value?.phases ?? []);
@@ -215,30 +213,28 @@ function weight(phase: RoundPhase): string {
         />
         <span class="summary">{{ row.r.summary ?? row.r.ref ?? "no branch recorded" }}</span>
 
-        <span class="acts">
-          <!-- THE CONTROLS, AND ONLY ON A ROUND THAT IS STILL RUNNING. Holding
-               a finished round stops nothing and restarting one has no chain
-               for conduct to close - roundControls returns an empty list rather
-               than a disabled pair, because a control that could never apply is
-               noise on every closed round. -->
-          <ChipButton
-            v-for="c in row.controls"
-            :key="c.action"
-            :label="c.label"
-            :disabled="c.disabled"
-            :act="() => send(c.action as 'hold' | 'release' | 'restart', c.target ?? '')"
-            :title="
-              c.action === 'restart'
-                ? 'close this round, cancel its flow, and start it again with the same task'
-                : c.action === 'hold'
-                  ? 'stop dispatching this round - the phase running now finishes first'
-                  : 'start dispatching this round again'
-            "
-          />
-        </span>
+        <!-- THE CONTROLS, WHICH USED TO BE OFFERED ONLY ON A ROUND STILL
+             RUNNING. A closed round got an empty list, so a stopped one had no
+             way back at all - it was recovered by moving its task in Odoo by
+             hand and running conduct over ssh. roundControls decides what is
+             offered and why each withheld one is withheld; this only draws it,
+             and RoundControls is the same component the board's row uses so the
+             two drawings cannot disagree about what a chip sends. -->
+        <RoundControls v-if="row.controls.length" :round="row.r" :offers="row.controls" />
       </div>
 
-      <ProgressBar :ratio="row.progress" :tone="row.tone" :live="row.moving" />
+      <!-- NAMED HERE, unlike the board's cell: this panel is full width, so
+           there is room for the phase under each node and no reason to make a
+           reader hover for it. -->
+      <PhaseSteps
+        class="steprail"
+        :phases="row.r.phases"
+        :done="row.r.done"
+        :current="row.r.phase"
+        :label="row.phase"
+        :tone="row.tone"
+        :live="row.moving"
+      />
 
       <dl class="facts">
         <div class="fact">
@@ -352,7 +348,15 @@ function weight(phase: RoundPhase): string {
         </span>
       </template>
 
-      <pre class="body card">{{ doc.report.card }}</pre>
+      <!-- RENDERED, NOT DUMPED. This is ~7,500 bytes of markdown from
+           conduct/card.py - headings, bullets, links and inline code - and it
+           was shown as monospaced source with the syntax still in it, in the
+           one panel on this page whose whole job is to be read. src/markdown.ts
+           returns a token tree rather than an HTML string, so there is no
+           `v-html` on the path a model's own output takes. -->
+      <div class="body card">
+        <MarkdownBody :source="doc.report.card" />
+      </div>
 
       <p v-if="waiting && !cannot" class="foot mono">
         Approving opens a DRAFT pull request. Declining cancels the flow and
@@ -367,7 +371,7 @@ function weight(phase: RoundPhase): string {
     </PanelBox>
 
     <PanelBox v-if="doc.report && doc.report.verdict" label="What the phase said it did">
-      <pre class="body">{{ doc.report.verdict }}</pre>
+      <VerdictBody :raw="doc.report.verdict" />
     </PanelBox>
 
     <Band label="Phases">
@@ -445,18 +449,36 @@ function weight(phase: RoundPhase): string {
           </p>
         </template>
 
+        <!-- A CONVERSATION, WHICH IT WAS NOT. Every turn was a 68px label and
+             its payload: the prompt, the phase's prose, a tool call's JSON and
+             a refused permission, all in one ladder with the syntax showing.
+             src/transcript.ts reads each shape; PhaseTurn draws it. -->
         <div v-else-if="shown.turns.length" class="body turns">
-          <div v-for="(turn, i) in shown.turns" :key="i" class="turn" :class="turn.kind">
-            <span class="who mono">{{ turn.kind }}</span>
-            <span v-if="turn.kind === 'tool'" class="said mono">
-              <b>{{ turn.name }}</b>
-              <span class="input">{{ turn.input }}</span>
-            </span>
-            <span v-else class="said">{{ turn.text }}</span>
-          </div>
+          <PhaseTurn v-for="(turn, i) in shown.turns" :key="i" :turn="turn" />
         </div>
 
         <p v-else class="empty mono">this phase produced no transcript</p>
+
+        <!-- THE RESULT EVENT, WHICH WAS FETCHED AND DRAWN NOWHERE. It is the
+             CLI's own scalars for the run: what it cost, how long it took, how
+             many turns it needed, and - the one that matters - why it stopped.
+             A phase that hit its budget exits non-zero exactly like a broken
+             `make install`, and only this tells them apart. -->
+        <p v-if="shown.result_event" class="foot mono" :class="{ bad: shown.result_event.is_error }">
+          {{ shown.result_event.subtype ?? "no subtype" }}
+          <template v-if="shown.result_event.num_turns !== null">
+            - {{ shown.result_event.num_turns }} turns
+          </template>
+          <template v-if="shown.result_event.duration_ms !== null">
+            - {{ fmt.coarse(shown.result_event.duration_ms / 1000) }}
+          </template>
+          <template v-if="shown.result_event.total_cost_usd !== null">
+            - ${{ shown.result_event.total_cost_usd.toFixed(2) }}
+          </template>
+          <template v-if="shown.result_event.stop_reason">
+            - stopped: {{ shown.result_event.stop_reason }}
+          </template>
+        </p>
       </PanelBox>
     </Band>
 
@@ -609,9 +631,30 @@ pre.body {
   overflow-wrap: anywhere;
 }
 
-pre.card {
+/* THE CARD IS NOT SCROLLED. It is the point of the page and the text somebody
+   is approving; a box with its own scrollbar inside a page that already has one
+   is how 7,500 bytes of prose got read by nobody. */
+.body.card {
   max-height: none;
+  overflow: visible;
   color: var(--fg-2);
+}
+
+/* The step rail sits where the progress bar did, with room for the names under
+   it that the board's 200px cell cannot give them.
+
+   `steprail` AND NOT `rail`, WHICH IS THE OTHER HALF OF A TRAP THIS REPOSITORY
+   HAS ALREADY PAID FOR ONCE. The known case is that a class put on a COMPONENT
+   lands on its root, where the component's own scoped rule may be more
+   specific. This is the same mechanism pointing the other way: the root carries
+   BOTH components' scope attributes, so `class="rail"` here matched
+   PhaseSteps' own `.rail` - the rule for its `<ol>` - and made the component's
+   root a flex container. The label and the rail then sat side by side and the
+   rail collapsed to 142px of a 620px panel. Nothing warned, and it renders as a
+   design decision rather than as a fault. */
+.steprail {
+  margin-top: 4px;
+  max-width: 620px;
 }
 
 pre.gate {
@@ -637,49 +680,15 @@ pre.gate {
   color: var(--fg-3);
 }
 
+/* ONE COLUMN, NOT TWO. The label column went with the flat ladder: PhaseTurn
+   tells the sides apart by ground and position, which is what makes a
+   conversation read as one. The gap is larger than it was because the turns are
+   blocks now rather than rows. */
 .turns {
   display: flex;
   flex-direction: column;
-  gap: 9px;
-}
-
-.turn {
-  display: grid;
-  grid-template-columns: 68px minmax(0, 1fr);
-  gap: var(--gap-sm);
-  align-items: start;
-}
-
-.turn .who {
-  font: var(--t-mono-xs);
-  color: var(--fg-5);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.turn .said {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.turn.say .said {
-  color: var(--fg-2);
-}
-
-.turn.ask .said {
-  color: var(--fg-4);
-}
-
-.turn.tool .input {
-  display: block;
-  color: var(--fg-5);
-  overflow-wrap: anywhere;
-}
-
-/* A REFUSED PERMISSION IS A FINDING, not chatter: it is the fleet's own record
-   of a boundary holding, and the one shape here worth a colour. */
-.turn.denied .said {
-  color: var(--warn);
+  gap: 14px;
+  max-height: 620px;
 }
 
 .foot {

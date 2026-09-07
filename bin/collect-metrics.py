@@ -3310,6 +3310,25 @@ def _fleet_derive_rounds(conn):
     rounds = [g for g in rounds if "plan" in g["done"] or g["task"]]
 
     rounds.reverse()
+
+    # WHICH ROUND ON A LANE MAY BE ACTED ON, and only one of them ever can.
+    #
+    # A WORKTREE IS REUSED AND `chain` HOLDS ONE ROW, so every control action
+    # aimed at a lane reaches whichever round ran there LAST. conduct refuses on
+    # the task id, which is the guard that counts - but a board that offered a
+    # restart on all ten dead rounds of `upskald-ship` would be offering nine
+    # buttons that answer "this lane now holds task N, not task M". A button
+    # that lands somewhere it cannot act is worse than one that says less.
+    #
+    # `rounds` IS NEWEST FIRST BY THE TIME THIS RUNS, so the first one seen per
+    # worktree is the one conduct's row describes. Written as an explicit False
+    # on the others rather than left absent, because absent is what an older
+    # collector produces and the browser has to be able to tell the two apart.
+    newest = set()
+    for group in rounds:
+        worktree = group["worktree_id"]
+        group["latest_on_worktree"] = worktree not in newest
+        newest.add(worktree)
     return rounds
 
 
@@ -3378,6 +3397,20 @@ def _fleet_control(conn, env):
         "restart_floor_sec": FLEET_RESTART_FLOOR_SEC,
         "intake": [],
         "holds": [],
+        # WHEN A ROUND ON THIS LANE WAS LAST STARTED BY HAND, and it is here
+        # because the board draws conduct's own floor and was drawing a
+        # different one. `restart:*` used to fall through the loop below
+        # deliberately - "a debounce stamp conduct reads back, and nothing on
+        # the board draws it" - while src/control.ts measured the floor against
+        # the ROUND'S START. conduct measures it against this row, so a round
+        # started three hours ago and restarted sixty seconds ago offered an
+        # enabled chip that conduct then refused. A button that lies about
+        # whether it will work teaches a reader to distrust the others.
+        #
+        # ONE STAMP FOR RESTART AND RESUME, because state.restart_name is one
+        # name for both: the hazard is two flows on one worktree, and a resume
+        # pressed a second after a restart produces it just as well.
+        "stamps": [],
         # THE QUOTA OVERRIDE, AND ITS VALUE IS A STAMP RATHER THAN on/off. It is
         # the moment the fleet goes back to pacing itself at the warning, which
         # is the only thing worth drawing: an override is interesting for how
@@ -3400,12 +3433,12 @@ def _fleet_control(conn, env):
             block["intake"].append(entry)
         elif name == "hold":
             block["holds"].append(entry)
+        elif name == "restart":
+            block["stamps"].append(entry)
         elif name == "quota":
             # ONE ROW, NOT A LIST, because state.quota_name() takes no subject -
             # the quota is the ACCOUNT'S and last_quota is global for the same
-            # reason. `restart:*` still falls through here deliberately: it is a
-            # debounce stamp conduct reads back, and nothing on the board draws
-            # it.
+            # reason.
             block["quota"] = entry
     return block
 

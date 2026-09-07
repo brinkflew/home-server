@@ -14,6 +14,7 @@
  * come off one derivation and cannot disagree.
  */
 import { computed, ref } from "vue";
+import { useRouter } from "vue-router";
 
 import Band from "@/components/Band.vue";
 import PanelBox from "@/components/PanelBox.vue";
@@ -22,6 +23,8 @@ import StatePill from "@/components/StatePill.vue";
 import ChipLink from "@/components/ChipLink.vue";
 import ChipButton from "@/components/ChipButton.vue";
 import ProgressBar from "@/components/ProgressBar.vue";
+import PhaseSteps from "@/components/PhaseSteps.vue";
+import RoundControls from "@/components/RoundControls.vue";
 import StaleNote from "@/components/StaleNote.vue";
 
 import { usePoll } from "@/composables/usePoll";
@@ -41,6 +44,7 @@ import type { FleetRound, InstantSeries, Tone } from "@/types";
 import * as fmt from "@/format";
 
 const tip = useTooltip();
+const router = useRouter();
 const host = useHostStore();
 const fleet = useFleetStore();
 const metricsStale = useMetricsStale();
@@ -156,11 +160,19 @@ const leadSub = computed(() => {
 // --- the board ---------------------------------------------------------------
 
 /**
- * Whether the board is showing merged rounds too.
+ * Whether the board is showing finished rounds too.
  *
  * A FILTER NOBODY CAN SEE IS A FILTER THAT LIES, so the count it is holding
  * back is printed beside the toggle whether or not it is on. Default off: a
- * merged round is finished work and the page exists to show what is not.
+ * finished round is work nobody owes anything on, and the page exists to show
+ * what is not.
+ *
+ * IT USED TO HIDE ONLY MERGED ROUNDS, which is `isSettled` and is far too weak
+ * a filter to be the only one. `stopped`, `superseded`, `not published` and
+ * `in review` all stayed for ever - eleven rounds on one worktree, most of them
+ * dead, with the live one somewhere in the list. `roundOutcome` is the rule now
+ * and it keeps the ones that can still be acted on, which is the class the new
+ * chips exist for.
  */
 const showAll = ref(false);
 
@@ -172,7 +184,7 @@ const board = computed(() => {
     runs: fleet.doc?.runs ?? [],
     control: fleet.control,
   };
-  return [...(showAll.value ? fleet.rounds : fleet.openRounds)]
+  return [...(showAll.value ? fleet.rounds : fleet.activeRounds)]
     .sort(byUrgency)
     .map((r, i) => {
       const key = roundKey(r.worktree_id, r.started_at);
@@ -251,6 +263,32 @@ const costTip = computed(() => ({
  */
 function taskName(r: FleetRound): string {
   return r.summary ?? r.ref ?? r.worktree_id;
+}
+
+/**
+ * Open the round, unless the click landed on something that acts.
+ *
+ * THE COMMENT ON THE STATE CELL HAS CLAIMED "THE WHOLE ROW LEADS TO THE ROUND"
+ * SINCE THE PAGE WAS SPLIT, and only the ~110px state pill was a link. The row
+ * carries `.hov`, so it took a hover background across its whole width and then
+ * did nothing for most of it - a promise the row did not keep.
+ *
+ * THE LINK STAYS AND IS NOT REPLACED BY THIS. It is the keyboard path, the
+ * middle-click path and the one a screen reader announces; `fixtures/shoot.mjs`
+ * also reads `a.state` to find a deep link, which is how the key's two halves
+ * are asserted to agree. This is the pointer affordance on top of it.
+ *
+ * `closest` RATHER THAN A TARGET COMPARISON, because every control here is a
+ * composed element - a chip is a button containing text, and an event whose
+ * target is that text node would otherwise navigate away from the button that
+ * was pressed. `[data-noclick]` covers the disabled chips, which render as
+ * spans and match none of the interactive selectors.
+ */
+function openRound(event: MouseEvent, key: string | null): void {
+  if (!key) return;
+  const el = event.target as HTMLElement | null;
+  if (el?.closest("a, button, input, label, [data-noclick]")) return;
+  void router.push(`/agents/rounds/${key}`);
 }
 
 /** The rail, off the same tone the dot reads, so the two cannot drift. */
@@ -373,14 +411,17 @@ function rail(tone: Tone): string {
       <span class="count">{{ fleet.openRounds.length }}</span> open,
       <span class="count">{{ fleet.waitingOnPerson.length }}</span> waiting on you
       <!-- THE COUNT IS SHOWN WHETHER OR NOT THE TOGGLE IS ON, because a filter
-           a reader cannot see is a filter that lies to them. -->
+           a reader cannot see is a filter that lies to them. It says `finished`
+           rather than `merged` because that is what it now holds back: merged,
+           in review, published, superseded, and a stopped round on a lane whose
+           conduct row has moved on to another change. -->
       <button
-        v-if="fleet.settledCount > 0 || showAll"
+        v-if="fleet.finishedCount > 0 || showAll"
         type="button"
         class="toggle"
         @click="showAll = !showAll"
       >
-        {{ showAll ? "hide merged" : `show ${fleet.settledCount} merged` }}
+        {{ showAll ? "hide finished" : `show ${fleet.finishedCount} finished` }}
       </button>
     </template>
 
@@ -400,6 +441,10 @@ function rail(tone: Tone): string {
             <th class="c-time p3" v-bind="tip.hover('ag-eta', etaTip)">Time</th>
             <th class="c-cost r p4" v-bind="tip.hover('ag-cost', costTip)">Cost</th>
             <th class="c-out p4">Outcome</th>
+            <!-- THE ONLY COLUMN ON THIS TABLE THAT ACTS. It drops at 900 and
+                 its chips arrive on the task cell's meta line, which is the
+                 fold pattern every other column here already follows. -->
+            <th class="c-act p3">Do</th>
           </tr>
         </thead>
         <tbody>
@@ -407,8 +452,9 @@ function rail(tone: Tone): string {
             v-for="row in board"
             :key="row.uid"
             class="hov"
-            :class="row.tone"
+            :class="[row.tone, { linked: row.key }]"
             :style="{ '--rail': rail(row.tone) }"
+            @click="openRound($event, row.key)"
           >
             <!-- THE WHOLE ROW LEADS TO THE ROUND. It used to open a full-width
                  sibling row carrying the approval card, the events and every
@@ -510,14 +556,34 @@ function rail(tone: Tone): string {
                   ${{ row.r.cost_usd.toFixed(2) }}
                 </span>
               </div>
+
+              <!-- WRAPPED AND `display: contents` INSIDE THE RUNG, because a
+                   fold class on a COMPONENT lands on its root where the
+                   component's own scoped rule is one class more specific - the
+                   defect that printed the branch twice on a wide board. An
+                   empty wrapper is still a flex item and still costs a gap,
+                   which is the other half of the same lesson. -->
+              <div v-if="row.controls.length" class="fold3 cwrap">
+                <RoundControls :round="row.r" :offers="row.controls" compact />
+              </div>
             </td>
 
             <td class="p2">
-              <div class="mono pname">{{ row.phase }}</div>
-              <ProgressBar
-                :ratio="row.progress"
+              <!-- THE SEQUENCE RATHER THAN A FILL. `done 5/5` was already the
+                   line above the bar, so the bar drew the same number as a
+                   shape and added nothing; a round has five NAMED steps in a
+                   fixed order and which one it is on is what a reader is
+                   looking for. The names are dropped here because this cell is
+                   200px below the 1180 rung - 40px a step, which does not hold
+                   `verify` - and each node keeps its own title. -->
+              <PhaseSteps
+                :phases="row.r.phases"
+                :done="row.r.done"
+                :current="row.r.phase"
+                :label="row.phase"
                 :tone="row.tone"
                 :live="row.moving"
+                :names="false"
               />
               <!-- A HOLD IS BOUNDED BY SOMETHING THE PERSON SETTING IT DOES NOT
                    CONTROL. conduct does not answer a held step, and the step's
@@ -597,6 +663,20 @@ function rail(tone: Tone): string {
                 opened none
               </span>
               <span v-else class="nolink">{{ fmt.NO_DATA }}</span>
+            </td>
+
+            <!-- WHAT CAN BE DONE ABOUT THIS ROUND, WHICH USED TO BE NOTHING.
+                 An empty list is the ordinary case on a finished round, and
+                 those are behind the toggle - so this column is populated on
+                 very nearly every row the default view shows. -->
+            <td class="p3">
+              <RoundControls
+                v-if="row.controls.length"
+                :round="row.r"
+                :offers="row.controls"
+                compact
+              />
+              <span v-else class="nolink mono">{{ fmt.NO_DATA }}</span>
             </td>
           </tr>
         </tbody>
@@ -681,16 +761,39 @@ function rail(tone: Tone): string {
   color: var(--fg-5);
 }
 
-/* PACKED LEFT AT CONTENT WIDTH, NOT STRETCHED. Three facts across a 1300px
-   panel as equal columns is what made the old header read as five unrelated
-   readings; wrapping is also the whole of its phone layout. */
+/* THREE EQUAL COLUMNS, AND THE ARGUMENT AGAINST THEM WAS ABOUT A DIFFERENT
+   PANEL. This read "packed left at content width, not stretched - three facts
+   across a 1300px panel as equal columns is what made the old header read as
+   five unrelated readings", and that header WAS five: conduct, phase, quota,
+   worktrees and intake, each handed a fifth of 1360 with no primary among them.
+   The complaint was never the geometry, it was that nothing led.
+
+   THE HEADLINE HAS LED SINCE 2026-08-29, so the conditions are already
+   subordinate to it and three equal columns under a hairline read as a readout
+   rather than as peers. What packing left actually produced on a laptop was all
+   three crowded into about 600px of a 1360-1600px panel with the rest empty -
+   the band's own measurement said they sit on one line from 1360 all the way
+   down to 760, which is a description of where the row ran out rather than of a
+   layout.
+
+   BELOW 900 IT GOES BACK TO PACKING LEFT, because equal thirds of 700px is
+   233px each and the quota condition's caption needs more than that. Below 640
+   the block further down takes over with the label-left readout, which
+   re-declares its own tracks and wins unchanged. */
 .conds {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--gap) var(--gap-lg);
   margin-top: 15px;
   padding-top: 14px;
   border-top: 1px solid var(--border-divider);
+}
+
+@media (max-width: 900px) {
+  .conds {
+    display: flex;
+    flex-wrap: wrap;
+  }
 }
 
 .cond {
@@ -745,15 +848,22 @@ function rail(tone: Tone): string {
   color: var(--fg-5);
 }
 
-/* The task column takes what is left, which at 1360 is around 430px - enough
+/* The task column takes what is left, which at 1360 is around 416px - enough
    for the tracker chip and a one-line summary, and no more. It had 570 while
-   the phase cell was clipping "opened 11h 00m ago - attempt 2 of 3" mid-word. */
+   the phase cell was clipping "opened 11h 00m ago - attempt 2 of 3" mid-word.
+
+   THE PHASE COLUMN IS 200px AT EVERY WIDTH SINCE THE `Do` COLUMN ARRIVED, and
+   200 was already its width below 900. What made 282 worth it was a label, a
+   4px bar and a sub line stacked in one cell; the step rail is narrower than
+   the label above it, so the extra 82px was paying for nothing and the new
+   column needed it. 168 + 200 + 140 + 84 + 140 + 132 is 864 of fixed width,
+   which is 14px more than the six columns cost before. */
 .c-state {
   width: 168px;
 }
 
 .c-phase {
-  width: 282px;
+  width: 200px;
 }
 
 .c-time {
@@ -766,6 +876,25 @@ function rail(tone: Tone): string {
 
 .c-out {
   width: 140px;
+}
+
+/* THREE CHIPS ON ONE LINE, MEASURED. Every actionable row offers exactly three
+   primary controls - hold-or-release, resume-or-restart, cancel - and at 132px
+   they wrapped onto four lines and made every row of the table 130px tall,
+   which is a list nobody can scan. 200px is what the widest of the three sets
+   needs. It costs the task column about 70px at 1360, and the task column was
+   truncating its sentence at 416px anyway. */
+.c-act {
+  width: 200px;
+}
+
+/* THE ROW IS THE LINK NOW, so it says so. `.hov` gave the whole width a hover
+   background while only the state pill acted, which is a promise the row did
+   not keep - and a pointer is the cheapest way to stop making it. Only a row
+   that HAS a document gets it: a round with no start time has no key, and a
+   cursor over something inert is the same lie one layer down. */
+.tbl tr.linked {
+  cursor: pointer;
 }
 
 /* NO ROW TINT. The rail is the whole severity language here, which is the
@@ -863,6 +992,11 @@ td.out {
   }
 }
 
+/* The control chips live in their own column above 900 and on the meta line
+   below it. `.cwrap` is a wrapper for the reason `.fwrap` is: a fold class on a
+   ChipButton lands on its root, where the component's own `.chip` rule is one
+   class more specific and the fold never happens. */
+
 /* --- the tablet: the fixed columns have to give the task room --------------
    DROPPING TWO COLUMNS AT 900 IS NOT ENOUGH ON ITS OWN. Four remained - 168 +
    282 + 140 of FIXED width against one flexible one - so an 834px tablet left
@@ -880,10 +1014,13 @@ td.out {
    The phase cell's own sub line truncates at 200px where it did not at 282.
    That is the trade, and it carries a title attribute. */
 @media (max-width: 900px) {
-  .c-phase {
-    width: 200px;
+  /* The `Do` column leaves here with Time, and its chips arrive on the task
+     cell's meta line - the same fold every other column here uses. It is the
+     one that must not simply vanish: a round nobody can act on from a phone is
+     a round somebody has to open a laptop for. */
+  .cwrap {
+    display: contents;
   }
-
 }
 
 /* --- the phone: the state column folds into the task cell -------------------

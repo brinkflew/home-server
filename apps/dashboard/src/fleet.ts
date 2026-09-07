@@ -64,6 +64,55 @@ export function isSettled(r: FleetRound): boolean {
 }
 
 /**
+ * Which of four classes a round is in, which is what decides whether it is on
+ * the board by default.
+ *
+ * A CLASS RATHER THAN THE LABEL `roundState` PRODUCES. There are eleven states
+ * and they answer "what became of this"; the board needs "is this worth a line
+ * today", and deriving that from the eleven words would be the habit this file
+ * refuses everywhere else - a filter keyed on prose.
+ *
+ * `recoverable` IS THE ONE THAT EARNED THIS FUNCTION. A stopped round is closed,
+ * so the old filter kept it for ever and offered it nothing; it is now the row
+ * somebody most wants to see, because it is the one with a button. What makes a
+ * round recoverable is exactly what makes `roundControls` offer something, and
+ * the two must not drift - see the note there.
+ */
+export type RoundClass = "owed" | "live" | "recoverable" | "finished";
+
+/** The one state `roundState` produces that something can still be done about. */
+export const RECOVERABLE_STATE = "stopped";
+
+export function roundOutcome(r: FleetRound): RoundClass {
+  // DERIVED FROM `roundState` RATHER THAN FROM ITS CONDITIONS AGAIN. The first
+  // version re-tested `pr_url`, `superseded` and the rest, and it got two of
+  // eleven states wrong on its first live rendering: `published` and
+  // `not published` both fell through to recoverable, so the board kept
+  // offering to restart rounds that had reached the publish path and ended.
+  // Eleven states in one function and a subset of its conditions in another is
+  // a drift with no test that can see it.
+  //
+  // AND THIS IS NOT THE `closed_why` HABIT. That rule refuses to branch on
+  // conduct's PROSE - a sentence written in another repository that nobody here
+  // controls. `roundState` returns this application's own vocabulary, derived
+  // structurally from `published`, `pr_state` and `superseded` two functions
+  // down, and asking it once is what keeps the two answers consistent.
+  const { state } = roundState(r);
+  if (state === "waiting on you") return "owed";
+  if (r.closed_at === null) return "live";
+  // EVERY OTHER CLOSED STATE IS AN OUTCOME. Merged and superseded are history; a
+  // pull request that exists is a person's to review on GitHub; `published`,
+  // `not published` and `pr closed` are all flows that ended on their own
+  // account. `stopped` is the one that did not.
+  if (state !== RECOVERABLE_STATE) return "finished";
+  // A LANE HOLDS ONE conduct ROW, so only its newest round can be acted on -
+  // and absence is false, because an older collector cannot say which that is
+  // and guessing in front of a destructive button is what this guards.
+  if (r.latest_on_worktree !== true) return "finished";
+  return "recoverable";
+}
+
+/**
  * What this round is doing, or what became of it.
  *
  * OPEN ROUNDS ARE GRADED ON `waiting_on` and closed ones on the publication

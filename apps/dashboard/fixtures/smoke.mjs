@@ -24,6 +24,7 @@ const {
   roundEtaAt,
   isSettled,
   byUrgency,
+  roundOutcome,
 } = await load("/src/fleet.ts");
 // LOADED FOR THE FIRST TIME ON 2026-08-31. `boardRow` is where the approve
 // button's gate lives, and it had never been exercised here - so `waiting`
@@ -37,9 +38,18 @@ const {
   intakeSwitch,
   quotaHold,
   roundControls,
+  lastStartedAgo,
+  offerStands,
   ASK_CEILING_S,
   HOLD_TIMEOUT_S,
 } = await load("/src/control.ts");
+// LOADED FOR THE FIRST TIME ON 2026-09-07. Three renderers that turn what the
+// host recorded into something a person can read - the card, the phase's own
+// verdict and its conversation - and all three are pure modules rather than
+// logic in a .vue precisely so this file can reach them.
+const { parseMarkdown, parseInline, safeHref } = await load("/src/markdown.ts");
+const { parseVerdict } = await load("/src/verdict.ts");
+const { describeTurn, shortDiff, DIFF_LINES } = await load("/src/transcript.ts");
 const fmt = await load("/src/format.ts");
 // LOADED FOR THE FIRST TIME ON 2026-08-31, for the reason boardRow was: the
 // quota sub-line is a pure function living in a composable, and nothing had
@@ -395,7 +405,14 @@ check("an in-flight run is not a failure", fleet.totals.runs_failed_today < flee
 // this and be wrong the first time somebody reworded a message.
 console.log("\n-- what a round's state is derived from --");
 
-const by = (id) => fleet.rounds.find((r) => r.worktree_id === id);
+// A WORKTREE ID IS NOT A ROUND ID - it names the LANE, and the fixture now
+// carries two rounds on `wt-lane01` because the live host has ten on one. The
+// task id is the second half of a round's identity, which is the same pair
+// conduct is sent and the same one chain_open compares.
+const by = (id, task) =>
+  fleet.rounds.find(
+    (r) => r.worktree_id === id && (task === undefined || r.odoo_task === task),
+  );
 
 check("a person owing an answer outranks everything",
   roundState(by("wt-9f21c4")), { tone: "warn", state: "waiting on you" });
@@ -623,6 +640,57 @@ check("two attempts at one task are two rows", attempts1601, [1, 2]);
 check("...and each carries its own cost",
   new Set(fleet.rounds.filter((r) => r.odoo_task === 1601).map((r) => r.cost_usd)).size, 2);
 
+console.log("\n-- which rounds the board keeps --");
+
+// THE ONLY FILTER USED TO BE `isSettled` - closed AND merged - which is far too
+// weak to be the only one: `stopped`, `superseded`, `not published` and
+// `in review` all stayed for ever, eleven rounds on one worktree with the live
+// one somewhere in the list.
+{
+  const classOf = (id, task) => roundOutcome(by(id, task));
+  check("a round owing a person an answer is owed, closed or not",
+    classOf("wt-9f21c4"), "owed");
+  check("a round in flight is live", classOf("wt-4ab810"), "live");
+  check("a stopped round nobody has replaced is recoverable",
+    classOf("wt-lane01", 1503), "recoverable");
+  check("a merged round is finished", classOf("wt-2c44b1"), "finished");
+  // BOTH OF THESE REACHED THE PUBLISH PATH AND ENDED ON THEIR OWN ACCOUNT, and
+  // the first version of roundOutcome called both recoverable - it re-tested a
+  // subset of roundState's conditions instead of asking it. The board offered
+  // to restart them, which was visible only in a screenshot.
+  check("a published round is finished", classOf("wt-0044ab"), "finished");
+  check("a round that opened none is finished", classOf("wt-55ee02"), "finished");
+  check("a superseded round is finished", classOf("wt-1271aa"), "finished");
+  check("the older round on a reused lane is finished",
+    classOf("wt-lane01", 1499), "finished");
+
+  // ABSENCE IS FALSE, NOT UNKNOWN. `undefined !== null` is true - the trap that
+  // once rendered `attempt  of 3` - and a document from an older collector
+  // cannot say which round on a lane is current.
+  const older = { ...by("wt-lane01", 1503) };
+  delete older.latest_on_worktree;
+  check("a round from an older collector is finished rather than guessed at",
+    roundOutcome(older), "finished");
+
+  // THE FILTER AND THE OFFER MUST NOT DRIFT. "finished" is defined as the class
+  // roundControls offers nothing on; a button on a row nobody can see is the
+  // failure this pairing exists to prevent.
+  const wrong = fleet.rounds.filter(
+    (r) => roundOutcome(r) === "finished" && roundControls(r, fleet.control, Date.now() / 1000).length,
+  );
+  check("nothing hidden by default has a button on it", wrong.length, 0);
+
+  // AND EVERY STATE THE BOARD CAN DRAW MAPS TO A CLASS. roundOutcome asks
+  // roundState rather than re-testing its conditions, so a state added there
+  // without a thought here lands in `finished` - which is the safe direction
+  // and is asserted rather than assumed.
+  const seen = new Set(fleet.rounds.map((r) => roundState(r).state));
+  check("the fixture exercises most of the state vocabulary", seen.size >= 6, true);
+  check("...and every round has a class",
+    fleet.rounds.every((r) => ["owed", "live", "recoverable", "finished"].includes(roundOutcome(r))),
+    true);
+}
+
 console.log("\n-- what a person may ask the fleet to do --");
 
 const ctl = fleet.control;
@@ -630,12 +698,106 @@ const nowUnix = Date.now() / 1000;
 const open = by("wt-4ab810");
 const closed = by("wt-2c44b1");
 
-// A CONTROL THAT COULD NEVER APPLY IS NOISE ON EVERY CLOSED ROW. Holding a
-// finished round stops nothing, and restarting one has no chain for conduct to
-// close - it would be a second, less careful way to start a round.
+// A CONTROL THAT COULD NEVER APPLY IS NOISE ON EVERY FINISHED ROW. `wt-2c44b1`
+// published, so what is owed on it is a person's review on GitHub rather than
+// anything conduct can be asked for.
 check("a finished round offers nothing", roundControls(closed, ctl, nowUnix).length, 0);
-check("a round in flight offers two things",
-  roundControls(open, ctl, nowUnix).map((c) => c.action), ["hold", "restart"]);
+check("a round in flight offers four things",
+  roundControls(open, ctl, nowUnix).map((c) => c.action),
+  ["hold", "restart", "cancel", "cancel_requeue"]);
+
+// THE ROW EVERY NEW CHIP EXISTS FOR. A stopped round used to be a permanent red
+// line with nothing to press: roundControls returned [] for anything closed, and
+// recovery was moving the task in Odoo by hand and running conduct over ssh.
+const stopped = by("wt-lane01", 1503);
+check("a stopped round can be resumed, restarted or cancelled",
+  roundControls(stopped, ctl, nowUnix).map((c) => c.action),
+  ["resume", "restart", "cancel", "cancel_requeue"]);
+check("...and resume leads, because it is the cheaper answer",
+  roundControls(stopped, ctl, nowUnix)[0].label, "resume");
+
+// A ROUND WITH NOTHING FINISHED CANNOT BE RESUMED, and the sentence says so
+// rather than the chip simply being absent: conduct refuses one in exactly
+// these terms, because a resume that skips nothing is a restart under a name
+// promising it would be cheap.
+const nothingDone = { ...stopped, done: [] };
+const noResume = roundControls(nothingDone, ctl, nowUnix).find((c) => c.action === "resume");
+check("a resume with nothing to skip is refused, with a reason",
+  noResume.disabled.includes("nothing to skip"), true);
+
+// THE LANE IS NOT THE ROUND. conduct keeps ONE chain row per worktree and a
+// worktree is reused, so the older round on a lane must be offered nothing at
+// all - a restart aimed at it would land on its successor. wt-lane01 carries
+// two rounds, which is what the live host looks like and what no fixture had.
+const superseded = by("wt-lane01", 1499);
+check("the older round on a reused lane offers nothing",
+  roundControls(superseded, ctl, nowUnix).length, 0);
+check("...and it is the SAME worktree as the one that does",
+  superseded.worktree_id === stopped.worktree_id, true);
+
+// AN OLDER COLLECTOR CANNOT SAY WHICH ROUND IS CURRENT, and `undefined !== null`
+// is true - the trap that once rendered `attempt  of 3`. Absence must read as
+// "not the latest" rather than as "probably this one", in front of a chip that
+// closes a pull request.
+const noFlag = { ...stopped };
+delete noFlag.latest_on_worktree;
+check("a document from an older collector offers nothing on a closed round",
+  roundControls(noFlag, ctl, nowUnix).length, 0);
+
+// WITHOUT A TASK ID THERE IS NO ROUND, ONLY A LANE. conduct refuses rather than
+// guessing, so the board says why instead of offering a button that answers
+// with a paragraph.
+const noTask = { ...stopped, odoo_task: null };
+check("a round with no task id has every chip disabled",
+  roundControls(noTask, ctl, nowUnix).every((c) => c.disabled !== null), true);
+check("...and each says it cannot be told from a later round",
+  roundControls(noTask, ctl, nowUnix).every((c) => c.disabled.includes("later round")), true);
+
+// THE LABEL AND THE ACTION COME OFF ONE BRANCH, which is intakeSwitch's rule
+// applied where the consequence is worse than a colour: a chip reading `cancel`
+// that sent `restart` would close a round somebody meant to start again.
+const LABELS = { hold: "hold", release: "release", restart: "restart",
+                 resume: "resume", cancel: "cancel", cancel_requeue: "cancel+requeue" };
+const everyOffer = [
+  ...roundControls(open, ctl, nowUnix),
+  ...roundControls(stopped, ctl, nowUnix),
+  ...roundControls(by("wt-77d3e0"), ctl, nowUnix),
+];
+check("no chip can send its neighbour's command",
+  everyOffer.every((c) => LABELS[c.action] === c.label), true);
+
+// EXACTLY THREE PRIMARY CHIPS ON EVERY ACTIONABLE ROW, which is what makes the
+// board's column one line rather than four. At 132px the four wrapped and made
+// every row 130px tall, which is a list nobody can scan.
+for (const r of fleet.rounds) {
+  const all = roundControls(r, ctl, nowUnix);
+  if (!all.length) continue;
+  check(`${r.worktree_id}/${r.odoo_task} offers three primary chips`,
+    all.filter((c) => c.primary).length, 3);
+}
+// AND ONLY `cancel+requeue` IS HELD BACK, because everything it does `cancel`
+// does too except the one tracker write - so a compact drawing loses no
+// capability a reader cannot reach one click away, on the page they went to in
+// order to decide.
+check("the round page is where the rarer half of the pair lives",
+  roundControls(open, ctl, nowUnix).filter((c) => !c.primary).map((c) => c.action),
+  ["cancel_requeue"]);
+
+// A ROUND WAITING FOR AN ANSWER IS NOT STUCK, IT IS WAITING FOR YOU. conduct
+// would accept a restart, which is exactly why the board must not offer it as
+// though it were the obvious move: it cancels the flow holding the question.
+const owedRound = by("wt-1254aa");
+check("the fixture has a round owing a person an answer", owedRound.waiting_on, "person");
+const owedOffers = roundControls(owedRound, ctl, nowUnix);
+check("a round waiting on you will not be restarted by one click",
+  owedOffers.find((c) => c.action === "restart").disabled !== null, true);
+check("...nor resumed", owedOffers.find((c) => c.action === "resume").disabled !== null, true);
+check("...and the reason points at the answer that is owed",
+  owedOffers.find((c) => c.action === "restart").disabled.includes("approve or decline"), true);
+// CANCEL IS STILL OFFERED, because it is a decline that also cleans up - and
+// declining is the one thing a person looking at this row may well want.
+check("...but cancelling it is still one click",
+  owedOffers.find((c) => c.action === "cancel").disabled, null);
 
 // THE HELD ROUND OFFERS THE INVERSE, so the chip never lies about what pressing
 // it will do.
@@ -657,13 +819,54 @@ check("without a token every control is disabled", offers.every((c) => c.disable
 check("...and each says why", offers.every((c) => c.disabled.includes("WINDMILL_DASHBOARD_TOKEN")), true);
 
 // conduct REFUSES A RESTART INSIDE ITS FLOOR, so offering one teaches a reader
-// to distrust the other chips. Two restarts close together are two flows on one
+// to distrust the other chips. Two starts close together are two flows on one
 // worktree, which is the hazard the floor exists for.
-const fresh = { ...open, started_at: new Date(Date.now() - 30_000).toISOString() };
-const restart = roundControls(fresh, ctl, nowUnix).find((c) => c.action === "restart");
-check("a restart inside conduct's floor is not offered", restart.disabled !== null, true);
+//
+// THE FLOOR IS MEASURED AGAINST conduct's OWN STAMP AND WAS MEASURED AGAINST THE
+// ROUND'S START. Those are different clocks: conduct debounces on the
+// `restart:<worktree>` control row, so a round started three hours ago and
+// restarted sixty seconds ago offered an ENABLED chip that conduct then refused.
+// The row did not reach fleet.json at all until 2026-09-07 - the collector
+// dropped it under a comment saying nothing on the board drew it - so the board
+// was answering a different question rather than getting this one wrong.
+const stampedLane = by("wt-77d3e0");
+check("the floor reads conduct's stamp, not the round's start",
+  Math.round(lastStartedAgo(stampedLane, ctl, nowUnix)) < 120, true);
+const stampedRestart = roundControls(stampedLane, ctl, nowUnix).find((c) => c.action === "restart");
+check("a restart inside conduct's floor is not offered",
+  stampedRestart.disabled !== null, true);
+check("...and it says which floor", stampedRestart.disabled.includes("600"), true);
 check("...and the hold beside it still is",
-  roundControls(fresh, ctl, nowUnix)[0].disabled, null);
+  roundControls(stampedLane, ctl, nowUnix)[0].disabled, null);
+
+// A ROUND THAT ONLY *LOOKS* FRESH IS NOT REFUSED. This is the half the old test
+// asserted backwards: `started_at` is not what conduct measures, so a round that
+// began thirty seconds ago on a lane nobody has restarted may be restarted.
+const fresh = { ...open, started_at: new Date(Date.now() - 30_000).toISOString() };
+check("a young round on an unstamped lane may still be restarted",
+  roundControls(fresh, ctl, nowUnix).find((c) => c.action === "restart").disabled, null);
+
+// AN OLDER COLLECTOR SENDS NO STAMPS AT ALL, and "no stamp" must read as
+// "nothing to debounce against" rather than as "started just now". conduct
+// refuses again on the host, so the safe direction here is to offer the button.
+const noStamps = { ...ctl };
+delete noStamps.stamps;
+check("no stamps at all is not a floor", lastStartedAgo(stampedLane, noStamps, nowUnix), null);
+check("...so the restart is offered and conduct decides",
+  roundControls(stampedLane, noStamps, nowUnix).find((c) => c.action === "restart").disabled, null);
+
+// AN ASK WITH NO OPPOSITE RETIRES WHEN ITS OFFER GOES. `askAge` clears by the
+// chip's action FLIPPING, which works for hold/release and for nothing here: a
+// restart chip says `restart` before and after. conduct carrying out a cancel
+// closes the round, which empties this list.
+const asked = { action: "cancel", at: nowUnix - 30 };
+check("an outstanding ask stands while its offer does",
+  Math.round(offerStands(asked, roundControls(open, ctl, nowUnix), nowUnix)), 30);
+check("...and retires when the fleet is seen doing it",
+  offerStands(asked, roundControls(closed, ctl, nowUnix), nowUnix), null);
+check("...with the same ceiling the intake switch has",
+  offerStands({ action: "cancel", at: nowUnix - ASK_CEILING_S - 1 },
+    roundControls(open, ctl, nowUnix), nowUnix), null);
 
 // A HOLD IS BOUNDED BY SOMETHING THE PERSON SETTING IT DOES NOT CONTROL: conduct
 // does not answer a held step and the step's own timeout is 24h, so a hold left
@@ -916,6 +1119,138 @@ check("no round document can carry a resume url",
 
 check("a round the collector has not written yet is offered as absent",
   MISSING_ROUNDS.length > 0, true);
+
+console.log("\n-- reading what the host recorded --");
+
+// THE CARD IS MARKDOWN AND WAS RENDERED IN A `<pre>`, syntax and all, in the one
+// panel on this page whose whole job is to be read.
+{
+  const blocks = parseMarkdown(round.report.card);
+  check("the card parses into blocks", blocks.length > 3, true);
+  check("...beginning with its heading",
+    [blocks[0].kind, blocks[0].level], ["heading", 2]);
+  check("...and carrying its bullets as a list",
+    blocks.some((b) => b.kind === "list" && b.items.length > 1), true);
+
+  // NO `v-html` ON A PATH MODEL OUTPUT TAKES, which is why this returns a tree
+  // rather than an HTML string - and the one hole a tree could still leave is a
+  // scheme. An ALLOWLIST, not a `javascript:` denylist: `JaVaScRiPt:`, a tab
+  // inside the scheme and `data:text/html` are three ways past a denylist.
+  check("only http and https make a link",
+    [safeHref("https://example.com"), safeHref("http://example.com")],
+    ["https://example.com", "http://example.com"]);
+  for (const bad of ["javascript:alert(1)", "JaVaScRiPt:alert(1)", "data:text/html,<script>",
+                     " javascript:alert(1)", "vbscript:x"]) {
+    check(`a ${bad.slice(0, 12)} href is refused`, safeHref(bad), null);
+  }
+  // THE TEXT SURVIVES ITS REFUSED HREF. Dropping the node would hide a
+  // destination somebody is being asked to trust.
+  const refused = parseInline("see [this](javascript:alert(1)) please");
+  check("a refused link keeps its text and loses its href",
+    [refused.some((s) => s.kind === "link"),
+     refused.map((s) => s.text).join("").includes("javascript:alert(1)")],
+    [false, true]);
+
+  // A BACKTICK SPAN MAY CONTAIN ASTERISKS. `**/*.ts` is a real path and appears
+  // in these cards; emphasis found inside one would split a literal the author
+  // quoted precisely so it would not be interpreted.
+  const code = parseInline("run `make check **/*.ts` now");
+  check("code spans are found before emphasis",
+    code.find((s) => s.kind === "code").text, "make check **/*.ts");
+
+  // AN UNCLOSED FENCE TAKES THE REST rather than being abandoned: the collector
+  // clips a card at 40,000 bytes, so ending mid-block is ordinary.
+  const clipped = parseMarkdown("intro\n\n```sh\nmake check\nmake install");
+  check("a clipped fence keeps what is left of it",
+    clipped[clipped.length - 1].text, "make check\nmake install");
+}
+
+// `report.verdict` IS A JSON STRING AND THE PANEL SHOWED IT AS ONE, under a
+// heading promising an account of the run.
+{
+  const parsed = parseVerdict(round.report.verdict);
+  check("a verdict in its schema is read", [parsed.kind, parsed.status], ["parsed", "done"]);
+  check("...with its summary lifted out", parsed.summary !== null, true);
+  const labels = parsed.fields.map((f) => f.label);
+  check("...its concerns kept as a list",
+    parsed.fields.find((f) => f.label.includes("raised these")).kind, "list");
+  // SHOWN BECAUSE APPROVING THIS FILES THEM. Everything else in a verdict is the
+  // phase talking about work already done; these become tasks in somebody's
+  // backlog the moment the pull request opens.
+  check("...and the follow-ups named as what they will become",
+    labels.some((l) => l.includes("filed as tasks")), true);
+
+  // THREE OUTCOMES, NONE OF THEM SILENT - conduct/card.py's own rule, mirrored.
+  check("an absent verdict says it is absent",
+    [parseVerdict(null).kind, parseVerdict(null).text !== null], ["absent", true]);
+  check("...and so does an empty one", parseVerdict("   ").kind, "absent");
+  // UNPARSED IS A RENDERING, NOT AN ERROR: the pinned CLI can retract structured
+  // output, so a plain-text answer is a thing that happens and dropping it would
+  // lose the phase's only account of a run somebody is about to approve.
+  const raw = parseVerdict("I could not finish - the gate was already red.");
+  check("an answer outside the schema is kept verbatim",
+    [raw.kind, raw.text], ["raw", "I could not finish - the gate was already red."]);
+  check("...and so is a JSON array, which is not a verdict either",
+    parseVerdict('["a"]').kind, "raw");
+
+  // THE SCHEMAS MOVE IN ANOTHER REPOSITORY AND THIS BUNDLE DEPLOYS SEPARATELY,
+  // so a key nobody here has heard of must appear under its own name rather
+  // than vanish.
+  const unknown = parseVerdict('{"status":"done","something_new":"a value"}');
+  check("a key this bundle has never heard of is still drawn",
+    unknown.fields.some((f) => f.label === "something new"), true);
+}
+
+// THE TRANSCRIPT WAS A `kind` LABEL AND ITS PAYLOAD AS ITSELF - a tool call read
+// `Read {"file_path":"bin/lint-repo.sh","offset":40}`.
+{
+  const turns = round.phases[0].turns.map(describeTurn);
+  const sides = turns.map((t) => t.who);
+  check("the prompt is the other side of the conversation", sides[0], "you");
+  check("...and every shape is read", new Set(sides).size >= 4, true);
+
+  const read = turns.find((t) => t.tool === "Read");
+  check("a Read names its file and needs no disclosure",
+    [read.headline, read.detail], ["bin/lint-repo.sh", null]);
+
+  const bash = turns.find((t) => t.tool === "Bash");
+  check("a Bash leads with what it was for",
+    bash.headline.startsWith("Find the prose leg"), true);
+
+  // THE CAP IS A CAP, NOT A SUMMARY. What is left over is counted and said, so a
+  // reader knows the shown lines begin something rather than being all of it.
+  const edit = turns.find((t) => t.tool === "Edit");
+  check("an edit shows a diff", edit.diff.length, DIFF_LINES);
+  check("...capped, and says how much it did not show", edit.diffMore > 0, true);
+  check("...and keeps the whole input behind a disclosure", edit.detail !== null, true);
+
+  // A REFUSED PERMISSION IS A FINDING, not chatter - the fleet's own record of a
+  // boundary holding - and burying which tool inside a JSON blob is the opposite
+  // of treating it as one.
+  const denied = turns.find((t) => t.who === "denied");
+  check("a refusal names the tool and the reason",
+    [denied.tool, denied.headline.includes("planning phase")], ["WebFetch", true]);
+
+  // THE RENDERER SPEAKING ABOUT ITS OWN LIMITS MUST NOT LOOK LIKE THE MODEL.
+  check("the collector's own note is not an assistant turn",
+    turns.find((t) => t.who === "note").headline.includes("truncated"), true);
+
+  // TRIMMED AT BOTH ENDS, which is what makes a one-word change show as one line
+  // rather than as forty.
+  const trimmed = shortDiff("a\nb\nc\nd", "a\nB\nc\nd");
+  check("a diff trims the lines the two sides share",
+    [trimmed.lines.length, trimmed.more, trimmed.lines[0].text], [2, 0, "b"]);
+
+  // NOTHING HERE THROWS ON A SHAPE THAT HAS MOVED. The tool schema lives in
+  // another program entirely, and a transcript that failed to render would be
+  // worse than one that renders plainly.
+  check("a truncated input renders rather than throwing",
+    describeTurn({ kind: "tool", name: "Edit", input: '{"file_path":"a.ts","old_' })
+      .headline.length > 0, true);
+  check("a tool nobody here has heard of names its own keys",
+    describeTurn({ kind: "tool", name: "Sorcery", input: '{"spell":"x","level":3}' })
+      .headline, "spell x, level 3");
+}
 
 await server.close();
 console.log(`\n${failures === 0 ? "all checks passed" : `${failures} FAILED`}`);

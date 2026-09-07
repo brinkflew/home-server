@@ -34,14 +34,28 @@ export type ControlAction =
   | "hold"
   | "release"
   | "restart"
+  | "resume"
+  | "cancel"
+  | "cancel_requeue"
   | "quota_spend"
   | "quota_pace";
 
 export interface ControlRequest {
   action: ControlAction;
   project?: string;
-  /** The worktree `hold`, `release` and `restart` apply to. */
+  /** The worktree every action but the two pairs applies to. It names a LANE,
+   *  not a round - see `odoo_task`. */
   target?: string;
+  /**
+   * Which round on that lane.
+   *
+   * A WORKTREE IS REUSED AND conduct KEEPS ONE ROW PER WORKTREE, so a target
+   * alone names whichever change ran there last. `restart`, `resume` and the two
+   * cancels are refused without this and refused again when it names a different
+   * task from the one the lane now holds. `hold` and `release` ignore it: they
+   * stop dispatch for the lane, whatever is on it.
+   */
+  odoo_task?: number | null;
   /** Why, in a few words. It lands on the row and beside the switch. */
   note?: string;
 }
@@ -70,6 +84,11 @@ export async function control(request: ControlRequest): Promise<string> {
   const body: Record<string, unknown> = { action: request.action };
   if (request.project) body.project = request.project;
   if (request.target) body.target = request.target;
+  // SENT ONLY WHEN THERE IS ONE, because Windmill's schema types it as an
+  // integer and a null would be a validation error on the two pairs that have
+  // no round at all. conduct reads absence as "the caller named none" and
+  // refuses the four actions that need it.
+  if (typeof request.odoo_task === "number") body.odoo_task = request.odoo_task;
   if (request.note) body.note = request.note;
   // `fetchText` AND NOT `fetchJson`, WHICH IS THE WHOLE BUG THIS ONCE HAD. This
   // spot carried a comment reading "Windmill answers the run endpoint with a
