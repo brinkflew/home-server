@@ -3829,6 +3829,11 @@ three of them are the same mistake in different clothes.
   site was. The bar renders only in flight now, and the line under the reading says WHICH nothing:
   `no phase running` against `no phase has started on this host`.
 - The band was also labelled `Fleet` directly under a sub-nav whose other segment is `Fleet`.
+- **`/ci`'s lane rack had the identical call site**, found the same day and only because that page
+  got the same treatment - not because anything went looking. Fixing one instance of a call-site
+  defect is not evidence about the others, and nothing here can enumerate them: `ratio="..."` is a
+  correct use of the prop everywhere it appears, so the wrongness is in what the branch around it
+  means.
 
 ### The fixture gave every round a distinct id and the live board gives them all one
 - **The task chip fell back to the WORKTREE ID, which names a lane and not a round.** A worktree is
@@ -4458,6 +4463,14 @@ Recorded 2026-09-07, with the board's filter, the step rail and the three render
   `src/health.ts` already existed and is right. The `agents` section has never carried a `fail`, so
   the one finding on that page which pages a phone would have drawn as a warning and no fixture
   could have shown it; the assertion plants one.
+- **THE SAME TERNARY WAS ON `/ci` THE WHOLE TIME, AND THAT IS THE PAGE THE PAGER POINTS AT.** Fixed
+  in both places on 2026-09-07, hours apart, and the second one only because that page got the same
+  treatment: this entry recorded the defect and not the search. `CiContainmentLost` names
+  `ci.slice_limits`, `ci.runner_isolation` and
+  `ci.fleet_root_label`, and `ci.lane_headroom` and `ci.runtime_dir` both reach `bad`, so `fail` was
+  reachable on the copy nobody re-read. The `ci` section's charter is warn-or-note, so no fixture
+  could carry one there either; `fixtures/smoke.mjs` builds a `fail` by hand and was proved to fail
+  on the old ternary in exactly two states, `fail` and `note`.
 
 ### A reducer hid a defect in the thing it reduced, for as long as it existed
 - **The fixture ramp fell off a cliff at the right-hand edge of every window.** `dayRamp` computes

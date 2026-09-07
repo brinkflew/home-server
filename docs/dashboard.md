@@ -1187,3 +1187,78 @@ dropping from 7 to 3 for no reason. It had been there since the ramp was written
 because the only consumer was a strip reduced with `max`: a low tail inside today's bucket lost to
 the day's peak and the bar was right anyway. `src/uptime.ts` documents the same clamp for the same
 reason one function over. The headline and the lane's own reading disagreed on screen the whole time.
+
+**`/ci` GOT THE SAME PASS ON 2026-09-07, HAVING HAD NEITHER OF THE TWO `/agents/fleet` GOT.** What
+that page opened on was all here too, in a slightly different arrangement and for longer: no headline
+at all, six records as a grid of cards, and a `Containment` panel reproducing `FindingsPanel`'s markup
+directly above a `FindingsPanel` carrying the same three ids. It did not use `Band` anywhere - two raw
+`<section class="grid-2">` and a hand-rolled head row - so `Band.vue` had exactly one adopter, which is
+how a layout rule stops being one.
+
+**The lead is `108 jobs today`, and it was already on the page in column five.** Three `.num mono`
+cells a reader had to add up, inside an eleven-column rack, on a host where that is the one number
+saying the fleet is doing its job. The sub-line is the tally and what is running; the tone is **the
+worst lane's, never the counter's**, because a number of jobs is not itself a fault and a lane that has
+stopped reporting is. Grey outranks amber there, on this page's own premise. The conditions under the
+hairline are the worst lane's disk, the slice, and the artifact store - where **zero baselines is the
+loud case**, since upskald's gate passes on an absent baseline and fails only on an unavailable one.
+
+**The headline's four states are the same four, and the third and fourth are different facts.**
+`marker_present == 0` is a host with CI switched off, which every `ci` check reports as a *note* rather
+than a finding; a marker present with no counter behind it is a measurement that did not happen.
+Collapsing them tells somebody their lanes are fine when nothing is looking, or that their host is
+broken when it simply has no CI.
+
+**THE RACK BECAME A TABLE, WHICH ITS OWN COMMENT HAD ASKED FOR.** Eleven columns and 622px of fixed
+tracks meant a 748px floor and a sideways pan below it, with the column labels living only in tooltips
+- *"a real limitation on a phone and is not fixed here"*, it said, naming the `.tbl` conversion as *"its
+own follow-up"*. The shared recipe brings a header row, the `p4`/`p3`/`p2` ladder and a phone rung that
+folds into the lane cell rather than scrolling. The eleventh column went with it: `mint fail` was empty
+on every healthy lane and `laneTone` already renders `mint failing` in the state pill.
+
+**Two widths were measured in the browser and both first drafts were wrong.** `heartbeat stale` is the
+widest label `laneTone` can return and needs 143px with the cell's padding, against a first draft of
+104 that truncated *every* state at *every* rung; `3 networks, 0 stray` needs 176 against 136. And
+**neither meter has a width**, which is what makes them comparable: under `table-layout: fixed` the
+unwidened columns split what is left, so a specified `store` took 104px while `disk` took 526 - two
+readings of the same kind, one five times the other, for no reason a reader could see.
+
+**On a phone the health verdict outranks the throughput.** `today` moves behind `.p2` and into the
+folded line so `state` can afford its pill: rail, lane and state is 173px of a 330px table, leaving the
+lane 157px; keeping the count as a fourth column left 91, which is not `lane 1`.
+
+**Two live bugs came out of it, and both had already been found somewhere else.** The containment tone
+was a hand-rolled `status === 'pass' ? 'ok' : 'warn'`, so a *failing* containment check drew amber on
+the page somebody opens after `CiContainmentLost` has paged them - and `ci.lane_headroom` and
+`ci.runtime_dir` both reach `bad`, so it was reachable. It had been fixed on `/agents/fleet` hours
+earlier the same day, with `checkTone()` named as the answer - and this copy was found only because
+that page's treatment was applied here, not because anything went looking. An idle lane drew a bare
+`ProgressBar` track, which is this store's encoding for *"in progress, ratio unknown"* - the same
+call-site defect `idle` cost the round board. **Finding one instance of a call-site defect is not
+evidence about the others**, and both of these were the second instance.
+
+**`src/lanes.ts` is the fourth time this extraction has been made**, and `/ci` had had *no* logic under
+test at all: `fixtures/smoke.mjs` carried zero `ci.` references while every decision on the only page
+this fleet is visible from was a computed in a `.vue` file. Both new assertions were **proved to fail
+before they were trusted** - the old ternary fails exactly two of them, `fail` and `note`, and a
+plausible-but-absent id fails the battery check. That second proof needed a fix of its own first: a
+missing row threw a `TypeError` and took the battery assertion down with it, so the run reported a
+crash instead of the drift.
+
+**Four series were collected and drawn nowhere, and one was being fetched twice a minute to be thrown
+away.** `slice_pids` was `range()`d on every poll, assigned into the result and never read by the
+template; `slice_present`, `slice_memory_peak` and `slice_pids_max` were defined, fixtured and unread.
+So `Over time` is one band of four charts on one window and therefore **one cursor** - hover the disk
+chart and the same second is marked on jobs, memory and processes. `slice_present` is the guard the
+page could not previously build: an absent ceiling means *unlimited* when the slice is live and *empty*
+when it is not, and those look identical in every other reading.
+
+**AND THE FIXTURE CLOCK STOPPED WHILE THE PAGE'S DID NOT, ON EIGHT ROWS.** `() => now - 12` **defers
+nothing**: `now` is captured once, the table is cached for the life of the process, and the arrow is
+already holding a number - so the timestamp is frozen and its *age* grows in real time. Every one of
+the eight crossed a threshold a page grades on: the CI rack read `heartbeat stale` on both lanes after
+five minutes of `npm run dev`, conduct read stale after nine, intake after fifty-six, and the quota
+window rolled over after seventy-two and turned a rejection into *cleared*. It was found by reviewing a
+screenshot that contradicted one taken minutes earlier. Same family as the `dayRamp` clamp above, same
+cause, and the `() =>` is exactly what made it look correct. Ages nothing grades on - a 41-day boot
+time, a container's uptime - keep the captured `now` deliberately.

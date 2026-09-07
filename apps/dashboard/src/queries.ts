@@ -318,6 +318,13 @@ export const CI = {
   artifactStateBytes: "home_server_github_runner_artifact_state_bytes",
   artifactRunsBytes: "home_server_github_runner_artifact_runs_bytes",
   sliceUnlimited: "home_server_github_runner_slice_unlimited",
+
+  /** THE ONE CI FACT WITH A SERIES AND NO PER-LANE EQUIVALENT ANYWHERE. Every
+   *  other github_runner_* number is the cross-lane worst case of something
+   *  home_server_ci_* already publishes per lane, so omitting it costs nothing;
+   *  the count of net-ci-* networks is measurable and was drawn by no reader at
+   *  all until /ci got a row for ci.runner_isolation. */
+  networks: "home_server_github_runner_networks",
   strays: "home_server_github_runner_strays",
 } as const;
 

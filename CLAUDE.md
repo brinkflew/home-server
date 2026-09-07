@@ -1334,6 +1334,8 @@ signal read green.
 - A bare `ProgressBar` track while nothing runs. The contract was right and the CALL SITE was wrong;
   the bar renders only in flight, and the sub-line says which nothing it is.
 - The band was labelled `Fleet` directly under a sub-nav whose other segment is `Fleet`.
+- `/ci`'s lane rack had the identical call site, found the same day only because that page got the
+  same treatment. Fixing one instance of a call-site defect is not evidence about the others.
 
 ### The fixture gave every round a distinct id and the live board gives them all one
 - The task chip fell back to the WORKTREE ID, which names a lane, and a worktree is reused - so ten
@@ -1508,6 +1510,9 @@ signal read green.
 - Two plausible ids do not exist: it is `mirror_fresh` and `checkout_drift`, never `mirror_age` or
   `checkout_clean`. smoke.mjs now asserts every id against `bin/verify-host.sh`.
 - The containment tone was hand-rolled and mapped `fail` to amber; `checkTone()` was already right.
+  **The same ternary was on `/ci`**, which is the page `CiContainmentLost` sends somebody to, for
+  too, found hours later only because that page got the same treatment - this entry recorded the
+  defect and not the search.
 
 ### A reducer hid a defect in the thing it reduced
 - A fixture ramp fell off a cliff at every window's right edge, and a `max` over the UTC day masked

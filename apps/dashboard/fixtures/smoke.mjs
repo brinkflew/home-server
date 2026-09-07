@@ -65,6 +65,12 @@ const { control } = await load("/src/api/control.ts");
 // browser. See the block near the foot of this file for the one that was wrong.
 const { leadReading, preconditionRows, preconditionTally, PRECONDITION_IDS } =
   await load("/src/machine.ts");
+// LOADED FOR THE FIRST TIME ON 2026-09-07, in the same pass and for the same
+// reason. /ci had NO logic under test at all: every decision on the only page
+// this fleet is visible from was a computed in a .vue file, and one of them had
+// been wrong for as long as the page existed.
+const { laneLead, laneTally, silentLanes, hostRows, hostTally, HOST_IDS } =
+  await load("/src/lanes.ts");
 const { statusDocument } = await load("/fixtures/model.ts");
 
 let failures = 0;
@@ -1455,6 +1461,160 @@ if (battery === null) {
     PRECONDITION_IDS.filter((id) => !emitted.has(id)), []);
 }
 
+
+// --- the CI lanes, as /ci draws them -----------------------------------------
+//
+// THE FIRST CI LOGIC THIS SCRIPT HAS EVER CALLED. /ci is the only page the CI
+// fleet is visible from - a lane leaves no failed unit, no unhealthy container
+// and no container series anywhere - and every decision on it was a computed in
+// a .vue file until 2026-09-07. One of them had been wrong the whole time, and
+// it is the same one that was wrong on /agents/fleet: the containment tone was
+// hand-rolled as `status === 'pass' ? 'ok' : 'warn'`, so a FAILING containment
+// check drew amber on the page somebody opens after CiContainmentLost has gone
+// off. No fixture could catch it, because the ci section's own charter is warn
+// or note and it has never carried a `fail` - which is why the assertion below
+// builds one by hand.
+
+console.log("\n-- the CI page's own derivations --");
+
+const laneRow = (over = {}) => ({
+  lane: "1", tone: "ok", state: "idle", inFlight: 0, jobsToday: 4, ...over,
+});
+
+// THE FOUR STATES OF THE HEADLINE, and the last two are the ones that needed
+// writing. fmt.number(NaN) is "-", so the obvious spelling renders "- jobs
+// today": a headline claiming a dash ran.
+{
+  const busy = laneRow({ lane: "1", inFlight: 1, jobsToday: 7 });
+  const warn = laneRow({ lane: "2", tone: "warn", state: "mint failing", jobsToday: 4 });
+
+  check("the lead sums the lanes", laneLead([busy, warn], 1).text, "11 jobs today");
+  check("...and breathes while one is running", laneLead([busy, warn], 1).live, true);
+  check("...naming which", laneLead([busy, warn], 1).sub,
+    "1 healthy / 1 degraded - lane 1 running a job");
+  check("nothing running says so", laneLead([warn], 1).sub, "1 degraded - nothing running");
+  check("one job is singular", laneLead([laneRow({ jobsToday: 1 })], 1).text, "1 job today");
+
+  // A HOST WITH CI SWITCHED OFF IS NOT A BROKEN ONE, and every ci check reports
+  // it as a note rather than a finding.
+  check("no marker anywhere is its own sentence", laneLead([], 0).text, "CI is not enabled here");
+  check("...and it is grey", laneLead([], 0).tone, "off");
+
+  // DIFFERENT FACT: a marker exists and the counter behind it does not.
+  const unread = laneRow({ jobsToday: Number.NaN });
+  check("a marker with no counter is not measured", laneLead([unread], 1).text, "not measured");
+  check("...which is not the same sentence", laneLead([unread], 1).sub,
+    "no lane reported a job count in the last scrape");
+
+  // ONE LANE NOT REPORTING MUST NOT ZERO THE SUM, and must not be counted as a
+  // lane that ran nothing.
+  check("an absent counter is skipped, not added as zero",
+    laneLead([laneRow({ jobsToday: 9 }), unread], 1).text, "9 jobs today");
+
+  // THE TONE IS THE WORST LANE'S, NOT THE COUNTER'S. A number of jobs is never
+  // itself a fault; a lane that has stopped reporting is.
+  check("a healthy fleet is green", laneLead([busy], 1).tone, "ok");
+  check("a lane that never started drags it grey",
+    laneLead([busy, laneRow({ lane: "3", tone: "off", inFlight: undefined })], 1).tone, "off");
+  check("...and a failing one drags it red",
+    laneLead([busy, laneRow({ lane: "3", tone: "fail" })], 1).tone, "fail");
+  check("grey outranks amber, because nobody is looking",
+    laneLead([laneRow({ tone: "warn" }), laneRow({ lane: "2", tone: "off" })], 1).tone, "off");
+}
+
+// THE TALLY IS THE BAND'S ASIDE, and an aside that renders nothing looks like a
+// band that forgot to say anything.
+check("an empty rack still says something", laneTally([]), "no lanes");
+check("the tally ends on the worst", laneTally([
+  laneRow({ tone: "off" }), laneRow({ tone: "ok" }), laneRow({ tone: "warn" }),
+]), "1 healthy / 1 degraded / 1 never started");
+
+// A LANE THE BATTERY COUNTS THAT THE TABLE CANNOT DRAW. The rack is the union of
+// the marker series, so a driver that never got far enough to write one appears
+// nowhere - and it is the lane most worth seeing.
+check("an enabled lane with no marker is counted", silentLanes(2, 3, 0), 1);
+check("...a failed one too", silentLanes(2, 2, 1), 1);
+check("a full rack is silent about nothing", silentLanes(3, 3, 0), 0);
+// NEITHER HALF MAY DEFAULT TO ZERO: both facts are written as "" on a host with
+// no lanes, which becomes null and is dropped, so an absent count read as 0
+// would turn every drawn lane into a phantom surplus.
+check("an unread count claims nothing", silentLanes(3, Number.NaN, 0), 0);
+check("...in either half", silentLanes(3, 3, Number.NaN), 0);
+check("more markers than units is not negative", silentLanes(4, 3, 0), 0);
+
+// --- the host-side table -----------------------------------------------------
+
+const ciChecks = new Map(statusDocument().checks.map((c) => [c.id, c]));
+
+const F = {
+  lanesActive: 2, lanesFailed: 1, versionAge: 3, imageAge: 19, toolcache: 1,
+  baselines: 0, runsBytes: 3400 * 1024 * 1024, unlimited: 0, networks: 3, strays: 0,
+  runtimeSplit: "0", rootLabel: "container_file_t",
+};
+
+const hrows = hostRows(F, ciChecks);
+
+check("the ids are the exported set", hrows.map((r) => r.id), HOST_IDS);
+check("nine rows", hrows.length, 9);
+
+// THE FIVE PER-LANE CHECKS ARE DELIBERATELY ABSENT. They are cross-lane
+// summaries of the table two bands up, where the same numbers are drawn per lane
+// with a bar behind them, and a second table restating them is the duplication
+// this whole page was rewritten to remove.
+check("the per-lane checks are not restated here",
+  ["ci.heartbeat", "ci.job_stuck", "ci.lane_disk", "ci.lane_headroom", "ci.lane_store"]
+    .filter((id) => HOST_IDS.includes(id)), []);
+
+// A MISSING ROW MUST BE A NAMED FAILURE, NOT A TypeError. An id that drifts
+// used to throw here and take the battery assertion below - the one that would
+// have named the drift - with it, so the run reported a crash rather than the
+// finding.
+const hostRow = (id) => hrows.find((r) => r.id === id) ?? { value: null, tone: null };
+
+check("a string fact is readable", hostRow("ci.fleet_root_label").value, "container_file_t");
+check("...and 0 means one directory, not none", hostRow("ci.runtime_dir").value, "one directory");
+check("a bounded slice says so", hostRow("ci.slice_limits").value, "bounded");
+check("networks and strays read together", hostRow("ci.runner_isolation").value, "3 networks, 0 stray");
+check("a failed lane is named beside the active count",
+  hostRow("ci.lanes_alive").value, "2 active, 1 failed");
+check("zero baselines is a reading, not a blank", hostRow("ci.artifact_store").value, "0 baselines");
+
+// GREY IS NEVER GREEN. Every value absent, every tone off, and not one zero.
+{
+  const empty = hostRows(null, new Map());
+  check("nothing measured is nothing readable",
+    [...new Set(empty.map((r) => r.value))], [fmt.NO_DATA]);
+  check("...and nothing green", [...new Set(empty.map((r) => r.tone))], ["off"]);
+  check("nothing measured is nothing passing", hostTally(empty).notPassing, 9);
+  check("...and the total is unchanged", hostTally(empty).total, 9);
+}
+
+// THE ASSERTION THIS FILE EXISTS FOR. The old page mapped every non-pass to
+// amber, so `fail` - which ci.lane_headroom and ci.runtime_dir both reach - drew
+// as a warning on the page CiContainmentLost sends somebody to, and `note`,
+// which means the check could not run, borrowed the colour of a measured one.
+{
+  const graded = (status) =>
+    hostRows(F, new Map([["ci.slice_limits", { id: "ci.slice_limits", status, message: "x" }]]))
+      .find((r) => r.id === "ci.slice_limits").tone;
+  check("a failing containment check is red, not amber", graded("fail"), "fail");
+  check("a warning is amber", graded("warn"), "warn");
+  check("a note is grey, not amber", graded("note"), "off");
+  check("a pass is green", graded("pass"), "ok");
+}
+
+// EVERY ID IS ONE bin/verify-host.sh ACTUALLY EMITS, on the same argument as the
+// agents block above. `bad` is included where that one does not need it: it is
+// the battery's fail emitter, and two ci checks reach it.
+if (battery === null) {
+  console.log("SKIP  bin/verify-host.sh is not readable from here");
+} else {
+  const emittedCi = new Set(
+    [...battery.matchAll(/\b(?:ok|warn|fail|bad|note) (ci\.[a-z_]+)/g)].map((mm) => mm[1]),
+  );
+  check("every host-side id is a check the battery emits",
+    HOST_IDS.filter((id) => !emittedCi.has(id)), []);
+}
 
 await server.close();
 console.log(`\n${failures === 0 ? "all checks passed" : `${failures} FAILED`}`);

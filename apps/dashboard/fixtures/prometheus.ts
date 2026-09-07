@@ -43,6 +43,29 @@ const INDEXERS = [
 ];
 const DOWN_INDEXERS = ["The Pirate Bay", "1337x.st"];
 
+/**
+ * A timestamp a fixed age in the past, READ WHEN THE SAMPLE IS ASKED FOR.
+ *
+ * `() => now - 12` DEFERS NOTHING. `now` is captured once, the table is cached
+ * for the life of the process, and the arrow is already holding a number - so
+ * the timestamp is frozen and its AGE grows in real time. Eight rows were
+ * spelled that way, and every one of them crossed a threshold the pages grade
+ * on: the CI rack went "heartbeat stale" on both lanes after five minutes of
+ * `npm run dev`, conduct read stale after nine, intake after fifty-six, and the
+ * quota window rolled over after seventy-two and turned amber into "cleared".
+ * The `() =>` is exactly what made it look correct.
+ *
+ * Same family as the dayRamp clamp twenty lines below, and for the same reason:
+ * the fixture's clock stops and the page's does not.
+ *
+ * Ages the UI does not grade on - a 41-day boot time, a container's uptime -
+ * keep the captured `now` deliberately: a few minutes of drift on a number
+ * printed in days is invisible, and the point is which readings can silently
+ * change state, not tidiness.
+ */
+const ago = (seconds: number) => () => Math.floor(Date.now() / 1000) - seconds;
+const ahead = (seconds: number) => () => Math.floor(Date.now() / 1000) + seconds;
+
 function bySeries(): Record<string, SeriesSpec[]> {
   const now = Math.floor(Date.now() / 1000);
   const table: Record<string, SeriesSpec[]> = {};
@@ -303,12 +326,15 @@ function bySeries(): Record<string, SeriesSpec[]> {
     LANES.map((lane) => ({ metric: { lane }, at: constant(v[lane]) }));
 
   table[CI.markerPresent] = [{ metric: {}, at: constant(1) }];
-  table[CI.heartbeat] = LANES.map((lane) => ({ metric: { lane }, at: () => now - 12 }));
-  table[CI.lastJob] = laneAt({ "1": now - 900, "2": now - 5400 });
+  table[CI.heartbeat] = LANES.map((lane) => ({ metric: { lane }, at: ago(12) }));
+  table[CI.lastJob] = LANES.map((lane) => ({
+    metric: { lane },
+    at: ago(lane === "1" ? 900 : 5400),
+  }));
 
   // Present for lane 1 only: the driver clears it at teardown, so an idle lane
   // legitimately has no series here.
-  table[CI.jobStarted] = [{ metric: { lane: "1" }, at: () => now - 640 }];
+  table[CI.jobStarted] = [{ metric: { lane: "1" }, at: ago(640) }];
   table[CI.inFlight] = laneAt({ "1": 1, "2": 0 });
 
   table[CI.jobsToday] = laneAt({ "1": 7, "2": 4 });
@@ -366,20 +392,23 @@ function bySeries(): Record<string, SeriesSpec[]> {
   table[CI.artifactStateBytes] = [{ metric: {}, at: constant(12 * MB) }];
   table[CI.artifactRunsBytes] = [{ metric: {}, at: constant(3400 * MB) }];
   table[CI.sliceUnlimited] = [{ metric: {}, at: constant(0) }];
+  // Three net-ci-* networks against two reporting lanes, which is correct: lane
+  // 3 has a network and has never written a marker.
+  table[CI.networks] = [{ metric: {}, at: constant(3) }];
   table[CI.strays] = [{ metric: {}, at: constant(0) }];
 
   // --- the agent fleet ------------------------------------------------------
   table[AGENTS.markerPresent] = [{ metric: {}, at: constant(1) }];
-  table[AGENTS.heartbeat] = [{ metric: {}, at: () => now - 41 }];
-  table[AGENTS.lastOk] = [{ metric: {}, at: () => now - 41 }];
+  table[AGENTS.heartbeat] = [{ metric: {}, at: ago(41) }];
+  table[AGENTS.lastOk] = [{ metric: {}, at: ago(41) }];
   table[AGENTS.phaseInFlight] = [{ metric: {}, at: constant(1) }];
-  table[AGENTS.phaseStarted] = [{ metric: {}, at: () => now - 1870 }];
+  table[AGENTS.phaseStarted] = [{ metric: {}, at: ago(1870) }];
 
   // REJECTED, which is the loud state and the one AgentQuotaRejected fires on.
   table[AGENTS.quotaStatus] = [{ metric: {}, at: constant(2) }];
-  table[AGENTS.quotaResets] = [{ metric: {}, at: () => now + 4300 }];
-  table[AGENTS.quotaRead] = [{ metric: {}, at: () => now - 300 }];
-  table[AGENTS.intakeLast] = [{ metric: {}, at: () => now - 260 }];
+  table[AGENTS.quotaResets] = [{ metric: {}, at: ahead(4300) }];
+  table[AGENTS.quotaRead] = [{ metric: {}, at: ago(300) }];
+  table[AGENTS.intakeLast] = [{ metric: {}, at: ago(260) }];
 
   table[AGENTS.tokensWeek] = [{ metric: {}, at: constant(11_900_000) }];
   // tokensToday, runsToday and runsFailedToday are the resetting gauges, and
