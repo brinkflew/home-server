@@ -246,6 +246,12 @@ else
 	next_signed=$(jq -r '.["container-image-reference"] // ""' <<<"${next_dep:-{\}}")
 	pinned_count=$(jq '[.deployments[] | select(.pinned)] | length' <<<"$status_json")
 	depl_count=$(jq '.deployments | length' <<<"$status_json")
+	# HOW MANY /boot ENTRIES EXIST, which is not the deployment count and is the
+	# number greenboot's fallback actually depends on. A STAGED deployment has no
+	# entry - finalization writes one, at shutdown - so `[staged, booted]` is two
+	# deployments and ONE entry, with nothing for GRUB to fall back to. That shape
+	# is the ordinary state here for six days of every week.
+	boot_entries=$(jq '[.deployments[] | select(.staged | not)] | length' <<<"$status_json")
 
 	ok deploy.booted "booted $booted_ver"
 
@@ -865,25 +871,33 @@ if [ -z "$GREENBOOT" ]; then
 
 		if [ "$gb_dir" = absent ]; then
 			bad greenboot.armed "the home-server check is in neither required.d nor wanted.d - greenboot is not checking this host"
-		elif [ "$gb_dir" = required ] && [ "$gb_grub" = yes ] && [ "${depl_count:-0}" -lt 2 ]; then
-			# ARMED WITH NOWHERE TO GO, which is the NORMAL state here rather
-			# than a fault: an attended reboot ends in `rpm-ostree cleanup -r`,
-			# so the host sits on one deployment until the next one stages. A
-			# rollback is only possible in the window between staging and that
-			# cleanup - which is also the only window in which a deployment can
-			# be bad, so the cover is where it needs to be.
-			#
-			# A WARN rather than a FAIL because greenboot stops itself here. Seen
-			# in the journal, on this host: "Boot counter exhausted but no
-			# rollback trigger set - manual intervention required". The trigger
-			# is set only on the first boot into a NEW deployment, so with one
-			# deployment a red boot costs GREENBOOT_MAX_BOOT_ATTEMPTS reboots and
-			# then stops, rather than looping.
-			warn greenboot.armed "greenboot is armed but there is only ${depl_count:-?} deployment - nothing to roll back to until one stages"
-		elif [ "$gb_dir" = required ] && [ "$gb_grub" = yes ]; then
-			ok greenboot.armed "greenboot is armed - a failed check reverts the deployment"
-		else
+		elif [ "$gb_dir" != required ] || [ "$gb_grub" != yes ]; then
 			warn greenboot.armed "greenboot is observe-only (${gb_dir}.d, GRUB counter: ${gb_grub}) - a bad deployment will NOT roll back"
+		elif [ "${boot_entries:-0}" -ge 2 ]; then
+			ok greenboot.armed "greenboot is armed - a failed check reverts to the other /boot entry"
+		else
+			# ARMED WITH NOWHERE TO GO *RIGHT NOW*, and two things were wrong
+			# with how this branch used to read. The first is why softening the
+			# second is affordable rather than a silencer.
+			#
+			# IT COUNTED DEPLOYMENTS AND CALLED THE COUNT COVER. A staged
+			# deployment is not a rollback target and writes no /boot entry at
+			# all, so `[staged, booted]` counted 2 and took the branch below,
+			# reporting "a failed check reverts the deployment" with nothing to
+			# revert to. That is the ordinary shape here for six days of every
+			# week, and it was wrong in the reassuring direction on the one check
+			# whose job is to say whether the safety net is there.
+			#
+			# AND THE STATE IT NOW MEASURES CORRECTLY IS NOT ACTIONABLE, so it is
+			# a note rather than the WARN it was. The next boot that can go bad
+			# is a boot into a NEW deployment, and at that moment this one is the
+			# fallback - the cover arrives with the risk it covers. What is left
+			# over is a red boot on an UNCHANGED deployment, which a rollback
+			# cannot fix anyway: greenboot stops itself there rather than
+			# looping, having exhausted the counter with no trigger set, and
+			# there is no action to take. A permanent WARN for that is a rollout
+			# looking like a fault.
+			note greenboot.armed "greenboot is armed; ${boot_entries:-?} /boot entry, so the fallback arrives with the next deployment that boots"
 		fi
 
 		# ARMED SAYS THE CHECK RUNS. THIS SAYS THE VERDICT IS REMEMBERED, and

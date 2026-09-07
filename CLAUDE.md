@@ -1598,6 +1598,12 @@ signal read green.
   and `red_boot_csum` had both been dead since the file existed, green throughout. Every writer owns
   its own keys and must `grep -vE` them out rather than rewrite the file.
 
+### A check that counted deployments and called the count cover
+- `greenboot.armed` called `depl_count >= 2` cover, but a STAGED deployment writes no `/boot` entry,
+  so `[staged, booted]` - six days a week - had one entry and nothing to fall back to. Count entries,
+  not deployments. The one-entry state is a note: the fallback arrives with the deployment that
+  creates the risk.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

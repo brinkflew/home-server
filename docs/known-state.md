@@ -4667,3 +4667,21 @@ Recorded 2026-09-07, with the board's filter, the step rail and the three render
 - Proved both directions before it was trusted: a planted file with five foreign keys keeps all five
   and gets the four owned ones replaced rather than duplicated, and a green boot after a red one now
   leaves `red_boot_csum` in place.
+
+### A check that counted deployments and called the count cover
+- **`greenboot.armed` said "a failed check reverts the deployment" whenever `depl_count >= 2`**,
+  which includes `[staged, booted]` - the shape this host is in for six days of every week, and one
+  that has exactly ONE `/boot` entry. A staged deployment writes no entry until `ostree-finalize-staged`
+  runs at shutdown, so there was nothing for GRUB to fall back to and the check reported that there
+  was. Wrong in the reassuring direction, on the one check whose job is to say whether the safety net
+  is there.
+- **The number that matters is `/boot` ENTRIES, not deployments**:
+  `[.deployments[] | select(.staged | not)] | length`. Checked against the filesystem on 2026-09-08
+  rather than against the JSON alone - `depl_count` 2, `boot_entries` 1,
+  `ls /boot/loader/entries` 1, `ls /boot/ostree` 1.
+- **The one-entry state is a NOTE now, not a WARN, and that is only defensible because the branch
+  above it was fixed first.** It is not actionable: the next boot that can go bad is a boot into a
+  NEW deployment, and at that moment the booted one is the fallback - the cover arrives with the risk
+  it covers. What is left over is a red boot on an UNCHANGED deployment, which a rollback cannot fix
+  and which greenboot stops itself on rather than looping. A permanent WARN for that is a rollout
+  looking like a fault.
