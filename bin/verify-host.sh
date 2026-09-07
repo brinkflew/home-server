@@ -138,6 +138,11 @@ fact() { fact_k+=("$1") fact_t+=("${3:-str}") fact_v+=("$2"); }
 
 uptime_s=$(cut -d. -f1 /proc/uptime)
 
+# HOISTED, because two sections read it now. It used to be declared inside the
+# greenboot section; the deploy section grades the reclaim out of the same file
+# and runs first.
+boot_state="${HOME_SERVER_BOOT_STATE:-/var/lib/home-server/boot-state}"
+
 # Did a nightly oneshot run, and did it succeed?  Shared by the OS updater and
 # the container one, because the failure mode is identical: a timer that stopped
 # firing looks exactly like a quiet upstream, and the silence hides everything.
@@ -156,6 +161,31 @@ check_timer_run() {  # <id> <label> <period-seconds> <unit> [--user]
 	# disappears and splits on whitespace when it does not.
 	local scope=()
 	[ -z "${5:-}" ] || scope=("$5")
+
+	# "NEVER RUN" AND "NOT INSTALLED" ARE DIFFERENT FINDINGS AND systemctl WILL
+	# NOT TELL THEM APART FOR YOU. `systemctl show` answers about a unit that
+	# does not exist quite happily - ActiveState inactive, ExecMainExitTimestamp
+	# empty, exit 0 - so every caller here was one renamed unit away from
+	# reporting "has never run, and this machine has been up 207h" about a name
+	# that no longer exists. That is a check firing at nothing while sounding
+	# specific, which is the failure this file keeps finding. LoadState is the
+	# only discriminator, and docs/known-state.md records it.
+	#
+	# Seen for real on 2026-09-08: this helper was pointed at
+	# home-server-boot-reclaim.service before the unit had been symlinked, and
+	# said the timer had stopped firing rather than that there was no timer.
+	#
+	# An EMPTY LoadState is a third thing - the manager could not be asked at
+	# all, which is what a `--user` query gets as root at boot - and must not be
+	# reported as either.
+	local loaded
+	loaded=$(systemctl "${scope[@]}" show "$unit" -p LoadState --value 2>/dev/null)
+	case "${loaded:-}" in
+		loaded) ;;
+		"")     note "$id" "could not ask systemd about $unit - $label not measured"; return ;;
+		*)      bad "$id" "$unit is '$loaded', not loaded - nothing is running $label. See host/systemd/README.md for the symlink and the enable line."; return ;;
+	esac
+
 	run=$(systemctl "${scope[@]}" show "$unit" -p ExecMainExitTimestamp --value 2>/dev/null)
 	rc=$(systemctl "${scope[@]}" show "$unit" -p ExecMainStatus --value 2>/dev/null)
 	if [ -z "$run" ]; then
@@ -557,11 +587,82 @@ elif [ -n "$GREENBOOT" ]; then
 	#
 	# Nothing is lost by softening it here. The full battery still FAILs, so it
 	# reaches the MOTD and status.json hourly, and both reboot paths refuse on
-	# their own df: bin/reboot-host.sh gates its pre-flight on the FULL battery
-	# and re-checks /boot itself, and bin/reboot-when-staged.sh does the same.
+	# their own df: each re-checks /boot against its own BOOT_MIN_MB=160,
+	# independently of this battery. (This used to say bin/reboot-host.sh gated
+	# its pre-flight on the FULL battery. It has gated on --greenboot since
+	# 2026-08-17, which is why its own df is what covers /boot there.)
 	warn deploy.boot_free "/boot only ${boot_free}M free - the next staged update cannot write its kernel, but a rollback would need a slot of its own and make it worse"
 else
 	bad deploy.boot_free "/boot only ${boot_free}M free - the next staged update cannot write its kernel"
+fi
+
+# THE RESERVE IS A LIE THIS PARTITION CANNOT AFFORD. df's Avail is f_bavail,
+# which excludes the root-reserved blocks for root TOO - and ostree runs as root
+# - so ext4's default 5% was subtracted from every gate on this host at once:
+# BOOT_MIN_MB in both reboot scripts, the literal above, and the reclaim's. On a
+# 350 MB partition that is 19.2 MiB, and it took the margin over the 145.3 MiB
+# ostree needs from 45 MiB down to 26. Holding blocks back for root is a
+# sensible default on a filesystem users write to and pointless on one only
+# ostree writes to.
+#
+# CHECKED RATHER THAN ASSUMED BECAUSE IT IS HOST STATE THIS REPOSITORY CANNOT
+# RESTORE. Ignition cannot apply it after install, so it was done by hand on
+# 2026-09-08 and a reinstall silently gets the 5% back.
+boot_dev=$(findmnt -no SOURCE /boot 2>/dev/null)
+boot_tune=""
+[ -z "$boot_dev" ] || boot_tune=$(priv tune2fs -l "$boot_dev" 2>/dev/null)
+boot_reserved=$(sed -n 's/^Reserved block count: *//p' <<<"$boot_tune" | tail -1)
+boot_blocksize=$(sed -n 's/^Block size: *//p' <<<"$boot_tune" | tail -1)
+fact boot_reserved_blocks "${boot_reserved:-}" num
+if [ -z "${boot_reserved:-}" ] || [ -z "${boot_blocksize:-}" ]; then
+	note deploy.boot_reserve "/boot's reserved block count could not be read - not measured"
+elif [ "$boot_reserved" -eq 0 ]; then
+	ok deploy.boot_reserve "/boot reserves nothing for root, so df tells the reboot gates the truth"
+else
+	warn deploy.boot_reserve "/boot holds $(( boot_reserved * boot_blocksize / 1048576 ))M back from root, so every /boot gate here under-reads by that much - 'sudo tune2fs -m 0 $boot_dev', see host/systemd/README.md"
+fi
+
+# THE RECLAIM'S DURABLE RECORD. bin/reclaim-boot-slot.sh drops the rollback
+# deployment's /boot slot after a green boot, which is the step
+# bin/reboot-when-staged.sh structurally cannot take because it reboots and the
+# process that would take it dies with the machine.
+#
+# EXACTLY ONE STATE IS A FAIL HERE, AND IT IS NOT "IT REFUSED". Nearly every
+# path in that script is a refusal, and most describe conditions nobody can act
+# on before Sunday - so a FAIL on one would page critical for the script working
+# correctly. What cannot be tolerated is the repair arm having destroyed a
+# staged update and not put one back: that converts a loud condition into a
+# quiet one, and the only other thing that would ever notice is
+# deploy.image_digest, as a WARN, six hours later.
+reclaim_at=$(sed -n 's/^boot_reclaim_at=//p' "$boot_state" 2>/dev/null | tail -1)
+reclaim_err=$(sed -n 's/^boot_reclaim_error=//p' "$boot_state" 2>/dev/null | tail -1)
+reclaim_ref=$(sed -n 's/^boot_reclaim_rollback_ref=//p' "$boot_state" 2>/dev/null | tail -1)
+reclaim_freed=$(sed -n 's/^boot_reclaim_freed_mb=//p' "$boot_state" 2>/dev/null | tail -1)
+reclaim_gone=$(sed -n 's/^boot_reclaim_destroyed_digest=//p' "$boot_state" 2>/dev/null | tail -1)
+reclaim_back=$(sed -n 's/^boot_reclaim_restaged_digest=//p' "$boot_state" 2>/dev/null | tail -1)
+fact boot_reclaim_at         "${reclaim_at:-}"
+fact boot_reclaim_freed_mb   "${reclaim_freed:-}" num
+fact boot_reclaim_rollback_ref "${reclaim_ref:-}"
+if [ -z "${reclaim_at:-}" ]; then
+	ok deploy.boot_reclaim "the /boot reclaim has not had to do anything yet"
+elif [ -n "${reclaim_gone:-}" ] && [ -z "${reclaim_back:-}" ]; then
+	bad deploy.boot_reclaim "the /boot reclaim destroyed a staged update at $reclaim_at and did not put one back - 'sudo rpm-ostree upgrade' re-stages it, and it does NOT happen on its own"
+elif [ -n "${reclaim_err:-}" ]; then
+	warn deploy.boot_reclaim "the last /boot reclaim ($reclaim_at) reported: $reclaim_err"
+elif [ -n "${reclaim_ref:-}" ]; then
+	# NAMES THE REF AND CLAIMS NO MORE THAN THAT. The pin is measured to survive
+	# the drop and the prune that follows it; whether `ostree admin deploy` on
+	# it yields a bootable deployment with a correct container origin is NOT
+	# measured, so this does not say "recoverable".
+	ok deploy.boot_reclaim "/boot reclaim at $reclaim_at freed ${reclaim_freed:-?}M; the deployment it dropped is still on disk as $reclaim_ref"
+else
+	warn deploy.boot_reclaim "/boot reclaim at $reclaim_at freed ${reclaim_freed:-?}M but pinned nothing - what it dropped is reachable only from the registry"
+fi
+
+# `systemctl --user` CANNOT BE ANSWERED AS ROOT AT BOOT, which is why this one
+# is guarded and deploy.update_run above is not.
+if [ -z "$GREENBOOT" ]; then
+	check_timer_run deploy.boot_reclaim_run "boot slot reclaim" 3600 home-server-boot-reclaim.service --user
 fi
 
 # ------------------------------------------------------------------------------
@@ -726,7 +827,6 @@ if [ -z "$GREENBOOT" ]; then
 	# Overridable so this section's own branches can be exercised without a
 	# reboot. "Armed" is the claim here that fails silently, so being able to
 	# test the logic that reports it is worth three variables.
-	boot_state="${HOME_SERVER_BOOT_STATE:-/var/lib/home-server/boot-state}"
 	gb_etc="${HOME_SERVER_GREENBOOT_ETC:-/etc/greenboot}"
 	gb_cfg="${HOME_SERVER_GRUB_CUSTOM:-/boot/grub2/custom.cfg}"
 	gb_grubenv="${HOME_SERVER_GRUBENV:-/boot/grub2/grubenv}"
