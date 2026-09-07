@@ -3,6 +3,8 @@
 // but it exercises the real modules rather than asserting on types.
 //
 //   node fixtures/smoke.mjs
+import { readFile } from "node:fs/promises";
+
 import { createServer } from "vite";
 
 const server = await createServer({ server: { middlewareMode: true }, appType: "custom" });
@@ -58,6 +60,13 @@ const fmt = await load("/src/format.ts");
 // ever called it outside a browser.
 const { quotaSub, quotaWindow } = await load("/src/composables/useQuotaHold.ts");
 const { control } = await load("/src/api/control.ts");
+// LOADED FOR THE FIRST TIME ON 2026-09-07. The fleet page's two decisions - what
+// its headline says and what its ten precondition rows read - were logic in a
+// .vue file until the redesign, so neither had ever been called outside a
+// browser. See the block near the foot of this file for the one that was wrong.
+const { leadReading, preconditionRows, preconditionTally, PRECONDITION_IDS } =
+  await load("/src/machine.ts");
+const { statusDocument } = await load("/fixtures/model.ts");
 
 let failures = 0;
 const check = (name, got, want) => {
@@ -1321,6 +1330,144 @@ console.log("\n-- reading what the host recorded --");
     describeTurn({ kind: "tool", name: "Sorcery", input: '{"spell":"x","level":3}' })
       .headline, "spell x, level 3");
 }
+
+// --- the machinery, as /agents/fleet draws it --------------------------------
+//
+// LOADED FOR THE FIRST TIME ON 2026-09-07, and the reason is the reason
+// roundboard.ts and quotaWindow were: both of these were logic in a .vue file,
+// which this script structurally cannot reach. One of them had been WRONG the
+// whole time - the containment tone mapped a `fail` check to amber, so the one
+// finding on that page which pages a phone drew as a warning, and no fixture
+// could see it because the agents section has never carried a `fail`.
+
+console.log("\n-- the fleet page's own derivations --");
+
+const M = {
+  runsToday: 6, runsFailedToday: 1, phaseInFlight: 1,
+  approvals: 2, workerLanes: 2, windmillDb: 1290 * 1024 * 1024,
+  mirrorAge: 2400, checkoutDirty: 0, publishConfigured: 1, leaked: 0,
+};
+
+const checksById = new Map(statusDocument().checks.map((c) => [c.id, c]));
+
+// THE FOUR STATES OF THE HEADLINE, and the fourth is the one that matters.
+// fmt.number(NaN) is "-", so the obvious spelling of this renders
+// `- phase runs today` on a host the store has no sample for: a headline
+// claiming a dash ran. Absence gets its own sentence.
+check("a running phase leads with the count", leadReading(M).text, "6 phase runs today");
+check("...and breathes", leadReading(M).live, true);
+check("...and says a phase is running", leadReading(M).sub, "1 failed - a phase is running now");
+check("idle is not running", leadReading({ ...M, phaseInFlight: 0 }).live, false);
+check("...and says which nothing it is",
+  leadReading({ ...M, phaseInFlight: 0 }).sub, "1 failed - nothing running");
+check("never-run is grey, not idle",
+  [leadReading({ ...M, phaseInFlight: undefined }).tone,
+   leadReading({ ...M, phaseInFlight: undefined }).sub],
+  ["off", "no phase has ever run on this host"]);
+check("an absent counter is a sentence, never a dash",
+  leadReading({ ...M, runsToday: Number.NaN }).text, "not measured");
+check("...and it is grey", leadReading({ ...M, runsToday: Number.NaN }).tone, "off");
+check("no lead reading is ever the bare NO_DATA string",
+  [M, { ...M, phaseInFlight: 0 }, { ...M, phaseInFlight: undefined }, { ...M, runsToday: Number.NaN }]
+    .some((x) => leadReading(x).text.trim() === fmt.NO_DATA), false);
+
+// "none failed" rather than "0 failed", and NOTHING rather than "0 failed" when
+// the counter is absent - the same rule one line down from the headline.
+check("zero failures says so in words",
+  leadReading({ ...M, runsFailedToday: 0, phaseInFlight: 0 }).sub, "none failed - nothing running");
+check("an absent failure count is omitted, not zero",
+  leadReading({ ...M, runsFailedToday: Number.NaN, phaseInFlight: 0 }).sub, "nothing running");
+check("one run is singular", leadReading({ ...M, runsToday: 1 }).text, "1 phase run today");
+
+// THE TEN ROWS.
+const pre = preconditionRows(M, checksById);
+check("ten preconditions", pre.length, 10);
+check("the ids are the exported set", pre.map((r) => r.id), PRECONDITION_IDS);
+
+const rowFor = (id) => pre.find((r) => r.id === id);
+check("a count row carries its number", rowFor("agents.approvals_pending").value, "2");
+check("a byte row carries its unit", rowFor("agents.windmill_db_size").value, "1.3 GB");
+check("a clean checkout says clean", rowFor("agents.checkout_drift").value, "clean");
+check("a dirty one counts",
+  preconditionRows({ ...M, checkoutDirty: 3 }, checksById)
+    .find((r) => r.id === "agents.checkout_drift").value, "3 dirty");
+
+// IT NAMES /var/agents. The tile this replaced said `/var/home-server against
+// git`, and the metric behind it is written by agents.checkout_drift, which
+// measures conduct's OWN checkout - "the same failure one directory over", in
+// bin/verify-host.sh's own words. No fixture could ever have caught it: the
+// number is right either way, and only the caption was wrong.
+check("the checkout row names the tree it actually measures",
+  rowFor("agents.checkout_drift").finding.includes("/var/agents"), true);
+check("...and not this one",
+  rowFor("agents.checkout_drift").finding.includes("/var/home-server"), false);
+
+// A check with no number of its own contributes its verdict and never a word
+// this application made up.
+check("a verdict-only row shows the verdict", rowFor("agents.slice_limits").value, "pass");
+
+// THE TONE BUG, PLANTED. checkTone maps fail to fail; the version that lived in
+// FleetPage.vue mapped it to warn.
+const failing = new Map(checksById);
+failing.set("agents.slice_limits", {
+  section: "agents", id: "agents.slice_limits", status: "fail",
+  message: "app-agents.slice reads UNLIMITED for: MemoryMax",
+});
+check("a failing containment check is red, not amber",
+  preconditionRows(M, failing).find((r) => r.id === "agents.slice_limits").tone, "fail");
+
+// GREY IS NEVER GREEN. A check the battery did not run must not borrow the
+// colour of one that ran and passed.
+const empty = preconditionRows(M, new Map());
+check("an unmeasured row is grey", [...new Set(empty.map((r) => r.tone))], ["off"]);
+check("...and says it was not measured",
+  empty.every((r) => r.finding.length > 0), true);
+check("no unmeasured row is green", empty.some((r) => r.tone === "ok"), false);
+
+// AN ABSENT METRIC IS NO_DATA, NEVER 0. Six of the ten carry a number and every
+// one of them has to render the absence rather than a plausible zero.
+const blank = preconditionRows(
+  { runsToday: Number.NaN, runsFailedToday: Number.NaN, phaseInFlight: undefined,
+    approvals: Number.NaN, workerLanes: Number.NaN, windmillDb: Number.NaN,
+    mirrorAge: Number.NaN, checkoutDirty: Number.NaN, publishConfigured: Number.NaN,
+    leaked: Number.NaN },
+  checksById,
+);
+check("absent numbers render as absent, not as zero",
+  ["agents.approvals_pending", "agents.worker_lanes", "agents.windmill_db_size",
+   "agents.mirror_fresh", "agents.checkout_drift", "agents.publish_configured",
+   "agents.runners_leaked"]
+    .map((id) => blank.find((r) => r.id === id).value),
+  [fmt.NO_DATA, fmt.NO_DATA, fmt.NO_DATA, fmt.NO_DATA, fmt.NO_DATA, fmt.NO_DATA, fmt.NO_DATA]);
+
+// THE TALLY IS OFF THE ROW'S OWN TONE, so the sentence in the band head cannot
+// disagree with the rail the reader is looking at. `note` and unmeasured both
+// count as not passing, which is FindingsPanel's rule and the right one:
+// absence is not a pass.
+check("the tally counts the rows", preconditionTally(pre).total, 10);
+check("a note is not a pass",
+  preconditionTally(preconditionRows(M, checksById)).notPassing,
+  pre.filter((r) => r.tone !== "ok").length);
+check("nothing measured is nothing passing", preconditionTally(empty).notPassing, 10);
+check("...and the total is unchanged", preconditionTally(empty).total, 10);
+
+// EVERY ID IS ONE bin/verify-host.sh ACTUALLY EMITS, asserted against the
+// battery rather than against a second list here. An id that does not resolve
+// renders grey and "not measured" for ever, silently - which is the failure
+// this repository names most often, and the one a fixture cannot catch because
+// the fixture would be the thing that had drifted.
+const battery = await readFile(new URL("../../../bin/verify-host.sh", import.meta.url), "utf8")
+  .catch(() => null);
+if (battery === null) {
+  console.log("SKIP  bin/verify-host.sh is not readable from here");
+} else {
+  const emitted = new Set(
+    [...battery.matchAll(/\b(?:ok|warn|fail|note) (agents\.[a-z_]+)/g)].map((mm) => mm[1]),
+  );
+  check("every precondition id is a check the battery emits",
+    PRECONDITION_IDS.filter((id) => !emitted.has(id)), []);
+}
+
 
 await server.close();
 console.log(`\n${failures === 0 ? "all checks passed" : `${failures} FAILED`}`);

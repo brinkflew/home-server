@@ -1502,6 +1502,13 @@ signal read green.
   `REVIEW_CAP` held the fleet on three tasks, one of which had merged six days earlier. Every
   signal was correct; nothing correlates "in Review" with "its pull request landed".
 
+### The fleet page named the wrong repository, and the number was right either way
+- The `checkout` tile said `/var/home-server` and `agents.checkout_drift` measures `/var/agents` -
+  conduct's own code. Only the caption was wrong, so no fixture could see it.
+- Two plausible ids do not exist: it is `mirror_fresh` and `checkout_drift`, never `mirror_age` or
+  `checkout_clean`. smoke.mjs now asserts every id against `bin/verify-host.sh`.
+- The containment tone was hand-rolled and mapped `fail` to amber; `checkTone()` was already right.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

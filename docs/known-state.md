@@ -4434,3 +4434,27 @@ Recorded 2026-09-07, with the board's filter, the step rail and the three render
 - **Every signal was correct and none of them said this.** `agents.intake` reported the hold and its
   reason verbatim, the marker was fresh, no unit failed. Nothing anywhere correlates "in Review"
   with "its pull request landed", so a stale slot and a real one read identically.
+
+### The fleet page named the wrong repository, and the number was right either way
+
+- **`/agents/fleet`'s `checkout` tile was captioned `/var/home-server against git` and the metric
+  under it measures `/var/agents`.** `home_server_agents_checkout_dirty` is written by
+  `agents.checkout_drift`, whose own comment in `bin/verify-host.sh` says what the caption did not:
+  *"The checkout section above says all of this about /var/home-server; this is the same failure one
+  directory over, and nothing else looks at it."* So a dirty conduct checkout read on the dashboard
+  as this repository's own deployment having drifted - the more alarming of the two, and the one a
+  person would act on first.
+- **No fixture could ever have caught it.** The count is correct whichever tree it came from; only
+  the sentence beside it was wrong, and a screenshot of `clean` is indistinguishable either way. It
+  was found by verifying the ten check ids against the battery while rebuilding the page, not by
+  anything looking at it.
+- **Two of the ids that reading suggested do not exist.** `agents.mirror_age` and
+  `agents.checkout_clean` are both plausible and both absent - the real ones are
+  `agents.mirror_fresh` and `agents.checkout_drift`. An id that does not resolve renders grey and
+  *"not measured"* silently and for ever, so `fixtures/smoke.mjs` now reads `bin/verify-host.sh` and
+  asserts every id the page keys on is one the battery actually emits. Proved to fail on both of
+  the wrong ones before it was trusted.
+- **The containment tone was hand-rolled beside it and mapped `fail` to amber.** `checkTone()` in
+  `src/health.ts` already existed and is right. The `agents` section has never carried a `fail`, so
+  the one finding on that page which pages a phone would have drawn as a warning and no fixture
+  could have shown it; the assertion plants one.

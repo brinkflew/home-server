@@ -1048,3 +1048,67 @@ at 16/32/48, a 180px opaque touch icon, and 192/512 for the manifest - with the 
 the SVG's header so a colour change is a re-cut rather than a redraw. The touch icon is opaque
 because iOS composites transparency unpredictably, and square because iOS applies its own corner
 mask; rounding it here would round it twice.
+
+**`/agents/fleet` GOT THE ROUND BOARD'S PASS ON 2026-09-07, AND IT WAS THE SHAPE THAT BOARD WAS
+FIXED FOR.** The two views sit one sub-nav tab apart and read as two applications: `RoundsPage.vue`
+was rebuilt three times between 2026-08-29 and 2026-09-07, and this one still opened on
+`<Band label="Capacity and cost" :cols="3">` - three equal panels about three unrelated things, each
+handed a third of 1360 with no primary among them. That is the complaint that produced the Rounds
+headline, one rung down. It consumed `--t-mono-xl`, *"the one headline reading"*, nowhere at all.
+
+**The lead is `6 phase runs today` with a live dot, and the band is `Today`.** Not `Right now`,
+which is the Rounds band one tab over and would announce this page with the name of the one beside
+it - the same reason that header stopped being labelled `Fleet`. Three of the four readings in the
+band are gauges conduct resets at UTC midnight, so `Today` names what it holds; memory is the
+exception and says its own scope in its caption. **No `ProgressBar`**: there is no denominator for
+"runs today", and a bare track is the encoding this store reserves for *"in progress, ratio
+unknown"* - the exact defect `idle` cost the board. The conditions under the hairline are cost,
+tokens and memory, on the board's `.conds` recipe unchanged, `subgrid` readout and all.
+
+**AND THE HEADLINE HAS A FOURTH STATE, WHICH IS THE ONLY ONE THAT NEEDED WRITING.** `fmt.number(NaN)`
+is `-`, so the obvious spelling renders `- phase runs today` on a host the store has no sample for:
+a headline claiming a dash ran. Absence gets its own sentence at the largest type on the page, and
+`phaseInFlight`'s `undefined` - a branch that had existed since the page was split and that nothing
+read - is what keeps *never run* from reading as *idle*.
+
+**SIX TILES AND A CONTAINMENT TABLE BECAME ONE TABLE OF TEN ROWS.** `Windmill and git` drew six
+records as a 3x2 grid of cards, which is the thing this document already says a list of records must
+never be; `Containment` reproduced `FindingsPanel`'s markup - `c-rail`/`c-id`/`.p2`/`.fold2` against
+`rail-head`/`id-head`/`.p2`/`.fold2` - directly above a `FindingsPanel` that already carried those
+same three checks, and its own note admitted it. **It is not sorted worst-first**, and that is what
+keeps it a different object from the findings below rather than the same table drawn twice: sorted
+by kind, the two split the way Prometheus and `status.json` already do - **this one carries the
+value, that one carries the prose**, and the id is the join.
+
+**It has a band to itself, which is the band rule rather than a preference.** Beside `Intake` in a
+two-column band it was the taller panel by about 450px: a dense ten-row table clamped to two lines a
+cell in half the page, with the other half empty below a short one. `Band.vue` states the remedy in
+its own docblock - if a panel needs more width than its siblings, give it its own band - and every
+finding fits one line at 1360 now.
+
+**The two fourteen-day strips are one panel under one axis.** They were the same fourteen UTC days
+from `dailyPeaks`, and only one of them had an axis at all.
+
+**`src/machine.ts` IS THE THIRD TIME THIS REPAIR HAS BEEN MADE AND THE REASON IS UNCHANGED.**
+`leadReading` and `preconditionRows` were computeds in a `.vue` file, which `fixtures/smoke.mjs`
+structurally cannot reach - the same blind spot as `quotaWindow` and `roundboard.ts`, and both of
+these decisions have a wrong answer that renders perfectly. One of them **was** wrong: the
+containment tone was hand-rolled and mapped a `fail` check to amber, so the one finding on this page
+that pages a phone drew as a warning. `checkTone()` in `src/health.ts` had been right all along.
+
+**And the check ids are asserted against the battery rather than against a second list.** `smoke.mjs`
+reads `bin/verify-host.sh` and requires every id the page keys on to be one it actually emits.
+`agents.mirror_age` and `agents.checkout_clean` are both plausible and neither exists; the assertion
+was proved to fail on both before it was trusted. An id that does not resolve renders grey and *"not
+measured"* silently and for ever - which is how the `checkout` caption came to name the wrong
+repository for as long as it did. See `docs/known-state.md`.
+
+**Three defects the screenshots found and no build could.** A scoped `.msg` compiles to
+`.msg[data-v-x]` - class plus attribute - which outranks `base.css`'s `.fold2 { display: none }`, so
+every row carried its finding twice at every width: the same specificity trap the board pays for on
+a `ChipLink`, one layer in, and this time the more specific rule was this file's own. `display:
+-webkit-box` on a `<td>` replaces `display: table-cell`, so the clamp has to sit on an inner `div`
+the way `FindingsPanel` already nests it. And under `table-layout: fixed` the column widths come
+from the **first row**, so hiding the `thead` at 640 - which is right, a header over one column names
+nothing - moved that to the first body row, which carries no widths: the two surviving columns split
+50/50 and every finding wrapped inside half a phone. The `th` hints still govern above the rung.
