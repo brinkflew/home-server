@@ -93,8 +93,6 @@ const RUNTIME_MAX_S = 5400; // RuntimeMaxSec on the lane scope
 const JOB_STUCK_S = 10800; // what ci.job_stuck grades on: 2x the above
 const HEARTBEAT_STALE_S = 300; // what ci.heartbeat grades on: ten missed polls
 
-const LANE_TONES: NonNullable<ChartSeries["tone"]>[] = ["ok", "warn", "fail"];
-
 interface Lane {
   lane: string;
   tone: Tone;
@@ -228,14 +226,27 @@ const beat = computed(() => {
 // different instant while looking exactly as correct. Hover the disk chart and
 // the same second is marked on jobs, memory and processes.
 
+/**
+ * NO PER-LANE TONE. The lanes carry no `tone`, so they take the chart's and are
+ * separated by the brightness ramp - which is the rule charts.ts states in
+ * capitals, and which the two GPU cards on /system already follow.
+ *
+ * They used to be ["ok", "warn", "fail"], hue as identity, and the cost was two
+ * bands up on this same page: the lanes table draws a healthy lane 3's rail
+ * teal from laneTone(), while the chart below it drew that lane's disk line
+ * red, permanently, in the colour every other panel here uses for a failure.
+ * Hue is status on this dashboard or it is nothing.
+ *
+ * THE RAMP FLOORS AT 0.5, so a fourth lane would be drawn identically to the
+ * third and only the legend would tell them apart. The driver creates three.
+ */
 function laneSeries(rows: RangeSeries[]): ChartSeries[] {
   return rows
     .slice()
     .sort((a, b) => Number(a.metric.lane) - Number(b.metric.lane))
-    .map((s, i) => ({
+    .map((s) => ({
       points: toPoints(s.values),
       label: `lane ${s.metric.lane}`,
-      tone: LANE_TONES[i % LANE_TONES.length],
     }));
 }
 

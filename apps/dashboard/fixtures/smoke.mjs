@@ -15,6 +15,7 @@ const { sortRows, actionFor, badgeFor, whoLine, stateClass, STATE_LABEL, STATE_T
   await load("/src/media.ts");
 const { posterHeight, posterUrl } = await load("/src/images.ts");
 const { containerTone, laneTone, quotaTone, heartbeatTone } = await load("/src/health.ts");
+const { seriesStyle, bandOpacity } = await load("/src/charts.ts");
 const { fleetDocument, fleetUnreadable } = await load("/fixtures/fleet.ts");
 const {
   roundState,
@@ -1614,6 +1615,39 @@ if (battery === null) {
   );
   check("every host-side id is a check the battery emits",
     HOST_IDS.filter((id) => !emittedCi.has(id)), []);
+}
+
+// --- how a series is drawn, and what the legend copies ----------------------
+// charts.ts had never been loaded here: the drawing is a computed in a .vue
+// file, which this harness structurally cannot reach, so the legend disagreed
+// with the lines for as long as it existed on a chart that was not a stack.
+// seriesStyle is the one derivation both now call, and it is a plain module.
+{
+  const chart = { tone: "warn" };
+
+  check("a series' own tone beats the chart's",
+    seriesStyle({ points: [], tone: "fail" }, 0, chart).fill, "var(--fail)");
+  check("...and the chart's is the fallback",
+    seriesStyle({ points: [] }, 0, chart).fill, "var(--warn)");
+  check("no tone anywhere is ok, not a crash",
+    seriesStyle(undefined, 0, {}).fill, "var(--ok)");
+
+  const ramp = [0, 1, 2, 3, 4].map((i) => seriesStyle({ points: [] }, i, {}).opacity);
+  check("the line ramp separates without ranking", ramp.slice(0, 3), [1, 0.7, 0.5]);
+  check("...and floors, so a fourth line needs the legend", ramp.slice(3), [0.5, 0.5]);
+
+  // A per-series tone is NOT drawn on a stack - bands are one tone at five
+  // brightnesses - so the key must not invent one either.
+  const band = seriesStyle({ points: [], tone: "fail" }, 1, { ...chart, stacked: true });
+  check("a stack ignores the series tone, as the drawing does", band.fill, "var(--warn)");
+  check("...and takes the band ramp", band.opacity, bandOpacity(1));
+
+  check("a mirrored pair is separated by position, not brightness",
+    seriesStyle({ points: [] }, 1, { mirror: true }).opacity, 1);
+  check("an explicit opacity outranks the ramp",
+    seriesStyle({ points: [], opacity: 0.25 }, 1, {}).opacity, 0.25);
+  check("...and the mirror",
+    seriesStyle({ points: [], opacity: 0.25 }, 1, { mirror: true }).opacity, 0.25);
 }
 
 await server.close();

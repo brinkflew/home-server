@@ -550,6 +550,71 @@ export function bandOpacity(index: number): number {
   return BAND_OPACITY[Math.min(Math.max(index, 0), BAND_OPACITY.length - 1)];
 }
 
+/** The hue and the brightness one series is drawn at. */
+export interface SeriesStyle {
+  fill: string;
+  opacity: number;
+}
+
+/**
+ * How a series is ACTUALLY drawn - and therefore what its swatch in the legend
+ * has to be.
+ *
+ * ONE function, called by the drawing and by the key, because a key that
+ * derives its own answer is a key that can disagree with the lines it names.
+ * That is not hypothetical: the legend was written for the memory stack, where
+ * every band shares the chart's tone and `bandOpacity` is genuinely the ramp in
+ * use, so its two shortcuts could not fail on the only chart it had. Put on an
+ * unstacked multi-series chart, both were wrong at once - three lanes with
+ * three tones drawn as three identical washed-out swatches - while the crosshair
+ * readout, three functions away in the same file, had the derivation right the
+ * whole time.
+ *
+ * ON A STACK THE SERIES' OWN TONE IS IGNORED, which is not an oversight. Bands
+ * are one tone at five brightnesses by the rule on BAND_OPACITY above, so a
+ * per-series tone is not drawn, and a key claiming one would be inventing it.
+ *
+ * `index` IS THE BAND INDEX ON A STACK, NOT THE SERIES INDEX. stackedAreaPaths
+ * drops any series with no finite point at all - a resource this host does not
+ * have - and renumbers what is left, so passing the series index shifts every
+ * band's brightness the moment one is absent.
+ */
+export function seriesStyle(
+  s: ChartSeries | undefined,
+  index: number,
+  options: {
+    tone?: NonNullable<ChartSeries["tone"]>;
+    stacked?: boolean;
+    mirror?: boolean;
+  } = {},
+): SeriesStyle {
+  const chart = options.tone ?? "ok";
+  if (options.stacked) return { fill: `var(--${chart})`, opacity: bandOpacity(index) };
+
+  const fill = `var(--${s?.tone ?? chart})`;
+
+  // A SERIES MAY OVERRIDE THE RAMP, and the CPU card is why: twelve cores are
+  // twelve of the same thing, so they take one flat opacity and the mean takes
+  // full weight over them. A ramp there would rank them.
+  if (s?.opacity !== undefined) return { fill, opacity: s.opacity };
+
+  // A MIRRORED PAIR IS SEPARATED BY POSITION, NOT BRIGHTNESS. Dimming the
+  // downward half would say it matters less.
+  if (options.mirror) return { fill, opacity: 1 };
+
+  // Brightness separates overlapping lines. It is NOT a ranking - these are the
+  // same measurement on two cards, and the key and the readout name them in the
+  // same order - so the step is gentle enough not to read as one being demoted.
+  //
+  // NOT DASHED. The dashed grey rule in every chart is the median, and a dashed
+  // coloured line beside it reads as a second reference line rather than as
+  // data.
+  //
+  // THE FLOOR IS WHERE THIS STOPS DISCRIMINATING: a fourth line is drawn at the
+  // same 0.5 as the third, and only the legend then tells them apart.
+  return { fill, opacity: Math.max(0.5, 1 - index * 0.3) };
+}
+
 /**
  * max(|v|) across every series, mirrored about zero.
  *

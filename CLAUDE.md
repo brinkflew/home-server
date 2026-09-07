@@ -825,6 +825,14 @@ signal read green.
   the list - and no fixture had one, so nothing could see it. `checkTone()` is the one mapping.
 - **The dead man's switch was rendered as a warning.** Filtered out now; and because hiding it must
   not hide its absence, a response without it raises a `fail` line in its place.
+- **The legend was right on the one chart it was written for, and reuse broke it.** The swatch took
+  the CHART's tone and the STACK's ramp; the lines take the series' own and a different ramp - so
+  `/ci` drew three lanes teal, orange and red under three identical faint teal swatches, listed
+  backwards. The correct copy was three functions away in the same file. `seriesStyle()` is the one
+  copy now, and its index is the BAND index or an absent swap device shifts every brightness.
+- **The hue it was failing to copy should not have existed**: `LANE_TONES` made a healthy lane 3 red
+  for ever, beside a table drawing its rail teal. Hue is status; brightness separates, and floors at
+  0.5. `charts.ts` had never been loaded by smoke at all.
 
 ### The credential that could not read the number, and four defects on the path to it
 - A `claude setup-token` gets **403 `user:profile`** from `GET /api/oauth/usage`, which a signed-in

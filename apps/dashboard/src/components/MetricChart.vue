@@ -26,7 +26,6 @@
 import { computed, ref, useId } from "vue";
 import {
   areaPath,
-  bandOpacity,
   extent,
   linePath,
   latest,
@@ -38,6 +37,7 @@ import {
   stackExtent,
   stackedAreaPaths,
   symmetricExtent,
+  seriesStyle,
   yTicks,
   type AxisTickY,
   type ChartSeries,
@@ -183,36 +183,41 @@ const multi = computed(() => lines.value.length > 1);
 
 const bands = computed(() => (props.stacked ? stackedAreaPaths(lines.value, frame.value) : []));
 
+/** The bands with their fill resolved, so the drawing, the crosshair dots and
+ *  the key take one answer and the template calls no function.
+ *
+ *  THE BAND INDEX, NOT THE SOURCE INDEX: stackedAreaPaths drops a series with
+ *  no finite point at all and renumbers, so `source` would shift every
+ *  brightness the moment a host had no swap device. */
+const bandDraw = computed(() =>
+  bands.value.map((b) => {
+    const st = seriesStyle(lines.value[b.source], b.index, { tone: props.tone, stacked: true });
+    return { ...b, fill: st.fill, opacity: st.opacity, edgeOpacity: Math.min(0.55, st.opacity + 0.18) };
+  }),
+);
+
 /** The only place the mirror's sign exists. Everything else - peak, median,
  *  latest, the readout - keeps positive magnitudes. */
 function signed(s: ChartSeries): Point[] {
   return s.direction === "down" ? s.points.map(([t, v]) => [t, -v] as Point) : s.points;
 }
 
+/** THE HUE AND THE BRIGHTNESS COME FROM `seriesStyle`, WHICH THE LEGEND ALSO
+ *  CALLS. Every rule they used to encode - the ramp, the mirror, the per-series
+ *  override - moved into it verbatim; what changed is that there is now one
+ *  copy of them rather than two that could drift, which they had. */
 const drawn = computed(() =>
   props.stacked
     ? []
-    : lines.value.map((s, i) => ({
-        d: linePath(signed(s), frame.value),
-        stroke: `var(--${s.tone ?? props.tone})`,
-        // Brightness separates overlapping lines. It is NOT a ranking - these
-        // are the same measurement on two cards, and the readout names them in
-        // the same order - so the step is gentle enough not to read as one
-        // being demoted.
-        //
-        // A MIRRORED PAIR IS SEPARATED BY POSITION, NOT BRIGHTNESS. Dimming the
-        // downward half would say it matters less.
-        //
-        // A SERIES MAY OVERRIDE THE RAMP, and the CPU card is why: twelve cores
-        // are twelve of the same thing, so they take one flat opacity and the
-        // mean takes full weight over them. A ramp there would rank them.
-        //
-        // NOT DASHED. The dashed grey rule in every chart is the median, and a
-        // dashed coloured line beside it reads as a second reference line
-        // rather than as data.
-        opacity: s.opacity ?? (props.mirror ? 1 : Math.max(0.5, 1 - i * 0.3)),
-        width: s.width ?? 1.4,
-      })),
+    : lines.value.map((s, i) => {
+        const st = seriesStyle(s, i, { tone: props.tone, mirror: props.mirror });
+        return {
+          d: linePath(signed(s), frame.value),
+          stroke: st.fill,
+          opacity: st.opacity,
+          width: s.width ?? 1.4,
+        };
+      }),
 );
 
 /** Only for a single, unstacked series: two translucent fills read as mud, and
@@ -224,6 +229,10 @@ const mid = computed(() =>
     : "",
 );
 
+/** THE CHART'S OWN TONE, AND THE AREA GRADIENT IS ALL THAT MAY USE IT. Anything
+ *  drawing a SERIES goes through `seriesStyle`, which falls back to this only
+ *  when the series has no tone of its own - reaching for it directly is how the
+ *  legend came to paint three differently-toned lanes one colour. */
 const stroke = computed(() => `var(--${props.tone})`);
 
 /** A gradient id has to be unique per instance or the first one on the page
@@ -313,10 +322,10 @@ const cursor = computed(() => {
     const i = nearest ? grid.value.findIndex((p) => p[0] === nearest[0]) : -1;
     if (i < 0) return { x, dots: [] };
 
-    const dots = bands.value.map((b) => ({
+    const dots = bandDraw.value.map((b) => ({
       y: b.tops[i],
-      fill: stroke.value,
-      opacity: bandOpacity(b.index),
+      fill: b.fill,
+      opacity: b.opacity,
       value: sampleAt(lines.value[b.source].points, t)?.[1] ?? Number.NaN,
       label: b.label,
     }));
@@ -393,24 +402,54 @@ const readout = computed(() => {
   return { time: fmt.clock(t), rows };
 });
 
-/** Top band first, so the list reads down in the order the bands are drawn up.
- *  The swatch opacity is the same bandOpacity the fill uses, so the legend
- *  cannot drift from the drawing. */
-const legendRows = computed(() =>
-  lines.value
-    .map((s, i) => ({
-      label: s.label ?? `band ${i}`,
-      opacity: bandOpacity(i),
-      value: props.format
-        ? props.format(
-            cross.at.value === null
-              ? latest(s.points)
-              : (sampleAt(s.points, cross.at.value)?.[1] ?? Number.NaN),
-          )
-        : "",
-    }))
-    .reverse(),
-);
+/**
+ * The key, taken from the same `seriesStyle` that draws the line - hue and
+ * brightness both - so it cannot name a line it does not match. It could, and
+ * it did: this was written for the memory stack, where the chart's own tone and
+ * `bandOpacity` happen to be the right answers, and it kept using them on
+ * charts where neither was.
+ *
+ * ON A STACK IT IS BUILT FROM THE BANDS, top-first so the list reads down in
+ * the order they are drawn up. A series dropped for having no finite point at
+ * all is not named, because it is not on the chart - and reading `lines` here
+ * is what would name it.
+ *
+ * ON LINES IT IS BUILT FROM THE SERIES, in drawing order, which is the order
+ * the readout uses. Reversing there put the same three series on screen in two
+ * orders. Every series is listed including an empty one: absence renders as a
+ * dash through `format`, and a missing row would be a claim.
+ */
+const legendRows = computed(() => {
+  const reading = (points: Point[]) =>
+    props.format
+      ? props.format(
+          cross.at.value === null
+            ? latest(points)
+            : (sampleAt(points, cross.at.value)?.[1] ?? Number.NaN),
+        )
+      : "";
+
+  if (props.stacked) {
+    return bandDraw.value
+      .map((b) => ({
+        label: b.label ?? `band ${b.index}`,
+        fill: b.fill,
+        opacity: b.opacity,
+        value: reading(lines.value[b.source].points),
+      }))
+      .reverse();
+  }
+
+  return lines.value.map((s, i) => {
+    const st = seriesStyle(s, i, { tone: props.tone, mirror: props.mirror });
+    return {
+      label: s.label ?? `series ${i}`,
+      fill: st.fill,
+      opacity: st.opacity,
+      value: reading(s.points),
+    };
+  });
+});
 
 function onMove(event: PointerEvent): void {
   over.value = true;
@@ -505,21 +544,15 @@ function onLeave(): void {
         />
 
         <g v-if="stacked">
+          <path v-for="b in bandDraw" :key="b.index" :d="b.d" :fill="b.fill" :opacity="b.opacity" />
           <path
-            v-for="b in bands"
-            :key="b.index"
-            :d="b.d"
-            :fill="stroke"
-            :opacity="bandOpacity(b.index)"
-          />
-          <path
-            v-for="b in bands"
+            v-for="b in bandDraw"
             :key="`e${b.index}`"
             :d="b.edge"
             fill="none"
-            :stroke="stroke"
+            :stroke="b.fill"
             stroke-width="1"
-            :opacity="Math.min(0.55, bandOpacity(b.index) + 0.18)"
+            :opacity="b.edgeOpacity"
             vector-effect="non-scaling-stroke"
           />
         </g>
@@ -613,7 +646,7 @@ function onLeave(): void {
 
     <ul v-if="legend" class="legend mono">
       <li v-for="r in legendRows" :key="r.label">
-        <span class="swatch" :style="{ background: stroke, opacity: r.opacity }" />
+        <span class="swatch" :style="{ background: r.fill, opacity: r.opacity }" />
         <span class="l-name">{{ r.label }}</span>
         <span class="l-value">{{ r.value }}</span>
       </li>

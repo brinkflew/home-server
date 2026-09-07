@@ -1866,6 +1866,33 @@ answering; four had never served a single query and were deleted.
   above the real ones and inflated the firing count. It is filtered out now - but **hiding it must
   not hide its absence**, which is the only thing it was ever able to say, so a response that does
   not contain it raises a `fail` line in its place.
+- **THE LEGEND WAS CORRECT ON THE ONE CHART IT WAS WRITTEN FOR, AND REUSE IS WHAT BROKE IT.** The
+  swatch bound `background: stroke` - the CHART's tone - where a line is drawn at the SERIES' own,
+  and took its brightness from `bandOpacity` (`0.42 / 0.30 / 0.20`) where a line uses
+  `Math.max(0.5, 1 - i * 0.3)` (`1.0 / 0.7 / 0.5`); it also ended in a `.reverse()` the crosshair
+  readout does not, so one component listed one set of series in two orders. **All three are
+  stacked-chart assumptions**, and on the memory stack it was written for every band shares the
+  chart's tone and `bandOpacity` really is the ramp - so **not one of them could fail until the prop
+  was put on an unstacked chart**, where `/ci` drew three lanes in teal, orange and red under three
+  identical faint teal swatches. The correct derivation was in the same file the whole time, three
+  functions away, in the readout - the same shape as the `note` bullet above and as *"one artefact
+  for two readers"*. `seriesStyle()` is the single copy now; `stroke` survives only for the area
+  gradient and says so. Two things reading either half alone would miss: a **per-series tone is not
+  drawn on a stack**, so the key must not invent one, and its **`index` is the BAND index there** -
+  `stackedAreaPaths` drops a series with no finite point at all and renumbers, so a host with no swap
+  device would have shifted every remaining band's brightness. That second one was live and
+  unreachable only because all four memory bands are always present.
+- **The hue it was failing to copy should not have existed.** `LANE_TONES = ["ok", "warn", "fail"]`
+  made lane 3 red permanently - hue as identity, where hue is status everywhere else on this
+  dashboard - so the lanes table drew a healthy lane 3's rail teal from `laneTone()` and the chart
+  below drew that lane's disk line in the failure colour. **Fixing only the legend would have
+  published that as a formal key.** `charts.ts` states the rule in capitals one function above the
+  ramp; `/system` follows it for the two GPU cards; `/agents/fleet` shows what hue is for - `runs`
+  teal, `runsFailed` red **because they are failures**. Brightness separates the lanes now, and it
+  **floors at 0.5**, so a fourth lane would be indistinguishable from the third and only the legend
+  would name it. And `charts.ts` had never been loaded by `fixtures/smoke.mjs` at all: four
+  extractions have been made into plain modules *because* a computed in a `.vue` file is unreachable,
+  and nobody checked whether the module those computeds already call was reachable.
 
 ## The credential that could not read the number, and four defects on the path to it
 

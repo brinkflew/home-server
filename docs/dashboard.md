@@ -1262,3 +1262,43 @@ window rolled over after seventy-two and turned a rejection into *cleared*. It w
 screenshot that contradicted one taken minutes earlier. Same family as the `dayRamp` clamp above, same
 cause, and the `() =>` is exactly what made it look correct. Ages nothing grades on - a 41-day boot
 time, a container's uptime - keep the captured `now` deliberately.
+
+**The legend named lines it did not match, and it had been right on the only chart it was written
+for.** Reported off the live `/ci`: three lanes drawn teal, orange and red under three faint teal
+swatches, listed `lane 3 / lane 2 / lane 1`. Three symptoms, one cause. The swatch bound
+`background: stroke`, which is the CHART's tone, where a line is drawn at the SERIES' own; it took its
+brightness from `bandOpacity` - `0.42 / 0.30 / 0.20` - where a line uses `Math.max(0.5, 1 - i * 0.3)`
+- `1.0 / 0.7 / 0.5`; and it ended in `.reverse()`, which the crosshair readout does not, so one
+component listed one set of series in two orders. **All three are stacked-chart assumptions.** The
+prop's own docblock says where they came from - *"Name the bands under the chart. A stack whose bands
+are unlabelled is four shades of teal"* - and on that stack every band shares the chart's tone and
+`bandOpacity` really is the ramp, so **none of the three could fail until the prop was reused**. The
+correct derivation was in the same file the whole time, three functions away, in the readout.
+
+**`seriesStyle()` in `charts.ts` is the repair, and the point of it is that there is one copy.** The
+drawing, the stacked bands, the stacked crosshair dots and the key all call it; `stroke` survives only
+for the area gradient and now carries a comment saying so. Two rules it has to encode that reading
+either half alone would miss: **a per-series tone is not drawn on a stack**, so the key must not
+invent one, and **its `index` is the BAND index there, not the series index** - `stackedAreaPaths`
+drops a series with no finite point at all and renumbers, so a host with no swap device would have
+shifted every remaining band's brightness. That second one was a live bug, unreachable today only
+because all four memory bands are always present.
+
+**Underneath it was a hue that should not have existed.** `LANE_TONES = ["ok", "warn", "fail"]` made
+lane 3 red permanently - hue as identity, on a dashboard where hue is status - and fixing only the
+legend would have printed that as a formal key. `charts.ts` states the rule in capitals one function
+above the ramp, `/system` follows it for the two GPU cards, and `/agents/fleet` shows what hue is
+actually for: `runs` teal, `runsFailed` **red because they are failures**. The cost was on screen two
+bands up on the same page - the lanes table draws a healthy lane 3's rail teal from `laneTone()`. The
+lanes now carry no tone at all and the brightness ramp separates them; **it floors at 0.5**, so a
+fourth lane would be indistinguishable from the third and only the legend would name it. The driver
+creates three.
+
+**`charts.ts` had never been loaded by `fixtures/smoke.mjs`** - the drawing is a computed in a `.vue`
+file, which is the reason `machine.ts`, `roundboard.ts`, `control.ts` and `lanes.ts` all exist, and
+nobody had noticed that the module those computeds call was reachable all along. Ten assertions now,
+and all four planted defects were **proved to fire** before any of them was trusted: the chart tone in
+the fill reproduces `var(--warn)` for a `fail` series, and `bandOpacity` in the line branch reproduces
+`0.42 / 0.30 / 0.20` - which are the exact values off the screenshot. Confirmed in a browser
+afterwards, because no fixture hovers a plot: the legend, the drawn `stroke`/`opacity` and the readout
+now report the same two pairs in the same order, on four plots sharing one cursor and one readout.
