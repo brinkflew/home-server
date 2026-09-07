@@ -306,24 +306,42 @@ watcher, where nothing on the page showed it. The drawer opened perfectly for an
 and not at all for anyone using a keyboard. `shoot.mjs` reports `pageerror`, which is how it was
 found; it is a `querySelector` now.
 
-**THE BOARD SHOWS WHAT IS LIVE, OWED OR STILL RECOVERABLE, SINCE 2026-09-07.** The only filter was
-`isSettled` - closed AND merged - which is far too weak to be the only one: `stopped`,
-`superseded`, `not published` and `in review` all stayed for ever, so eleven rounds sat on one
-worktree, most of them dead, with the live one somewhere in the list. `roundOutcome` in
-`src/fleet.ts` puts a round in one of four classes and the toggle now says `show N finished`,
-still printing its count whether or not it is on.
+**THE BOARD DROPS ONLY WHAT NOTHING CAN REACH, SINCE 2026-09-07.** `isSettled` was the whole
+filter - closed AND merged - so a lane's entire dead history stayed: eleven rounds on one worktree,
+most of them stopped, with the live one somewhere in the list. `roundOutcome` in `src/fleet.ts` puts
+a round in one of five classes and the toggle says `show N finished`, still printing its count
+whether or not it is on.
+
+**A ROUND IS FINISHED WHEN ITS WORK HAS LANDED, WHICH IS `merged` AND NOTHING ELSE - AND THE FIRST
+VERSION OF THIS EMPTIED THE LIVE BOARD.** It called every closed state but `stopped` finished, which
+is wrong in the direction that hides the thing a person is meant to act on: `in review` is a pull
+request open on GitHub waiting for somebody. Measured on the live host the day it shipped - **19
+rounds, of which the only one on the current lane was in review** - so the page drew an empty table
+and offered `show 19 finished` over a fleet with two pull requests outstanding.
+
+**`isSettled` HAD THE RULE RIGHT ALL ALONG** and its own comment says why: hiding requires POSITIVE
+EVIDENCE. `pr_state` is `unknown` whenever GitHub could not be asked, so a round nobody could confirm
+stays - which is also why `published` and `not published` are on the board. Neither is a claim that
+the work landed.
+
+**TWO EXCEPTIONS, AND NEITHER CONTRADICTS IT.** A `superseded` round's work is on the board under
+the round that carried it, so drawing both is the defect that made one task render twice, once
+asking for attention nobody owed. And a `stopped` round that is not its lane's current one is
+history nothing can reach - conduct keeps one row per worktree, so no control can address it.
 
 **IT DERIVES FROM `roundState` RATHER THAN FROM ITS CONDITIONS AGAIN, and the first version proved
-why.** Re-testing `pr_url`, `superseded` and the rest got two of eleven states wrong on its first
-live rendering - `published` and `not published` both fell through to recoverable, so the board
-offered to restart rounds that had reached the publish path and ended. Eleven states in one function
-and a subset of its conditions in another is a drift no fixture can see. **This is not the
-`closed_why` habit**: that rule refuses conduct's PROSE, written in another repository; this asks
-this application's own vocabulary, which is derived structurally two functions down.
+why twice.** Re-testing `pr_url`, `superseded` and the rest got two of eleven states wrong on its
+first live rendering. Eleven states in one function and a subset of its conditions in another is a
+drift no fixture can see. **This is not the `closed_why` habit**: that rule refuses conduct's PROSE,
+written in another repository; this asks this application's own vocabulary, which is derived
+structurally two functions down.
 
-**AND `recoverable` IS DEFINED AS THE CLASS `roundControls` OFFERS SOMETHING ON.** The two must not
-drift, because a button on a row nobody can see is the failure the pairing exists to prevent - and
-`fixtures/smoke.mjs` asserts exactly that over every fixture round.
+**NOTHING IS OFFERED ON A ROUND THAT REACHED THE PUBLISH PATH.** `unmerged` is on the board - its
+pull request is the thing a person acts on - but it is not a round the fleet can take up again: a
+restart would force-push over the branch an open pull request points at, which is the hazard the
+stable task-shaped branch name already carries. What to do about one of these is on GitHub, and the
+row links straight there. So `roundControls` returns nothing for `unmerged` and `finished` alike,
+and `fixtures/smoke.mjs` asserts that no hidden round has a button on it.
 
 **A ROUND CAN BE ACTED ON FROM THE ROW NOW, AND A STOPPED ONE COULD NOT BE AT ALL.**
 `roundControls` returned an empty list for anything closed, so the row a person most wants to act on
@@ -364,10 +382,25 @@ a click handler covers the rest, skipping anything inside `a, button, input, lab
 The disabled chips render as spans and match none of those, which is what `data-noclick` is for.
 
 **THE PROGRESS BAR BECAME A RAIL OF NAMED STEPS.** `done 5/5` was already the line above it, so the
-bar drew the same number as a shape and added nothing; a round has five named steps in a fixed
-order and which one it is on is what a reader is looking for. `ProgressBar` stays - four other call
-sites are genuine ratios, and its null-versus-zero contract is right. The names print above the 900
-rung and are dropped below it, where the cell is 200px; each node keeps its own `title`.
+bar drew the same number as a shape and added nothing; a round has named steps in a fixed order and
+which one it is on is what a reader is looking for. `ProgressBar` stays - four other call sites are
+genuine ratios, and its null-versus-zero contract is right. The names print above the 900 rung and
+are dropped below it, where the cell is 200px; each node keeps its own `title`.
+
+**AND THE RAIL HAS SIX STEPS, BECAUSE conduct RUNS FIVE AND A CHANGE TAKES SIX.** The fifth ends
+with a pull request; what settles the change is somebody merging it, and until `merge` was on the
+rail a round whose work was still sitting on a branch read `done 5/5` - the same reading as one that
+had landed. **The step is added in `roundSteps` and never in the collector**: `FleetRound.phases` is
+conduct's own declared sequence, and writing a step into it that no `conduct_*` handler exists for
+would be the document claiming the fleet runs something it does not.
+
+**IT IS DONE ONLY ON POSITIVE EVIDENCE**, the same rule as the filter one panel up: `pr_state`
+`unknown` draws it as not-yet rather than as landed, and a round that will never merge - stopped,
+declined, timed out - leaves it hollow, which is what happened. **The word is dropped once conduct's
+five are behind it**, because no phase is running: `r.phase` is the last one that ran and `ship 5/6`
+reads as a ship phase in flight. `awaiting merge` was the obvious replacement and is worse - it is a
+claim, and false on every round that was declined or stopped after publishing. So the fraction
+stands alone and the state pill beside it says which nothing it is.
 
 **AND THE `Right now` CONDITIONS ARE THREE EQUAL COLUMNS AT AND ABOVE 900.** The argument against
 that was about a different panel: the header it replaced WAS five facts - conduct, phase, quota,

@@ -1462,6 +1462,19 @@ signal read green.
 - An answer outside its schema is kept VERBATIM, and a key this bundle has never heard of is still
   drawn: the schemas move in another repository. The `result` event was drawn nowhere at all.
 
+### A filter that hid everything, and the rail that drew five of six steps
+- The board's first filter called every closed state but `stopped` finished, which hides `in review`
+  - a pull request waiting on a person. Measured live: **19 rounds, the only one on the current lane
+  in review**, so the page drew an empty table under `show 19 finished`. `isSettled` had the rule one
+  function away: closed AND merged, because hiding requires positive evidence.
+- Superseded and a stopped round that is not its lane's current one are the two exceptions, and
+  neither contradicts it: one is on the board under the round that carried it, the other is
+  unreachable. No fixture could have caught this - every fixture round has its own worktree.
+- **conduct runs five phases and a change takes six.** `merge` is added in `roundSteps` and never in
+  the collector, done only on positive evidence, and the phase word is dropped once conduct's five
+  are behind it - `ship 5/6` reads as a phase in flight and `awaiting merge` is false on a round
+  that was declined. `roundProgress` went with the bar it fed.
+
 ### A class on a component lands on its root, and so does the component's own
 - `class="rail"` on `<PhaseSteps>` matched the component's OWN `.rail`, made its root a flex
   container and collapsed the rail to 142px of 620. The mirror of the fold-class trap already here.

@@ -280,8 +280,16 @@ export function roundControls(
   control: FleetControl,
   nowUnix: number,
 ): ControlOffer[] {
+  // NOTHING IS OFFERED ON A ROUND THAT REACHED THE PUBLISH PATH. `unmerged` is
+  // on the board - its pull request is the thing a person acts on, and hiding
+  // it would hide the round's only output - but it is not a round the fleet can
+  // take up again. A restart would force-push over a branch an open pull
+  // request is pointing at, which is the hazard `publish.branch_name`'s stable
+  // task-shaped name already carries: a pull request changing under an
+  // approval. What to do about one of these is on GitHub, and the row links
+  // straight there.
   const klass = roundOutcome(round);
-  if (klass === "finished") return [];
+  if (klass === "finished" || klass === "unmerged") return [];
 
   const unavailable = control.available
     ? null

@@ -156,13 +156,17 @@ export const useFleetStore = defineStore("fleet", () => {
   /**
    * What the board shows by default: live, owed, or still recoverable.
    *
-   * `openRounds` WAS THE ONLY FILTER AND IT WAS TOO WEAK. It hides a finished
-   * round whose pull request is merged and nothing else, so `stopped`,
-   * `superseded`, `not published` and `in review` all sat on the board for ever
-   * - eleven rounds on one worktree, most of them dead, with the live one
-   * somewhere in the list. This asks the question the page exists for: is this
-   * a round the machine is working on, one that owes me an answer, or one I can
-   * still do something about.
+   * `openRounds` WAS THE ONLY FILTER AND IT WAS TOO WEAK - it hides a merged
+   * round and nothing else, so a lane's whole dead history sat on the board with
+   * the live round somewhere in the list. Eleven rounds on one worktree; on the
+   * live host, nineteen.
+   *
+   * WHAT IT HAD RIGHT WAS THE RULE FOR A ROUND THAT PRODUCED SOMETHING. A round
+   * is over when its work has LANDED, and an open pull request has not - so
+   * `roundOutcome` keeps every unmerged outcome and drops only what nothing can
+   * reach: merged, superseded, and a stopped round on a lane that has moved on.
+   * The first version dropped every closed state but `stopped` and emptied the
+   * live board, because the only round on the current lane was in review.
    *
    * `openRounds` STAYS, because two counts in the band header answer two
    * different questions and neither is this one.

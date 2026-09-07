@@ -228,8 +228,8 @@ function weight(phase: RoundPhase): string {
            reader hover for it. -->
       <PhaseSteps
         class="steprail"
-        :phases="row.r.phases"
-        :done="row.r.done"
+        :phases="row.steps.phases"
+        :done="row.steps.done"
         :current="row.r.phase"
         :label="row.phase"
         :tone="row.tone"

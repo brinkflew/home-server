@@ -4341,6 +4341,44 @@ Recorded 2026-09-07, with the board's filter, the step rail and the three render
   `subtype` is the only thing that tells a phase which hit `--max-budget-usd` from a broken
   `make install`.
 
+### A filter that hid everything, and the rule it should have read off the function beside it
+
+- **The first cut of the board's filter emptied the live board.** It called every closed state but
+  `stopped` finished, which hides the one thing a person is meant to act on: `in review` is a pull
+  request open on GitHub waiting for somebody. Measured on the live host the day it shipped - **19
+  rounds, of which the only one on the current lane was in review** - so the page drew an empty
+  table and offered `show 19 finished` over a fleet with two pull requests outstanding.
+- **`isSettled` HAD THE RULE ALL ALONG and it is one function away**: closed AND `pr_state ===
+  "merged"`, with its own comment saying hiding requires POSITIVE EVIDENCE. `unknown` means GitHub
+  could not be asked, so a round nobody could confirm stays - which is why `published` and
+  `not published` belong on the board too. Neither is a claim that the work landed.
+- **Two exceptions, and neither contradicts it.** A superseded round's work is on the board under
+  the round that carried it; a stopped round that is not its lane's current one is history no
+  control can address, because conduct keeps one row per worktree.
+- **The fixture could not have caught it and the screenshot could not either.** Every fixture round
+  had a distinct worktree and a spread of states, so the default view was never empty there. What
+  the live host has is nineteen rounds on one lane - the same shape that hid the duplicate `v-for`
+  key - so the assertion that shipped with the fix is that the default view is NOT empty on a fleet
+  with unmerged work.
+
+### The rail drew five steps for a change that takes six
+
+- **conduct runs five phases and a change is not finished when the fifth ends.** The fifth produces
+  a pull request; what settles the change is somebody merging it, so `done 5/5` was the reading
+  given both to a round still sitting on a branch and to one that had landed.
+- **The step is added in `roundSteps` and never in the collector.** `FleetRound.phases` is conduct's
+  own declared sequence, and writing `merge` into it would be the document claiming the fleet runs a
+  phase no `conduct_*` handler exists for. Presentation over a fact belongs beside the board.
+- **It is done only on positive evidence**, the same rule the filter reads: `pr_state` `unknown`
+  draws it as not-yet rather than as landed, and a round that will never merge leaves it hollow.
+- **The word is dropped once conduct's five are behind it.** `r.phase` is then the last phase that
+  RAN, so `ship 5/6` reads as a ship phase in flight. `awaiting merge` is the obvious replacement
+  and is worse: it is a claim, and it is false on every round that was declined, timed out or
+  stopped after publishing. The fraction stands alone and the state pill says which nothing it is.
+- **`roundProgress` went with it.** The step rail replaced the bar at both call sites, so a 0..1
+  ratio was left computed on every row and drawn nowhere - the shape this document already names
+  three times in the collector.
+
 ### A class on a component lands on its root, and so does the component's own
 
 - **`class="rail"` on `<PhaseSteps>` matched PhaseSteps' OWN scoped `.rail`** - the rule for its

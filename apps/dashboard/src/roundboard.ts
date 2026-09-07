@@ -23,8 +23,9 @@ import {
   roundBranch,
   roundError,
   roundEtaAt,
-  roundProgress,
   roundState,
+  roundSteps,
+  MERGE_STEP,
 } from "@/fleet";
 import { holdExpiresIn, roundControls } from "@/control";
 import type { ControlOffer } from "@/control";
@@ -45,7 +46,8 @@ export interface BoardRow {
   state: string;
   tone: Tone;
   action: ReturnType<typeof roundAction>;
-  progress: number | null;
+  /** The six steps and which are behind this round, derived once. */
+  steps: ReturnType<typeof roundSteps>;
   eta: string;
   elapsed: string;
   phaseClock: string | null;
@@ -61,13 +63,29 @@ export interface BoardRow {
   waiting: boolean;
 }
 
-/** The phase in flight, and its position in the round's own sequence. Reads
- *  "dev 2/5" while running and "done 5/5" once every phase has finished. */
+/**
+ * The phase in flight, and its position in the six steps of a change.
+ *
+ * READS "dev 2/6" WHILE RUNNING AND "done 6/6" ONCE IT HAS MERGED. The
+ * denominator gained the merge on 2026-09-07, which is what stopped a round
+ * whose work was still sitting on a branch reading the same "done 5/5" as one
+ * that had landed.
+ *
+ * AND THE WORD IS DROPPED IN BETWEEN, WHICH IS THE ONLY HONEST THING IT CAN DO.
+ * Once conduct's five are behind it, no phase is running: `r.phase` is the last
+ * one that ran, and printing `ship 5/6` reads as a ship phase in flight. The
+ * obvious replacement is worse - "awaiting merge" is a claim, and it is false on
+ * every round that was declined, timed out or stopped after publishing. So the
+ * fraction stands alone and the state pill beside it says which nothing it is.
+ */
 export function phaseLabel(r: FleetRound): string {
-  const total = r.phases.length || 0;
-  const at = r.done.length;
-  if (!total) return r.phase ?? "no phase";
+  const { phases, done } = roundSteps(r);
+  const total = phases.length;
+  const at = done.length;
   if (at >= total) return `done ${at}/${total}`;
+  // conduct's OWN five, which is what decides whether a phase can be running.
+  const byConduct = done.filter((name) => name !== MERGE_STEP).length;
+  if (byConduct >= total - 1) return `${at}/${total}`;
   return `${r.phase ?? "no phase"} ${at}/${total}`;
 }
 
@@ -149,7 +167,7 @@ export function boardRow(r: FleetRound, ctx: BoardContext): BoardRow {
     r,
     ...roundState(r),
     action: roundAction(r),
-    progress: roundProgress(r),
+    steps: roundSteps(r),
     eta: etaLabel(r, ctx.generatedAt, ctx.now),
     elapsed: elapsedLabel(r, ctx.now),
     phaseClock: phaseClock(r, ctx.runs, ctx.phaseStats, ctx.now),

@@ -20,7 +20,9 @@ const {
   roundAction,
   roundBranch,
   roundError,
-  roundProgress,
+  roundSteps,
+  MERGE_STEP,
+  PHASE_SEQUENCE,
   roundEtaAt,
   isSettled,
   byUrgency,
@@ -30,7 +32,7 @@ const {
 // button's gate lives, and it had never been exercised here - so `waiting`
 // carrying a `closed_at` clause it should not have was invisible to every test
 // this application has.
-const { boardRow } = await load("/src/roundboard.ts");
+const { boardRow, phaseLabel } = await load("/src/roundboard.ts");
 const {
   askAge,
   holdExpiresIn,
@@ -598,9 +600,36 @@ check("an unprefixed branch is left alone",
 console.log("\n-- progress, and the ETA that is usually a dash --");
 
 check("progress is done over the round's own phases",
-  roundProgress(by("wt-9f21c4")), 0.8);
-check("a round that has finished nothing is zero", roundProgress(by("wt-77d3e0")), 0);
-check("every phase done is one", roundProgress(by("wt-3311cd")), 1);
+  roundSteps(by("wt-9f21c4")).done.length, 4);
+
+// A CHANGE TAKES SIX STEPS AND conduct RUNS FIVE. The fifth ends with a pull
+// request; what settles the change is somebody merging it, and until the rail
+// carried that a round whose work was sitting on a branch read `done 5/5` -
+// the same reading as one that had landed.
+check("the sequence is conduct's five and the merge",
+  roundSteps(by("wt-9f21c4")).phases, [...PHASE_SEQUENCE, MERGE_STEP]);
+check("a round that has finished nothing is at zero of six",
+  [roundSteps(by("wt-77d3e0")).done.length, roundSteps(by("wt-77d3e0")).phases.length], [0, 6]);
+check("a merged round has all six", roundSteps(by("wt-3311cd")).done.length, 6);
+
+// THE MERGE IS DONE ONLY ON POSITIVE EVIDENCE. `pr_state` is "unknown" whenever
+// GitHub could not be asked, and an unknown merge must draw as not-yet rather
+// than as landed - the rule isSettled states for hiding a round, pointing the
+// same way. A round that will never merge leaves it hollow, which is what
+// happened to it.
+check("a round under review has five of six", roundSteps(by("wt-2c44b1")).done.length, 5);
+check("...and the merge is not among them",
+  roundSteps(by("wt-2c44b1")).done.includes(MERGE_STEP), false);
+check("a publication nobody could confirm does not claim a merge",
+  roundSteps(by("wt-0044ab")).done.includes(MERGE_STEP), false);
+
+// THE WORD IS DROPPED ONCE conduct'S FIVE ARE BEHIND IT, because no phase is
+// running: `r.phase` is the last one that ran, and `ship 5/6` reads as a ship
+// phase in flight. "awaiting merge" would be a claim, and false on every round
+// that was declined, timed out or stopped after publishing.
+check("a running round names its phase", phaseLabel(by("wt-77d3e0")), "plan 0/6");
+check("a round waiting to merge names no phase", phaseLabel(by("wt-2c44b1")), "5/6");
+check("a merged round is done", phaseLabel(by("wt-3311cd")), "done 6/6");
 
 // THIN EVIDENCE IS A DASH, NOT A GUESS. The collector withholds the whole sum
 // when any remaining phase has fewer than five completed runs behind it.
@@ -653,13 +682,26 @@ console.log("\n-- which rounds the board keeps --");
   check("a round in flight is live", classOf("wt-4ab810"), "live");
   check("a stopped round nobody has replaced is recoverable",
     classOf("wt-lane01", 1503), "recoverable");
-  check("a merged round is finished", classOf("wt-2c44b1"), "finished");
-  // BOTH OF THESE REACHED THE PUBLISH PATH AND ENDED ON THEIR OWN ACCOUNT, and
-  // the first version of roundOutcome called both recoverable - it re-tested a
-  // subset of roundState's conditions instead of asking it. The board offered
-  // to restart them, which was visible only in a screenshot.
-  check("a published round is finished", classOf("wt-0044ab"), "finished");
-  check("a round that opened none is finished", classOf("wt-55ee02"), "finished");
+  check("a merged round is finished", classOf("wt-3311cd"), "finished");
+
+  // MERGED IS THE ONLY THING THAT FINISHES A ROUND ON ITS OWN ACCOUNT, and the
+  // first version of this called every closed state but `stopped` finished.
+  // That is wrong in the direction that empties a board: measured on the live
+  // host the day it shipped, 19 rounds of which the ONLY one on the current
+  // lane was in review - so the board drew nothing and offered
+  // `show 19 finished`. An open pull request is the one thing the round
+  // produced, and it is waiting on a person.
+  check("a round under review is NOT hidden", classOf("wt-2c44b1"), "unmerged");
+  // HIDING REQUIRES POSITIVE EVIDENCE, which is isSettled's own contract:
+  // `pr_state` is "unknown" whenever GitHub could not be asked, so a round
+  // nobody could confirm merged stays on the board.
+  check("a publication nobody could confirm is not hidden",
+    classOf("wt-0044ab"), "unmerged");
+  check("a round that opened none is not hidden", classOf("wt-55ee02"), "unmerged");
+
+  // THE TWO EXCEPTIONS, AND NEITHER CONTRADICTS THE RULE. A superseded round's
+  // work is on the board under the round that carried it, and a stopped round
+  // on a lane that has moved on is history nothing can reach.
   check("a superseded round is finished", classOf("wt-1271aa"), "finished");
   check("the older round on a reused lane is finished",
     classOf("wt-lane01", 1499), "finished");
@@ -687,8 +729,19 @@ console.log("\n-- which rounds the board keeps --");
   const seen = new Set(fleet.rounds.map((r) => roundState(r).state));
   check("the fixture exercises most of the state vocabulary", seen.size >= 6, true);
   check("...and every round has a class",
-    fleet.rounds.every((r) => ["owed", "live", "recoverable", "finished"].includes(roundOutcome(r))),
+    fleet.rounds.every((r) =>
+      ["owed", "live", "recoverable", "unmerged", "finished"].includes(roundOutcome(r))),
     true);
+
+  // AND A BOARD THAT HIDES EVERYTHING IS THE FAILURE THIS FILTER SHIPPED WITH.
+  // The live host had one round on its current lane and it was in review, so
+  // the first version drew an empty table under a fleet with an open pull
+  // request waiting on somebody.
+  const shown = fleet.rounds.filter((r) => roundOutcome(r) !== "finished");
+  check("the default view is not empty on a fleet with unmerged work",
+    shown.length > 0, true);
+  check("...and every unmerged outcome is in it",
+    fleet.rounds.filter((r) => roundOutcome(r) === "unmerged").length >= 3, true);
 }
 
 console.log("\n-- what a person may ask the fleet to do --");
@@ -698,10 +751,14 @@ const nowUnix = Date.now() / 1000;
 const open = by("wt-4ab810");
 const closed = by("wt-2c44b1");
 
-// A CONTROL THAT COULD NEVER APPLY IS NOISE ON EVERY FINISHED ROW. `wt-2c44b1`
-// published, so what is owed on it is a person's review on GitHub rather than
-// anything conduct can be asked for.
-check("a finished round offers nothing", roundControls(closed, ctl, nowUnix).length, 0);
+// A CONTROL THAT COULD NEVER APPLY IS NOISE ON EVERY ROW THAT HAS ONE.
+// `wt-2c44b1` has an open pull request, so what is owed on it is a person's
+// review on GitHub rather than anything conduct can be asked for - and a
+// restart would force-push over the branch that pull request points at.
+check("a round under review offers nothing", roundControls(closed, ctl, nowUnix).length, 0);
+check("...even though it is still on the board", roundOutcome(closed), "unmerged");
+check("a merged round offers nothing either",
+  roundControls(by("wt-3311cd"), ctl, nowUnix).length, 0);
 check("a round in flight offers four things",
   roundControls(open, ctl, nowUnix).map((c) => c.action),
   ["hold", "restart", "cancel", "cancel_requeue"]);

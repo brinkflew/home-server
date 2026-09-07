@@ -577,8 +577,8 @@ function rail(tone: Tone): string {
                    200px below the 1180 rung - 40px a step, which does not hold
                    `verify` - and each node keeps its own title. -->
               <PhaseSteps
-                :phases="row.r.phases"
-                :done="row.r.done"
+                :phases="row.steps.phases"
+                :done="row.steps.done"
                 :current="row.r.phase"
                 :label="row.phase"
                 :tone="row.tone"

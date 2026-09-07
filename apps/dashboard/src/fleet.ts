@@ -31,6 +31,23 @@ import type { FleetRound, Tone } from "@/types";
  *  round carries its own `phases`, so this is only the fallback. */
 export const PHASE_SEQUENCE = ["plan", "dev", "verify", "review", "ship"];
 
+/**
+ * The sixth step, which is nobody's phase here.
+ *
+ * conduct RUNS FIVE PHASES AND A CHANGE TAKES SIX STEPS. The fifth ends with a
+ * pull request; what settles the change is somebody merging it, and until that
+ * happened the rail drew `done 5/5` on a round whose work was still sitting on
+ * a branch - the same reading it gave a round that had landed. The two are the
+ * difference between finished and waiting.
+ *
+ * IT IS ADDED HERE AND NEVER IN THE COLLECTOR. `FleetRound.phases` is conduct's
+ * own declared sequence, and writing a step into it that no `conduct_*` handler
+ * exists for would be the document claiming the fleet runs something it does
+ * not. This is presentation over that fact, which is what src/roundboard.ts is
+ * for and why the merge lives beside it rather than in bin/collect-metrics.py.
+ */
+export const MERGE_STEP = "merge";
+
 /** conduct's `branch_prefix`, and every branch it pushes starts with it -
  *  publish.branch_name refuses a name that does not, which is the whole thing
  *  keeping a phase off `main`. Stripped for display only; never for a link. */
@@ -78,7 +95,7 @@ export function isSettled(r: FleetRound): boolean {
  * round recoverable is exactly what makes `roundControls` offer something, and
  * the two must not drift - see the note there.
  */
-export type RoundClass = "owed" | "live" | "recoverable" | "finished";
+export type RoundClass = "owed" | "live" | "recoverable" | "unmerged" | "finished";
 
 /** The one state `roundState` produces that something can still be done about. */
 export const RECOVERABLE_STATE = "stopped";
@@ -100,16 +117,42 @@ export function roundOutcome(r: FleetRound): RoundClass {
   const { state } = roundState(r);
   if (state === "waiting on you") return "owed";
   if (r.closed_at === null) return "live";
-  // EVERY OTHER CLOSED STATE IS AN OUTCOME. Merged and superseded are history; a
-  // pull request that exists is a person's to review on GitHub; `published`,
-  // `not published` and `pr closed` are all flows that ended on their own
-  // account. `stopped` is the one that did not.
-  if (state !== RECOVERABLE_STATE) return "finished";
+
+  // A ROUND IS FINISHED WHEN ITS WORK HAS LANDED, WHICH IS `merged` AND NOTHING
+  // ELSE. The first version called every closed state but `stopped` finished,
+  // and that was wrong in the direction that empties a board: `in review` is a
+  // pull request open on GitHub waiting for a person, and hiding it is hiding
+  // the one thing the round produced. Measured on the live host the day it
+  // shipped - 19 rounds, of which the ONLY one on the current lane was in
+  // review, so the board showed nothing at all and offered `show 19 finished`.
+  //
+  // `isSettled` HAD THE RULE RIGHT ALL ALONG. It is `closed_at !== null &&
+  // pr_state === "merged"`, and its own comment says hiding requires POSITIVE
+  // EVIDENCE - `pr_state` is "unknown" whenever GitHub could not be asked, so a
+  // round nobody could confirm stays. That is why `published` and
+  // `not published` are visible too: neither is a claim that the work landed.
+  if (state === "merged") return "finished";
+
+  // SUPERSEDED IS THE ONE EXCEPTION AND IT IS NOT AN INCONSISTENCY. A later
+  // round carried the same work, so the thing to look at IS on the board -
+  // under the round that carried it. Drawing both is the defect that made task
+  // 1271 render twice, once asking for attention nobody owed.
+  if (state === "superseded") return "finished";
+
   // A LANE HOLDS ONE conduct ROW, so only its newest round can be acted on -
   // and absence is false, because an older collector cannot say which that is
-  // and guessing in front of a destructive button is what this guards.
-  if (r.latest_on_worktree !== true) return "finished";
-  return "recoverable";
+  // and guessing in front of a destructive button is what this guards. A
+  // stopped round that is not the current one is history nothing can reach.
+  if (state === RECOVERABLE_STATE) {
+    return r.latest_on_worktree === true ? "recoverable" : "finished";
+  }
+
+  // EVERYTHING ELSE ENDED WITHOUT LANDING: a pull request under review, one
+  // that was closed, a publication nobody could confirm, a flow that opened
+  // none. All of them stay on the board and none of them offers a control -
+  // what happens next to a round that reached the publish path happens
+  // somewhere else, and the row already links to it.
+  return "unmerged";
 }
 
 /**
@@ -211,12 +254,35 @@ export function roundAction(r: FleetRound): RoundAction {
   return { label: "-", href: null, title: "nothing is waiting on a person here" };
 }
 
-/** 0..1, or null when the round declares no phases. `done` is per ATTEMPT - the
- *  row prints "attempt N of 2" beside this for exactly that reason. */
-export function roundProgress(r: FleetRound): number | null {
-  const total = (r.phases?.length ?? 0) || PHASE_SEQUENCE.length;
-  if (!total) return null;
-  return Math.min(1, (r.done?.length ?? 0) / total);
+/** The whole journey and how much of it is behind this round. */
+export interface RoundSteps {
+  /** conduct's declared phases, then the merge. Never empty. */
+  phases: string[];
+  /** Which of them are behind it. `done` is per ATTEMPT for conduct's five -
+   *  the row prints "attempt N of 2" beside this for exactly that reason - and
+   *  the merge is not, because a change merges once however many rounds it took. */
+  done: string[];
+}
+
+/**
+ * The six steps of a change, and which are done.
+ *
+ * ONE DERIVATION, so the numerator and the denominator cannot drift. That is the
+ * property `FleetRound.phases` already claims for itself - *"the full sequence,
+ * so the denominator travels with the numerator"* - and adding a step in the
+ * component would have broken it in the one place nothing could test.
+ *
+ * THE MERGE IS DONE ONLY ON POSITIVE EVIDENCE. `pr_state` is "unknown" whenever
+ * GitHub could not be asked, and an unknown merge must draw as not-yet rather
+ * than as landed: the same rule `isSettled` states for hiding a round, pointing
+ * the same way. A round that will never merge - stopped, declined, timed out -
+ * leaves it hollow, which is what happened.
+ */
+export function roundSteps(r: FleetRound): RoundSteps {
+  const declared = r.phases?.length ? r.phases : PHASE_SEQUENCE;
+  const done = [...(r.done ?? [])];
+  if (r.pr_state === "merged") done.push(MERGE_STEP);
+  return { phases: [...declared, MERGE_STEP], done };
 }
 
 /**
