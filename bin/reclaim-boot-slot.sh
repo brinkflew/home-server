@@ -57,7 +57,7 @@ export PATH="${HOME:-/var/home/core}/.local/bin:$PATH"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STATE="${HOME_SERVER_BOOT_STATE:-/var/lib/home-server/boot-state}"
 GRUBENV="${HOME_SERVER_GRUBENV:-/boot/grub2/grubenv}"
-LOCK="${HOME_SERVER_RECLAIM_LOCK:-/var/lib/home-server/.boot-reclaim.lock}"
+LOCK="${HOME_SERVER_RECLAIM_LOCK:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/home-server-boot-reclaim.lock}"
 OSTREE_REPO=/ostree/repo
 PIN_PREFIX=home-server/rollback
 
@@ -98,10 +98,27 @@ ro() { timeout 60 rpm-ostree "$@"; }
 # path where somebody is reading the output.
 #
 # First flock in this repository, which is why it is explained here rather than
-# assumed. Exit 0 and silently: a second copy of a no-op is not a fault.
+# assumed.
+#
+# IT LIVES IN THE RUNTIME DIRECTORY, AND THE FIRST DEPLOYED RUN IS WHY.
+# /var/lib/home-server is root-owned - every writer there, this script's own
+# state included, goes through `priv tee` - and a flock fd cannot be opened
+# through sudo. So the first real run said "Permission denied", and the version
+# that shipped it wrote `2>/dev/null || true` and carried on: a lock that FAILS
+# OPEN, on the one path that runs `rpm-ostree cleanup -r`, with the mutual
+# exclusion silently absent and the unit still exiting 0.
+#
+# Being unable to take it is therefore a refusal and not a shrug. A lock in
+# /var would also have to survive a reboot, which is the opposite of what a lock
+# wants.
 mkdir -p "$(dirname "$LOCK")" 2>/dev/null || true
-exec 9>"$LOCK" 2>/dev/null || true
-if ! flock -n 9 2>/dev/null; then
+if ! touch "$LOCK" 2>/dev/null; then
+	refuse "could not create the lock at $LOCK - refusing rather than running 'rpm-ostree cleanup -r' unguarded"
+fi
+exec 9>"$LOCK"
+# Exit 0 and silently when somebody else holds it: a second copy of a no-op is
+# not a fault.
+if ! flock -n 9; then
 	exit 0
 fi
 
