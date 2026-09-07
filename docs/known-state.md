@@ -280,7 +280,13 @@ nothing points at is one nobody reads.
 - **`/boot` costs one slot per distinct KERNEL+INITRAMFS, not per deployment**, holds exactly two
   (2 x 146 MB + 11 MB GRUB = 303 MB of 350 MB), and **cannot be grown** - `nvme0n1p4` is XFS, which
   cannot be shrunk by any tool, so enlarging it means repartitioning the disk that carries `config/`.
-  Five corrections learned by doing it wrong, on 2026-08-14 and again on 2026-08-16:
+  **Measured rather than inherited on 2026-09-08**: `sgdisk -p` reports *"Total free space is 0
+  sectors"*, p4 begins on the sector after p3 ends and p2 (the 127 MiB ESP) on the sector before it
+  begins, so there is not a byte of slack anywhere on the disk. The slot is 145.3 MiB exactly -
+  initramfs 133,486,447 bytes and vmlinuz 18,857,448 - and `ostree-finalize-staged` prints what it
+  wants before it writes: *"bootfs is sufficient for calculated new size: 152.3 MB"*.
+  Corrections learned by doing it wrong, on 2026-08-14, again on 2026-08-16, and again on
+  2026-09-08 - this line said "five" while eight followed it:
   - **`ostree admin pin 0` is wrong whenever something is staged.** Index 0 is then the *staged*
     deployment and the command fails with `Cannot pin staged deployment`. Derive the booted index:
     `rpm-ostree status --json | jq '[.deployments[]] | map(.booted) | index(true)'`.
@@ -4685,3 +4691,64 @@ Recorded 2026-09-07, with the board's filter, the step rail and the three render
   it covers. What is left over is a red boot on an UNCHANGED deployment, which a rollback cannot fix
   and which greenboot stops itself on rather than looping. A permanent WARN for that is a rollout
   looking like a fault.
+
+### The unattended reboot had no "after", and that was the whole deadlock
+- **`bin/reboot-host.sh` ends in `rpm-ostree cleanup -r` and `bin/reboot-when-staged.sh` cannot**,
+  because it reboots and the process that would take that step dies with the machine. So every
+  ATTENDED reboot left one `/boot` slot spent and every UNATTENDED one left two. The next image then
+  staged into a partition with no room to finalize it, the Sunday window refused - correctly, since
+  ostree would have refused at shutdown for want of 152.3 MB - and a person ran two commands by hand.
+  Every week since the host was built. **From 2026-09-06 to 2026-09-08 it refused all five attempts
+  of the window with six Critical nss/nspr advisories and a new kernel waiting**, and
+  `deploy.boot_free` was the only failing check in a battery of 135.
+- **`bin/reclaim-boot-slot.sh` is that missing step, on a timer.** Five minutes after a boot and every
+  thirty after, `df` before any D-Bus call, and a refusal in every shape it cannot name. The steady
+  state it produces is one slot spent from the reclaim until the next deployment boots, which is what
+  an attended reboot has always left behind.
+- **`ostree admin undeploy` on the rollback index does NOT preserve a staged deployment.** Tried on
+  2026-09-08 precisely because it would have collapsed the destructive repair arm into the harmless
+  one: `deployment count change: -2`, three deployments to one. So the "-2" recorded above is a
+  property of `write_deployments` - any of them, on a sysroot with a staged deployment - and not a
+  quirk of `cleanup -r`. There is no single-slot spelling of this.
+- **Re-staging is 21.9 seconds, not a re-pull.** `sudo rpm-ostree upgrade` after the cleanup resolved
+  entirely from the local ostree repo. The bandwidth argument for rate-limiting the repair arm is
+  therefore wrong; the mtime argument is the real one, because each re-stage rewrites
+  `/run/ostree/staged-deployment` and that is the clock `staged_age_d` reads.
+- **The re-staged deployment gets a DIFFERENT layered commit checksum for the same image**:
+  `5858c3b7b9d0` became `84120b9db526` for one digest `f7b6e02b1a5b`. Anything keyed on identity here
+  must key on the container digest, never on `.checksum`.
+- **An ostree ref on the outgoing commit survives both the drop and the prune**, so what is given up
+  is the `/boot` entry and not the deployment: after the undeploy and the `upgrade` that followed it,
+  `ostree ls -R` still read the pinned tree including the 133 MB initramfs. **What is NOT measured is
+  whether `ostree admin deploy` on that ref yields a bootable deployment with a correct
+  container-native origin**, so `deploy.boot_reclaim` names the ref and claims nothing more.
+- **There is exactly ONE container image ref and it is keyed by TAG, not digest** -
+  `ostree/container/image/docker_3A__2F__2F_ghcr_2E_io/ublue-os/ucore_3A_stable-nvidia-lts` - and it
+  is overwritten on every pull. So "keep the previous image's ref alive" is not a thing that exists;
+  the commit ref above is the only pin available.
+- **`df` was under-reporting `/boot` by 19.2 MiB to every gate on this host at once.** Avail is
+  `f_bavail`, which excludes ext4's 5% root reserve for root TOO - and ostree runs as root - so
+  `BOOT_MIN_MB` in both reboot scripts, the literal in `verify-host.sh` and the reclaim's own floor
+  were all reading one number too low. `tune2fs -m 0` on 2026-09-08 took the margin over the
+  145.3 MiB ostree needs from 26 MiB to 45. It is host state Ignition cannot reapply, so
+  `deploy.boot_reserve` reads it back rather than assuming it.
+- **A boot slot cannot be parked on another disk, and the reason is not disk space.** ostree writes to
+  exactly one bootfs, named by the `boot=UUID=` karg; the BLS entries point into
+  `/boot/ostree/<bootcsum>/` and libostree has no second-bootfs concept. Pointing GRUB at the media
+  volume would mean assembling LVM and reading XFS off a spindle to find a fallback that exists for
+  the moments when things are already wrong - worse than no fallback, because it looks like one. And
+  `sda1` is a single PV holding one full-size XFS LV, so there is nothing to carve either.
+- **Two more alternatives, rejected on the record so they are not re-proposed.** A client-side
+  host-only initramfs (`rpm-ostree initramfs --enable`) would work - 127 MiB down to perhaps 20-40,
+  and three slots would fit - but the initramfs stops being the artifact ublue signed while
+  `deploy.image_signed` and `deploy.image_policy` both keep passing, because they measure the ref and
+  the policy: a SILENT weakening of the property those two exist to hold. And `p3` is ext4 and could
+  be moved left into a shrunk ESP for about 95 MiB, which needs rescue media on a box with no console,
+  rewrites the EFI entry `bootupd` manages, and is undone by one initramfs growth.
+- **libostree's own automatic early prune is the backstop and is deliberately not relied on.** The
+  machinery is present - the `bootfs is sufficient for calculated new size` line is that code path and
+  `no-early-prune` is an opt-OUT - but it has never had a chance to run here, because both reboot
+  paths refuse before finalization is attempted. It prunes at shutdown, so the machine would boot the
+  new deployment with no fallback at all: the same trade as the reclaim, one boot later and one boot
+  less recoverable. No check asserts it, because an assertion that an unset environment variable is
+  still unset is a check that can only ever pass.

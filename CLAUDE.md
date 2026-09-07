@@ -1604,6 +1604,16 @@ signal read green.
   not deployments. The one-entry state is a note: the fallback arrives with the deployment that
   creates the risk.
 
+### The unattended reboot had no "after", and that was the whole deadlock
+- `reboot-host.sh` ends in `cleanup -r`; `reboot-when-staged.sh` reboots and the process that would
+  do it dies with the machine. So every unattended reboot left two `/boot` slots spent and the next
+  Sunday refused for ever. `bin/reclaim-boot-slot.sh` is the missing step, on a timer.
+- `ostree admin undeploy` takes the staged deployment too (`-2`), so that is `write_deployments` and
+  not a `cleanup -r` quirk; re-staging is 22s from the local repo and mints a NEW layered checksum
+  for the same digest; an ostree ref on the outgoing commit survives the prune.
+- `df` under-read `/boot` by 19.2 MiB to every gate at once - ext4's root reserve is excluded from
+  Avail for root too. A boot slot cannot live on another disk: ostree has one bootfs, by karg.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless
