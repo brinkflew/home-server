@@ -1641,6 +1641,31 @@ signal read green.
   repairs. `FLEET_MAX_ATTEMPTS` finally has the check its own comment asked for, and five prose
   copies of "of 2" had drifted the same way the constant did.
 
+### The page that answers "is anything down" could not draw a service that was down
+- **`podman ps` lists RUNNING containers**, so the Services rack was built from series that exist
+  only for a container that is up: `container_running` is 1 on all 28 rows and can be nothing else,
+  and a service that stopped VANISHED from the rack rather than turning red. `source_units`
+  enumerates the quadlet generator directory for exactly this reason and no page had ever read it.
+- The RESTARTS column read podman's counter, which a quadlet resets on every restart - it read 0
+  through all 6,224 of Pocket ID's - and the memory rule's `restarts > 0` clause read it too, so
+  that arm had never fired. `pod {{ row.pod }}` was dead code the docs had already named.
+- Two CSS ordering defects no screenshot shows: the global `.dim` means STALE and ADDS to a scoped
+  one, and tone classes above the table rules lose to `.num` and `.areading` at equal specificity.
+- `arr_health_issues` and `arr_queue_errors` had no consumer anywhere; an *arr with a dead indexer is
+  healthy by every container-level signal. The down indexers are named now, not counted.
+
+### The drawing of the segmentation asserted in words what nothing measured
+- **`all isolate=true` was static text in the bundle** and no check read `isolate` on a stack
+  segment - both `runner_isolation` checks read it only on the ephemeral networks. The collector
+  already had ports, membership and the isolate flag in hand from calls it makes anyway.
+- Membership inferred from a 5m rate is blind to a restart, and `isolate` reads EMPTY rather than
+  `false` - so only a segment `stacks/` declares may be graded on it.
+- **A stopped container drew grey a day after the identical fix on `/services`**, and the `torrent`
+  box was dead on the host and healthy in dev because the fixture joined on the same wrong name.
+- **The traffic animation had never run once**: `animation-duration` was set and `animation-name`
+  never was, and the only `.flow` rule in the app was the one turning it off. Unfindable by
+  screenshot by construction.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

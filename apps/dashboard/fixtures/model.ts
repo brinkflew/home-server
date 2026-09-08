@@ -83,6 +83,10 @@ const MEM_HIGH: Record<string, number> = {
   bazarr: 512 * 1024 ** 2,
   qbittorrent: 1024 ** 3,
   dashboard: 64 * 1024 ** 2,
+  // MemoryHigh=1G, MemoryMax=2G in stacks/media/flaresolverr.container. Taken
+  // from the unit rather than defaulted, because this is the row whose finding
+  // IS its memory and a made-up ceiling would make its ratio fiction.
+  flaresolverr: 1024 ** 3,
 };
 
 export interface FixtureContainer {
@@ -98,18 +102,41 @@ export interface FixtureContainer {
   memory: number;
   memoryHigh: number;
   startedAgo: number;
+  /** cgroup OOM kills since this container was created. The one memory event
+   *  that is unambiguous - see memoryTone() in src/services.ts. */
+  oomKills: number;
 }
 
-export const CONTAINERS: FixtureContainer[] = NODES.map((n) => {
+/**
+ * THE ONE SERVICE THAT IS DOWN, AND IT IS DOWN BY BEING ABSENT.
+ *
+ * `podman ps` lists RUNNING containers, so a service that has stopped has no
+ * home_server_container_info row at all - its unit is the only witness. No
+ * fixture had ever carried that state, which is the whole reason ServicesPage
+ * could not draw it: the rack was built from the containers, so a stopped
+ * service did not go red, it disappeared. See UNITS below, where
+ * duckdns.service is inactive.
+ */
+const STOPPED = "duckdns";
+
+export const CONTAINERS: FixtureContainer[] = NODES.filter((n) => n.name !== STOPPED).map((n) => {
   const pod = n.pod ?? (n.name === "torrent" ? "torrent" : "");
-  // duckdns and unpackerr serve no HTTP and define no health check. The metric
-  // is ABSENT for them rather than zero, which is what lets a rule cover every
-  // container without naming any - see CLAUDE.md.
-  const noHealth = n.name === "duckdns" || n.name === "unpackerr" || n.name === "torrent";
+  // unpackerr serves no HTTP and defines no health check, and neither does the
+  // pod's infra container. The metric is ABSENT for them rather than zero,
+  // which is what lets a rule cover every container without naming any - see
+  // CLAUDE.md.
+  const noHealth = n.name === "unpackerr" || n.name === "torrent";
 
   return {
     name: n.name,
-    unit: n.pod ? "torrent-pod.service" : `${n.name}.service`,
+    // ONE UNIT PER CONTAINER, WHICH IS WHAT THE HOST ACTUALLY REPORTS. This
+    // said `torrent-pod.service` for all three pod members, and it is their own
+    // .container quadlet that PODMAN_SYSTEMD_UNIT names - measured on the live
+    // host: gluetun.service, qbittorrent.service, joal.service. Only the infra
+    // container carries the pod's unit. A fixture where four containers share
+    // one unit is a shape production does not have, and it hid the join
+    // ServicesPage now makes.
+    unit: n.name === "torrent" ? "torrent-pod.service" : `${n.name}.service`,
     image: IMAGES[n.name] ?? "docker.io/library/unknown:latest",
     pod,
     health: noHealth ? undefined : 0,
@@ -119,6 +146,7 @@ export const CONTAINERS: FixtureContainer[] = NODES.map((n) => {
     memory: 64 * 1024 ** 2,
     memoryHigh: MEM_HIGH[n.name] ?? 256 * 1024 ** 2,
     startedAgo: 41 * 86400 + 6 * 3600,
+    oomKills: 0,
   };
 });
 
@@ -128,7 +156,12 @@ function patch(name: string, changes: Partial<FixtureContainer>): void {
   if (c) Object.assign(c, changes);
 }
 
-patch("bazarr", { health: 2, restarts: 4, startedAgo: 96, memory: 508 * 1024 ** 2 });
+// `restarts` STAYS 0 HERE, AND THAT IS THE POINT. podman's per-container count
+// is reset whenever a quadlet recreates the container, which is every restart -
+// so it reads 0 throughout the exact event it looks like it would catch. The
+// nine restarts this row is meant to carry are on bazarr.service in UNITS,
+// where systemd's NRestarts survives them.
+patch("bazarr", { health: 2, restarts: 0, startedAgo: 96, memory: 508 * 1024 ** 2 });
 // A REAL, BENIGN AMBER. Jellyseerr genuinely takes about forty seconds to pass
 // its health check after a restart, so `health: 1` here is a state the host
 // actually reaches rather than an invented one - and nothing else in this fixture
@@ -143,6 +176,75 @@ patch("prometheus", { cpu: 0.11, memory: 402 * 1024 ** 2 });
 patch("qbittorrent", { cpu: 0.22, memory: 610 * 1024 ** 2 });
 patch("caddy", { cpu: 0.03, memory: 88 * 1024 ** 2 });
 patch("dashboard", { cpu: 0.002, memory: 14 * 1024 ** 2 });
+
+// THE MEMORY ARM, ON ITS OWN AND ON THE RIGHT CONTAINER. flaresolverr is
+// headless Chrome and it is the one that fills its cgroup here - CLAUDE.md has
+// it at 1,925 MB in 969 unlinked fds, and the live host reports 29,187 `high`
+// events against it. Being AT MemoryHigh is not news and must never draw amber;
+// an OOM KILL is, so this row is the only one whose finding is its memory, with
+// its liveness perfectly healthy. Nothing else exercises that path.
+patch("flaresolverr", { memory: 1004 * 1024 ** 2, oomKills: 2 });
+
+// A CONTAINER THAT RESTARTED WITHOUT ITS UNIT RESTARTING, which is podman's own
+// doing and the one thing podman's counter can say that systemd's cannot. It is
+// 0 on every other row here, exactly as it is on the live host.
+patch("joal", { restarts: 2 });
+
+// -----------------------------------------------------------------------------
+// The units, which are the half podman cannot see
+// -----------------------------------------------------------------------------
+// ENUMERATED FROM THE CONTAINERS PLUS THE ONE THAT HAS NONE, which is the
+// inversion of what the collector does and the right way round for a fixture:
+// source_units reads the quadlet generator directory, so a unit exists whether
+// or not anything is running under it. That asymmetry is the whole point -
+// duckdns.service is here and duckdns is not.
+//
+// THE ONESHOTS ARE ABSENT BECAUSE THE QUERY EXCLUDES THEM. There are fourteen
+// `.network` and `.build` units on the host and all fourteen rest INACTIVE when
+// everything is well, so SERVICES.unitState carries a `kind=~"container|pod"`
+// selector. These fixtures answer by exact query string and cannot evaluate a
+// selector, so the table has to hold what Prometheus would have returned - and
+// putting the oneshots in it would draw fourteen healthy networks as fourteen
+// dead services in dev and nowhere else.
+
+export interface FixtureUnit {
+  unit: string;
+  kind: "container" | "pod";
+  /** 0 active, 1 activating, 2 failed, 3 deactivating, 4 inactive, 5 reloading. */
+  state: number;
+  /** systemd's NRestarts. The counter that survives a restart loop. */
+  restarts: number;
+}
+
+export const UNITS: FixtureUnit[] = [
+  ...CONTAINERS.map((c) => ({
+    unit: c.unit,
+    kind: (c.unit.endsWith("-pod.service") ? "pod" : "container") as FixtureUnit["kind"],
+    state: 0,
+    restarts: 0,
+  })),
+  // THE STOPPED SERVICE. Inactive, not failed - which is the distinction that
+  // cost 35 minutes of Caddy being down while three checks looked straight at
+  // it. A dependency that failed to start leaves its dependant inactive, and
+  // `systemctl --user list-units --failed` does not list it.
+  { unit: `${STOPPED}.service`, kind: "container", state: 4, restarts: 0 },
+];
+
+function unitPatch(unit: string, changes: Partial<FixtureUnit>): void {
+  const u = UNITS.find((x) => x.unit === unit);
+  if (u) Object.assign(u, changes);
+}
+
+// The nine restarts behind bazarr's unhealthy container, on the counter that can
+// hold them.
+unitPatch("bazarr.service", { restarts: 9 });
+
+// A UNIT LOOPING WITH A HEALTHY CONTAINER UNDER IT, which is the state that had
+// no witness anywhere in this application: Restart=always at RestartSec=5 can
+// never reach systemd's give-up limit, so the unit stays `active`, podman's
+// counter stays 0, and the container passes its probe between restarts. This
+// number climbing is the only end state the host has.
+unitPatch("ntfy-alertmanager.service", { restarts: 3 });
 
 // -----------------------------------------------------------------------------
 // status.json
@@ -196,7 +298,18 @@ const CHECKS: Check[] = [
   { section: "backup", id: "backup.tsdb_snapshot_age", status: "pass", message: "6h old" },
   { section: "checkout", id: "checkout.clean", status: "pass", message: "working tree clean" },
   { section: "checkout", id: "checkout.matches_origin", status: "pass", message: "at origin/main" },
-  { section: "containers", id: "containers.failed_units", status: "fail", message: "bazarr.service failed: oom-kill, 4 restarts in the last hour" },
+  // PASS, AND THAT IS THE FINDING. duckdns is down and this check is right to
+  // say nothing: a dependency failure leaves a unit INACTIVE rather than failed,
+  // so `list-units --failed` is empty while a service is missing. It is the
+  // reason containers.units_active exists as a separate check, and the reason
+  // /services enumerates the units rather than the containers.
+  { section: "containers", id: "containers.failed_units", status: "pass", message: "no failed user units" },
+  {
+    section: "containers",
+    id: "containers.units_active",
+    status: "fail",
+    message: "duckdns.service is inactive - nothing failed, and the container it should have started does not exist",
+  },
   {
     section: "containers",
     id: "containers.healthy",
@@ -204,7 +317,13 @@ const CHECKS: Check[] = [
     // Kept consistent with the CONTAINERS patches above: bazarr unhealthy and
     // jellyseerr still starting. Three sources disagreeing about the same host is
     // exactly the confusion a fixture is supposed to avoid.
-    message: "bazarr unhealthy, jellyseerr starting; 21 of 23 healthy",
+    message: "bazarr unhealthy, jellyseerr starting; 23 of 27 healthy, 2 define no check",
+  },
+  {
+    section: "containers",
+    id: "containers.probe_binaries",
+    status: "pass",
+    message: "all 25 health probes can run the binary they invoke",
   },
   { section: "containers", id: "containers.gpu_jellyfin", status: "pass", message: "nvidia device present" },
   { section: "containers", id: "containers.gpu_tdarr_node_01", status: "pass", message: "nvidia device present" },

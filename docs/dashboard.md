@@ -274,18 +274,29 @@ than an absence. The items carry no separator at all - every one of them is self
 is how the dash got there in the first place.
 
 **The four hand-rolled racks are panned instead, and that is repair rather than design.** Services
-floors at ~784px, CI at ~748px, Library at ~666px and the System timeline at 320px before its chart
-track; none can shed a column without being rebuilt as a `.tbl`, which is still the follow-up each
-of them has. CI's rack has **no header row at all** - its eleven column labels live only in
+floored at ~784px, CI at ~748px, Library at ~666px and the System timeline at 320px before its chart
+track; none could shed a column without being rebuilt as a `.tbl`, which was the follow-up each of
+them carried. **Two have had it**: the System timeline on 2026-09-07 and Services on 2026-09-08, both
+on the `.p4`/`.p3`/`.p2` ladder with a fold under the surviving column. CI and Library still pan. CI's rack has **no header row at all** - its eleven column labels live only in
 tooltips - and that is a real limitation of stopping at repair depth. What makes them reachable is
 that `Tooltip` gained a tap-elsewhere dismiss: a tap has always *opened* one, there was simply no
 way to shut it.
 
-**The network drawing is panned for the opposite reason: it does not reflow, it shrinks.** It is
-1498x856 and aspect-preserving, so a 390px panel renders it at a 0.197 factor - 13px node names at
+**The network drawing was panned for the opposite reason: it did not reflow, it shrank.** It was
+1498x856 and aspect-preserving, so a 390px panel rendered it at a 0.197 factor - 13px node names at
 2.6px, 11px rail labels at 2.2px, and the hairlines surviving intact because they carry
-`non-scaling-stroke`. A grey smear of rules connecting things nobody can read. 900px of min-width
-is where its smallest type is still above the 11px floor.
+`non-scaling-stroke`. A grey smear of rules connecting things nobody can read. The repair at the
+time was a 900px min-width and a pan, which is where its smallest type is still above the 11px
+floor - except that it is not: 900/1498 is a 0.60 factor and a 13px name renders at 7.8.
+
+**Closed 2026-09-08, by making the column count an argument.** `layout()` takes one and returns a
+different drawing for each, so a narrow panel gets fewer columns and a taller canvas rather than the
+same canvas smaller. The fold is derived from the layout's own constants - `gridWidth(c)` is what
+three, two and one columns actually need - rather than borrowed from the table ladder: 900 would
+leave an 834px tablet drawing ONE column beside 448px of empty canvas, because a table's columns are
+priorities and a drawing's groups are not. Scaling UP to fill is safe in a way scaling down is not,
+the type floor being a floor; `min-width` on the SVG is where it stops, and below that the panel
+scrolls.
 
 **NOTHING SHRINKS TO FIT.** The type floor is 11px at every width. A phone is read closer than a
 wall panel, not further away, so the answer to a narrow screen is fewer columns and never smaller
@@ -551,7 +562,7 @@ other four pages keep `read only`, correctly.
 | **`activity.json`**, every 30s | what is playing and what is in flight, **with titles** - sessions, downloads, transcodes, torrents |
 | **`library.json`**, every 5 minutes | requests, recently added, recent completions, stalled and queued files, the subtitle backlog |
 | **`fleet.json`**, every 5 minutes | what the agent fleet is doing, read out of `conduct.db`: rounds with their task, attempt, progress, ETA and pull request, publications pending, the last runs **with what they cost**, and why the intake last declined |
-| **`apps/dashboard/src/topology.ts`**, compiled in | the segment rails and the published-port table. The topology *is* static - it is `stacks/`, in git - and only the node colouring is live |
+| **`apps/dashboard/src/topology.ts`**, compiled in | what `stacks/` DECLARES: segment membership, pod membership and the published ports. It is no longer the only source for any of the three - see the 2026-09-08 section below - but it is still the authority on what was *intended*, which is the half a running host cannot supply |
 | **`apps/dashboard/src/paths.ts`**, compiled in | who talks to whom. Half of it lives in an application's own database, so it is **validated** rather than derived |
 
 **CI AND AGENTS LANDED 2026-08-28, AND THE TWO FLEETS ARE INVISIBLE FOR OPPOSITE REASONS.** A CI
@@ -870,7 +881,10 @@ as an explicit 0 so it can be alerted on.
 - **The pod's container is `torrent-infra` while `topology.ts` calls the node `torrent`**, and
   `home_server_container_info{pod}` is **empty for all 24 containers**, so that label cannot bridge
   it. The `unit` label can: `torrent-pod.service`. (Which also means `ServicesPage`'s
-  `pod {{ row.pod }}` branch has always been dead code.)
+  `pod {{ row.pod }}` branch has always been dead code. **Closed 2026-09-08**: `svc.topologyFor()`
+  resolves a pod's infra container through its unit, and pod membership is read from `topology.ts`
+  rather than from a label the collector cannot fill - podman answers `PodName` empty and puts the
+  id in `Pod`.)
 
 **`apps/dashboard/src/paths.ts` is the second hand-maintained duplicate and the more dangerous one**,
 because it cannot be derived in full: `sonarr -> torrent`, `prowlarr -> flaresolverr` and nine others
@@ -1572,3 +1586,231 @@ mouse and not for a keyboard, and only reachable at all because `/system` is thr
 
 Nine defect families, each **proved to fire** by planting the original back before the assertion was
 trusted, and each reproducing the original symptom.
+
+## The Services page, and the state it could not draw, 2026-09-08
+
+`/services` was the last page still on the first cut - a hand-rolled 784px rack panned sideways, one
+band, no lead, and eight anonymous label/value pairs under it. It got the pass the other five have
+had: lead with one reading, the rack becomes a `.tbl`, the decisions leave the `.vue` file, the
+evidence goes last. **But the layout was the smallest thing wrong with it.**
+
+**THE PAGE WHOSE JOB IS "IS ANYTHING DOWN" COULD NOT SHOW A SERVICE THAT WAS DOWN.** Every row came
+from `home_server_container_info`, the collector builds that from `podman ps`, and **`podman ps`
+lists RUNNING containers** - so `home_server_container_running` is 1 for all 28 rows on this host and
+can be nothing else, `containerTone`'s `stopped` branch was unreachable in production, and a service
+that stopped did not turn red on the rack: **it vanished from it.** The rack was at its emptiest at
+the exact moment it mattered most. CLAUDE.md has the outage this shape produced, from the other
+side - *"Caddy was down for 35 minutes and three checks looked straight at it: a dependency failure
+is `inactive`, not `failed`, and a container that never started is absent rather than unhealthy."*
+
+**`source_units` already knew, and no page in this application had ever read it.** It enumerates the
+**quadlet generator directory** rather than podman, in its own words because *"deriving the unit list
+from running containers would make this source blindest at the moment it matters most"*. So the rack
+is built from `home_server_unit_state{kind=~"container|pod"}` now and a container is joined **onto**
+a unit; a unit with no container is a row that says so. The `kind` selector is in the query rather
+than in the page, because the fourteen `.build` and `.network` units rest INACTIVE when everything is
+well and a rack that drew them would report fourteen healthy networks as fourteen dead services.
+
+**The RESTARTS column read the one counter on this host that cannot be non-zero.**
+`home_server_container_restarts_total` is podman's per-container field, a quadlet recreates the
+container on every restart, and the collector's own docstring says what that costs: *"Pocket ID
+restarted 6,224 times between 00:20 and 09:55 on 2026-08-19 and that gauge read 0 for the whole
+outage"*. systemd's `NRestarts` survives, because the unit outlives its containers. The column is
+`home_server_unit_restarts_total` now; podman's is kept as a second line **only when the two
+disagree**, since that is the one thing it can say the other cannot - a container restarting without
+its unit restarting. The memory rule had the same dead clause: `ratio >= 0.98 && (thrashing ||
+restarts > 0)` was reading podman's number, so that arm had never once fired.
+
+**Three LEDs with no legend anywhere, and the leftmost had a state nobody can guess.** The page's own
+comment said so in capitals. There is **one** dot now, and the state is a **word** in the row at
+every width - `healthy`, `unhealthy`, `starting`, `running, unchecked`, `restarting`, `not running`,
+`unit failed`, `oom-killed`. The grey-is-not-green caveat survives as the tooltip on the word, which
+is the only fact on the row a reader cannot recover from what is drawn.
+
+**"Needs attention" is a FILTER over the array the rack draws**, never a second reading of the same
+series - the trap the System page paid for when two surfaces disagreed about what `note` meant. What
+it adds is the half a rack has no room for: one sentence saying what is wrong, and **a command**.
+Every remedy is a `status` or a `journalctl`, and that is not timidity: this dashboard cannot restart
+anything, and a command that changes the host is a decision for the person holding the keyboard
+rather than a string a panel prints.
+
+**The applications' own health is drawn for the first time.** An *arr with a dead indexer is healthy
+by every container-level signal here - active unit, passing probe - and `home_server_arr_health_issues`
+and `home_server_arr_queue_errors` had been collected since the collector existed with **no consumer
+at all**. The Applications band reads both, and **names the indexers Prowlarr is backing off** rather
+than counting them: `13 of 15` was the whole of what the page could say and which two is the only
+part anybody can act on. It sends the reader to Prowlarr's log rather than suggesting a fix, because
+CLAUDE.md's measurement stands - six zeros were a dead mirror, its duplicate, two entries sharing one
+refusing API host, a 502 and a 403, and not one of them was local.
+
+**Two ordering defects, both invisible in a screenshot until they were looked for.** `.dim` is a
+GLOBAL utility in `base.css` meaning *stale* - "opacity 0.42, and desaturating as well as dimming is
+load-bearing" - so a scoped `.dim { color: var(--fg-5) }` does not replace it, it **adds** to it: the
+two rows with no health check rendered at 42% opacity under a saturation filter, which is this
+application's one visual claim that a reading is out of date. It is `.dull` here. And the tone classes
+sat **above** the table rules, at equal specificity, so `.num` beat `.warnish` and a unit with nine
+restarts printed its nine in the body colour, while `.areading` beat `.bad` and Prowlarr's two errors
+read as an ordinary sentence beside a red rail. The rail was right and the value was not, on the page
+whose job is making a fault easy to find. They go last now.
+
+**And the fixture was the other half of it, twice.** `fixtures/model.ts` gave all three torrent-pod
+members `torrent-pod.service`, where the host gives each its own `.container` quadlet - measured:
+`gluetun.service`, `qbittorrent.service`, `joal.service`, with only the infra container on the pod's
+unit. A fixture where four containers share one unit is a shape production does not have. And **no
+fixture had ever carried a stopped service**, which is precisely why nothing could see that the page
+had no way to draw one: `duckdns` is absent from `CONTAINERS` now and present in `UNITS` at
+`state: 4`, so the missing row is on screen in dev. `containers.units_active` fails beside it and
+`containers.failed_units` **passes**, which is the finding rather than a contradiction.
+
+`src/services.ts` is the fourth extraction of this kind after `machine.ts`, `lanes.ts` and
+`system.ts`, and `fixtures/smoke.mjs` covers it in 53 assertions.
+
+## The Network page, and the three things it drew from git alone, 2026-09-08
+
+The last page to get the treatment the other six have had, and - as with Services the day before -
+the layout turned out to be the smaller half. Five defects came out of reading it against the
+running host, and **not one of them was visible at any viewport**.
+
+### The animation had never run
+
+`NetworkGraph.vue` set `animationDuration` inline on every spoke and `tokens.css` defined
+`@keyframes flow`. **Nothing anywhere set `animation-name`.** The only `.flow` selector in the whole
+application was the one inside `@media (prefers-reduced-motion: reduce)`, which sets
+`animation: none !important` - so the sole rule naming the class was the one turning it off.
+
+Everything built on top of it was correct and inert: the `flowing` gate with its three-poll slack,
+`flowDuration()` mapping intensity to a 6s-1s dash period, and three paragraphs in this file arguing
+that motion must stop when the reading goes stale because *"the eye reads movement long before it
+reads opacity"*. **The only thing that ever moved on that page was nothing.**
+
+It could not be caught by the one visual check this repository has, and for a stated reason: the
+magnitude tick is drawn in both motion modes precisely *because* `fixtures/shoot.mjs` takes stills,
+so a still of a working drawing and a still of a dead one are identical by design. The rule lives in
+the component now, beside the class it applies to; the keyframe stays in `tokens.css`, beside the
+argument for animating by the dash period rather than the path length.
+
+### A stopped container drew grey, one page after the same fix
+
+`home_server_container_running` is **absent** rather than 0 for a container that is not running,
+because `podman ps` lists running containers. So a stopped service never entered the tone map, `tone()`
+fell back to `off`, and `containerTone`'s `!running` branch was unreachable from this page entirely.
+
+**This is the `/services` defect of 2026-09-08, on `/network`, found the next day.** It is the third
+instance of the rule this file already states twice - *fixing one call-site instance is not evidence
+about the others* - and the second time the answer was "ask `home_server_unit_state`, not `podman
+ps`". `src/network.ts` calls `services.ts`'s own `liveness()` rather than restating it, so there is
+one liveness verdict in the application and two pages read it.
+
+### The `torrent` box was dead on the host and perfect in dev
+
+`topology.ts` names the node `torrent`; podman names the container `torrent-infra` and the metric
+carries podman's name. The graph joined on the node name, so on the live host that box read "not
+measured" on every rail. **The fixture built its pairs from the node name too**, so dev drew it
+healthy - a fixture derived from its consumer, for the third time in this file.
+
+`metricNameFor()` is the one copy of the bridge, and it is **derived rather than listed**: a node is
+a pod if anything declares it as its pod, which is what `podMembers()` answers - dead code until this
+change. A hardcoded `torrent -> torrent-infra` would work today and break silently on the second pod.
+The fixture now writes `torrent-infra` as a literal, checked against `podman ps`, with a comment
+saying why it must not call `metricNameFor()` to get there.
+
+### Three things the collector already had in hand and threw away
+
+`bin/collect-metrics.py` calls `podman ps --format json` twice and `podman network ls --format json`
+once, and discarded `c["Ports"]`, `c["Networks"]` and every network field but `subnets`. Three new
+families, **zero new subprocesses**, **55 series** against 181 of headroom - 14 networks, 37
+attachments, 4 ports, measured on the host rather than counted off a design.
+
+**Not 38 attachments, which is what `home_server_container_network_pairs` reads.** That gauge counts
+(container, segment) TRAFFIC pairs and the tunnel is one of them - it is a byte counter with no
+podman network behind it, so it is a pair and not an attachment. 37 is what `stacks/` declares in
+`Network=` lines and what `podman ps` reports, and the two agreeing is the check this page now draws.
+
+- `home_server_network_info{network,driver,subnet,isolate}` - `isolate` is a **label on an info
+  series**, the way `container_info` carries `pod`/`unit`/`image`, because
+  `{isolate!="true"}` is a perfectly good alert expression and a second gauge would cost fourteen
+  series for no new answer. It reads **empty, never "false"**, when the option is absent.
+- `home_server_container_attached{container,network}` - emitted **before** the collector's PID and
+  pod-member skips, so membership is strictly more available than the byte counters.
+- `home_server_container_published_port{container,host_ip,host_port,protocol}` - **the container
+  port is the value**, per CLAUDE.md's rule from `home_server_torrent_listen_port`. A publish is
+  identified by where it is bound; the value says where it lands.
+
+**"All isolate=true" was a sentence, not a reading.** The page printed `10 bridges, all
+isolate=true` as static text compiled into the bundle, while nothing on this host checked `isolate`
+on a stack segment at all - `agents.runner_isolation` and `ci.runner_isolation` both read the option,
+and both only on the ephemeral `net-conduct-*` and `net-ci-*` networks. A hand-edited stack network
+with isolation removed passed every check in this repository, underneath a page asserting in words
+that it could not happen.
+
+**An undeclared network is drawn and never graded.** `net-ci-*` and `net-conduct-*` belong to the
+drivers by design, and podman's own default bridge genuinely carries no `isolate` option - so a rule
+that only asked "is isolate true" would report a permanent fault on every host, every hour. Only a
+segment `topology.ts` declares is judged on it.
+
+**Membership was inferred from traffic, which fails in the case that matters.** The page derived who
+was on a segment from whichever `rate(...[5m])` pairs came back, and a rate needs two samples - so a
+container restarted inside the window returned no series and dropped silently out of its own
+segment. A failed subnet join looked identical to a real detachment, too;
+`unmapped_interfaces` counts those globally and names nobody.
+
+### The drawing groups by network, and the multi-homed go on a spine
+
+Ten horizontal rails with boxes packed along each answered "which rail is this on" and answered
+"what is on `net-solver`" only by tracing a line - across a 1498x856 canvas with six of sixty grid
+cells occupied, nine of ten rails holding five boxes or fewer and five holding exactly one.
+
+A group is a box now and its single-homed members are inside it. **The five that are on more than
+one segment are not inside anything**, because straddling a trust boundary is the security-relevant
+fact about them and it has to be a line rather than an entry in a list. Drawing a copy of caddy
+inside all eight of its groups says the opposite of what is true; giving it a "primary" group makes
+its home an artefact of which `Network=` line comes first in its quadlet.
+
+**Multi-homed is the union of declared and live, and computing it from git alone was wrong in the one
+case the spine exists for.** A container that has drifted onto a second segment IS multi-homed - it
+holds an address on two bridges - and reading only `topology.ts` drew it inside two group boxes, which
+says "these are two different things" about one container.
+
+**Elbows route in reserved bands, which is not decoration.** caddy alone needs eight lines reaching
+most of the canvas, so anything aimed straight at its target draws through the boxes it passes. Each
+grid row has a clear band above it, each spine node owns one lane in every band it uses and one
+vertical lane in the left margin, and a line is margin -> band -> down into the group's top edge. No
+elbow crosses a group and no two share a lane; `smoke.mjs` asserts both, at all three column counts.
+
+**The radius is clamped to half the shorter adjacent leg**, which is the whole correctness of
+`roundedPath()`. A fixed radius on a leg shorter than 2r pulls the curve's start point past the
+previous corner and the line hooks back on itself - at whichever corner happens to be tight, and
+therefore at one viewport only, because leg lengths move with the column count.
+
+### Four more, from looking at the result
+
+- **The headline counted five and the table listed seven.** `networkLead` counted segment and port
+  rows while `attentionRows` also emits the member that drifted. Two derivations of one question,
+  which is the defect this application records about the System page's findings strip - and which
+  `attentionRows`' own docblock refuses in the sentence above the bug. The headline counts the list
+  under it now.
+- **One finding printed twice**, a line apart: `net-egress` drew *"membership drift - not running, so
+  it holds no address"* directly above `duckdns` drawing the identical sentence. A segment inherits
+  its members' trouble for the rail and must summarise rather than copy; only a segment-LEVEL fault
+  gets a row of its own.
+- **The state column named the wrong thing.** `bazarr` on a segment nobody declared it on read
+  `unhealthy`, which is true about bazarr and says nothing about the row - the row is reporting an
+  undeclared attachment. A drift row names the drift.
+- **The group badge counted the boxes inside it**, so `net-arr` read "2" beside a table row reading
+  seven members. It reads the segment's own membership now.
+
+### Two things kept, and one limit stated
+
+The **`WindowPicker` still does not appear**: every number here is an instant query over a 5m rate,
+and *"a control that does nothing is a lie about a control"*. It comes back the day this page grows a
+traffic-over-time lane.
+
+**There is still no flow matrix and there cannot be one.** `nsenter -n` is `EPERM` as `core` and
+`/proc/net/nf_conntrack` is root-only, so a line carries a container's total on a segment and never
+traffic to a peer. The regrouping does not change that and the tooltips still say so.
+
+**The straight-line route layer is gone rather than ported.** It drew 48 declared edges centre to
+centre between boxes, which across a grouped layout is a thicket, and it silently dropped every edge
+touching a terminal - so `wan -> caddy`, the most important edge on the page, could never be drawn.
+`wan` and `internet` are boxes on the spine now, and `paths.ts`'s `why` - forty-eight hand-written
+one-line explanations, rendered nowhere in this application until today - is in the node tooltip.

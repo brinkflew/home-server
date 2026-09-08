@@ -150,6 +150,44 @@ export const SERVICES = {
   restarts: "home_server_container_restarts_total",
   startTime: "container_start_time_seconds",
 
+  /**
+   * THE UNIT, WHICH IS THE HALF podman CANNOT SEE - AND THE HALF THAT LETS THIS
+   * PAGE REPORT A SERVICE THAT IS DOWN AT ALL.
+   *
+   * `podman ps` lists RUNNING containers, so every series above exists only for
+   * a container that is up: home_server_container_running is 1 for all 28 rows
+   * on this host and can be nothing else. A service that stopped therefore did
+   * not go red on this page, it VANISHED from it - and CLAUDE.md records the
+   * outage that shape produced: "Caddy was down for 35 minutes and three checks
+   * looked straight at it: a dependency failure is `inactive`, not `failed`, and
+   * a container that never started is absent rather than unhealthy."
+   *
+   * source_units enumerates the QUADLET GENERATOR DIRECTORY rather than podman,
+   * in its own words "deriving the unit list from running containers would make
+   * this source blindest at the moment it matters most". These two series are
+   * that list, and the rack is built from them.
+   *
+   * FILTERED TO container AND pod IN THE QUERY, not in the page. `.build` and
+   * `.network` units are oneshot and INACTIVE is their correct resting state -
+   * home_server_units_not_active excludes them for exactly that reason, and a
+   * rack that drew them would report ten healthy networks as ten dead services.
+   *
+   * 0 active, 1 activating, 2 failed, 3 deactivating, 4 inactive, 5 reloading,
+   * 9 unrecognised.
+   */
+  unitState: 'home_server_unit_state{kind=~"container|pod"}',
+  /**
+   * systemd's NRestarts, WHICH IS THE ONLY RESTART COUNTER ON THIS HOST THAT
+   * CAN EVER BE NON-ZERO. `restarts` above is podman's per-container field, and
+   * a quadlet recreates the container on every restart - so it resets each time
+   * round a loop and reads 0 throughout the exact event it looks like it would
+   * catch. Pocket ID restarted 6,224 times in nine and a half hours and that
+   * gauge read 0 for the whole outage, which is what made ContainerRestartLoop
+   * unable to fire even in principle. The unit outlives its containers, so this
+   * one survives; it resets on a clean start, which is wanted.
+   */
+  unitRestarts: 'home_server_unit_restarts_total{kind=~"container|pod"}',
+
   cpu: `rate(container_cpu_usage_seconds_total[${RATE}])`,
   /** Working set, NOT usage_bytes. The latter counts cold page cache and is
    *  the reason Jellyfin looks like it is at its ceiling when it needs 400 MB. */
@@ -162,10 +200,25 @@ export const SERVICES = {
 
   identityUnresolved: "home_server_container_identity_unresolved",
 
-  /** The applications, for the service strip. */
+  /**
+   * The applications' own opinion of themselves, which is a different question
+   * from whether their container is healthy - and the one nothing on this page
+   * asked until 2026-09-08. An *arr with a broken indexer, an unreachable
+   * download client or a failed import is HEALTHY by every container-level
+   * signal on this host: the unit is active, the process answers its probe, and
+   * the only place the fault exists is the application's own health endpoint.
+   */
   arrIndexers: "home_server_arr_indexers",
   arrQueue: 'home_server_arr_queue_items{state="total"}',
+  /** Counted per severity, never carrying the message: the applications reword
+   *  their own strings upstream, so a label holding one would mint a fresh
+   *  series every release. The count says something is wrong; the UI says to go
+   *  and read it. */
   arrHealth: "home_server_arr_health_issues",
+  /** 1 while the download queue is reporting errors. COLLECTED SINCE THE
+   *  COLLECTOR EXISTED AND DRAWN NOWHERE - a stalled grab shows up here and, on
+   *  this page, in nothing else. */
+  arrQueueErrors: "home_server_arr_queue_errors",
   indexerUp: "home_server_indexer_up",
   jellyfinSessions: "home_server_jellyfin_sessions_total",
   tdarrQueue: "home_server_tdarr_queue_files_total",
@@ -212,6 +265,48 @@ export const NETWORK = {
    *  series that appears only when something is wrong cannot be. */
   unmapped: "home_server_container_network_unmapped_interfaces",
   pairs: "home_server_container_network_pairs",
+
+  /**
+   * MEMBERSHIP, AND NOT AS A SIDE EFFECT OF CARRYING TRAFFIC.
+   *
+   * The page used to derive which containers are on a segment from whichever
+   * `rx` pairs happened to come back. That is wrong in a way nothing on screen
+   * could show: `rate(...[5m])` needs two samples, so a container restarted
+   * inside the window returns NO SERIES AT ALL and falls silently out of the
+   * segment it belongs to - and a subnet join that failed looks identical to a
+   * container that has genuinely been detached.
+   *
+   * This is podman's own `Networks` array, emitted before the collector's PID
+   * and pod-member skips, so it is strictly more available than the counters.
+   */
+  attached: "home_server_container_attached",
+
+  /**
+   * The bridges themselves: driver, subnet and the isolate option.
+   *
+   * WHAT THIS REPLACES IS A SENTENCE. The page printed "10 bridges, all
+   * isolate=true" as static text compiled into the bundle, while nothing on
+   * the host checked isolate on a stack segment at all - agents.runner_isolation
+   * and ci.runner_isolation both read it, but only on the ephemeral
+   * net-conduct-* and net-ci-* networks. A security property asserted on screen
+   * and measured nowhere is the shape this repository keeps finding.
+   *
+   * `isolate` is EMPTY, not "false", when the option is absent. podman's own
+   * default bridge is the one network here in that state, and it is not a
+   * segment stacks/ declares - which is why an undeclared network must never be
+   * judged on it.
+   */
+  info: "home_server_network_info",
+
+  /**
+   * Published host ports, valued with the container port they land on.
+   *
+   * The host side is the LABEL because a publish is identified by where it is
+   * bound, and `host_ip` is the half that decides what governs it: firewalld
+   * sees a publish that faces the LAN and never sees a loopback one, because
+   * that packet does not reach the INPUT chain.
+   */
+  ports: "home_server_container_published_port",
 } as const;
 
 /**

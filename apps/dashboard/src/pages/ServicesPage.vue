@@ -1,150 +1,111 @@
 <script setup lang="ts">
 /**
- * Services: the container rack, and what the applications are doing.
+ * /services: is anything wrong with the stack, and what do I type?
  *
- * The segmentation, the routes and the traffic moved to NetworkPage on
- * 2026-08-18. The two answer different questions - "is this container healthy"
- * against "what can reach what, and what is moving" - and the second grew a
- * measured data layer that wanted a page of its own.
+ * THE PAGE COULD NOT SHOW A SERVICE THAT WAS DOWN, which is what this redesign
+ * is for. Every row was built from home_server_container_info, the collector
+ * builds that from `podman ps`, and `podman ps` lists RUNNING containers - so a
+ * service that stopped did not go red here, it VANISHED, and the rack was at its
+ * emptiest exactly when it mattered most. src/services.ts carries the argument
+ * and the fix: the rack is enumerated from home_server_unit_state now, which
+ * source_units reads from the quadlet generator directory for this very reason,
+ * and a container is joined onto a unit rather than the other way round.
  *
- * Every row is assembled from home_server_container_info's label set, which is
- * podman's own PODMAN_SYSTEMD_UNIT join - so `torrent-infra` resolves to
- * torrent-pod.service with no lookup table anywhere. CLAUDE.md is emphatic
- * about that: a table maintained in a script is the most driftable thing here.
+ * THREE MORE THINGS THAT WERE ON SCREEN AND MEANT NOTHING:
  *
- * home_server_container_identity_unresolved counts what did not map, and it is
- * shown rather than ignored, because the failure is otherwise silent - a
- * container simply missing from the rack.
+ *   - The RESTARTS column read podman's counter, which is reset when a quadlet
+ *     recreates the container - so it is 0 throughout a restart loop and read 0
+ *     through all 6,224 of Pocket ID's. systemd's NRestarts is the one that
+ *     survives, and it was on no page in this application.
+ *   - `pod {{ row.pod }}` was dead code. podman fills `Pod` with an id and not
+ *     `PodName`, so home_server_container_info{pod} is "" for every container on
+ *     this host - perfect in the fixtures, absent on the server, and recorded in
+ *     docs/dashboard.md two sections before nobody acted on it. Pod membership
+ *     comes from topology now.
+ *   - THREE LEDS WITH NO LEGEND ANYWHERE, whose leftmost had a state nobody can
+ *     guess: grey meant "no health check is defined", which is not the same as
+ *     one that passed. The page's own comment said so. There is one dot now and
+ *     the state is a WORD beside it, in the row, at every width.
+ *
+ * AND THE APPLICATIONS' OWN HEALTH IS FINALLY DRAWN. An *arr with a dead indexer
+ * is healthy by every container-level signal here - active unit, passing probe -
+ * and home_server_arr_health_issues has been collected since the collector
+ * existed with no consumer at all. The Applications band reads it, and names the
+ * indexers Prowlarr is backing off rather than counting them.
+ *
+ * ONE DERIVATION, TWO VIEWS. "Needs attention" is a FILTER over the same array
+ * the rack draws - never a second reading of the same series, which is how the
+ * System page came to draw one finding two ways and disagree with itself about
+ * what `note` meant.
  */
 import { computed, watch } from "vue";
 
+import Band from "@/components/Band.vue";
+import ChipLink from "@/components/ChipLink.vue";
+import FindingsPanel from "@/components/FindingsPanel.vue";
 import PanelBox from "@/components/PanelBox.vue";
 import StatusDot from "@/components/StatusDot.vue";
 import ActivityBars from "@/components/ActivityBars.vue";
-import StaleNote from "@/components/StaleNote.vue";
 import WindowPicker from "@/components/WindowPicker.vue";
 
 import { usePoll } from "@/composables/usePoll";
 import { useMetricsStale } from "@/composables/useStaleness";
 import { useTimeWindow } from "@/composables/useTimeWindow";
 import { useTooltip } from "@/composables/useTooltip";
-import { containerTone } from "@/health";
-import type { Tone } from "@/types";
 import { instant, instantBy, labelsBy, range, value } from "@/api/prometheus";
 import { SERVICES } from "@/queries";
 import { toPoints } from "@/charts";
-import { nodeByName } from "@/topology";
+import { appHome } from "@/links";
+import * as svc from "@/services";
 import * as fmt from "@/format";
+import type { Tone } from "@/types";
 
 const { window: win } = useTimeWindow();
 const tip = useTooltip();
-
-interface Row {
-  name: string;
-  unit: string;
-  image: string;
-  pod: string;
-  running: boolean;
-  /** undefined when the container defines no health check at all. */
-  health?: number;
-  restarts: number;
-  cpu: number;
-  memory: number;
-  memoryHigh: number;
-  /** Pages faulted back in after being reclaimed: the difference between a
-   *  cgroup holding cold cache and one that is actually starved. */
-  refault: number;
-  uptime: number;
-  activity: number[];
-  networks: string[];
-  role: string;
-  tone: Tone;
-  state: string;
-}
+const metricsStale = useMetricsStale();
 
 const ACTIVITY_BARS = 24;
 
-/**
- * The three LEDs have no legend anywhere on this page, and the leftmost one has
- * a state that cannot be guessed: GREY MEANS NO HEALTH CHECK IS DEFINED, which
- * is not the same as one that passed. @/health encodes that rule and
- * home_server_container_health is absent rather than zero for duckdns,
- * unpackerr and the pod's infra container - so the tooltip has to say it, or
- * the only place it is written down is a source file.
- */
-function ledTip(row: Row) {
-  return {
-    title: row.name,
-    lines: [row.state, row.image],
-    caveat:
-      row.tone === "off"
-        ? "Grey is not green. This container defines no health check, so nobody is checking it - which is a different thing from passing."
-        : undefined,
-  };
-}
-
-function runTip(row: Row) {
-  return {
-    title: row.running ? "running" : "stopped",
-    lines: [`up ${fmt.duration(row.uptime)}`, fmt.unitName(row.unit)],
-  };
-}
-
-function restartTip(row: Row) {
-  return {
-    title: `${fmt.number(row.restarts)} restart(s)`,
-    lines: ["podman's count, since the container was created"],
-    caveat:
-      row.restarts === 0 && row.uptime < 3600
-        ? "The counter is recreated with the container, and auto-update recreates every container nightly. A short uptime with zero restarts is not evidence of stability."
-        : undefined,
-  };
-}
-
-/** The same for every row, so it is computed once rather than rebuilt
- *  twenty-three times on each render. */
-const activityTip = computed(() => {
-  return {
-    title: `CPU, last ${win.value.label}`,
-    lines: [
-      `${ACTIVITY_BARS} bars, one per ${fmt.duration(Math.round(win.value.seconds / ACTIVITY_BARS))}`,
-      "scaled to this row's own peak, not to the rack",
-    ],
-    caveat: "A grey bar is a missing sample, not an idle one.",
-  };
-});
-
-function rowTip(row: Row) {
-  return {
-    title: row.name,
-    lines: [
-      row.state,
-      `up ${fmt.duration(row.uptime)}, ${fmt.number(row.restarts)} restart(s)`,
-      `cpu ${fmt.percent(row.cpu, 1)}, memory ${fmt.bytes(row.memory)}`,
-      row.networks.length ? row.networks.join(" ") : "no network of its own",
-    ],
-    caveat: ledTip(row).caveat,
-  };
-}
-
+// ---------------------------------------------------------------------------
+// The rack: the units, with a container joined onto each
+// ---------------------------------------------------------------------------
 const rack = usePoll(async (signal) => {
   const end = Math.floor(Date.now() / 1000);
   const step = Math.max(60, Math.round(win.value.seconds / ACTIVITY_BARS));
 
-  const [info, running, health, restarts, startTime, cpu, memory, memHigh, refault, unresolved, activity] =
-    await Promise.all([
-      labelsBy(SERVICES.info, "container", signal),
-      instantBy(SERVICES.running, "container", signal),
-      instantBy(SERVICES.health, "container", signal),
-      instantBy(SERVICES.restarts, "container", signal),
-      instantBy(SERVICES.startTime, "container", signal),
-      instantBy(SERVICES.cpu, "container", signal),
-      instantBy(SERVICES.memory, "container", signal),
-      instantBy(SERVICES.memoryHigh, "container", signal),
-      instantBy(SERVICES.memoryRefault, "container", signal),
-      instant(SERVICES.identityUnresolved, signal),
-      range(SERVICES.cpu, { window: step * ACTIVITY_BARS, step, signal }),
-    ]);
+  const [
+    unitState,
+    unitRestarts,
+    info,
+    running,
+    health,
+    restarts,
+    startTime,
+    cpu,
+    memory,
+    memHigh,
+    refault,
+    oom,
+    unresolved,
+    activity,
+  ] = await Promise.all([
+    // instant(), not instantBy(): this one needs the VALUE and two labels, and
+    // `kind` is what keeps a healthy oneshot .network unit out of the rack.
+    instant(SERVICES.unitState, signal),
+    instantBy(SERVICES.unitRestarts, "unit", signal),
+    labelsBy(SERVICES.info, "container", signal),
+    instantBy(SERVICES.running, "container", signal),
+    instantBy(SERVICES.health, "container", signal),
+    instantBy(SERVICES.restarts, "container", signal),
+    instantBy(SERVICES.startTime, "container", signal),
+    instantBy(SERVICES.cpu, "container", signal),
+    instantBy(SERVICES.memory, "container", signal),
+    instantBy(SERVICES.memoryHigh, "container", signal),
+    instantBy(SERVICES.memoryRefault, "container", signal),
+    instantBy(SERVICES.oomKills, "container", signal),
+    instant(SERVICES.identityUnresolved, signal),
+    range(SERVICES.cpu, { window: step * ACTIVITY_BARS, step, signal }),
+  ]);
 
   const bars = new Map<string, number[]>();
   for (const s of activity) {
@@ -152,47 +113,35 @@ const rack = usePoll(async (signal) => {
     if (key) bars.set(key, toPoints(s.values).map(([, v]) => v));
   }
 
-  const rows: Row[] = [...info.entries()].map(([name, labels]) => {
-    const isRunning = (running.get(name) ?? 0) === 1;
-    const h = health.get(name);
-    const declared = nodeByName(name);
+  const units: svc.UnitReading[] = unitState
+    .filter((s) => s.metric.unit)
+    .map((s) => ({
+      unit: s.metric.unit,
+      kind: s.metric.kind ?? "container",
+      state: value(s.value),
+      restarts: unitRestarts.get(s.metric.unit) ?? Number.NaN,
+    }));
 
-    // @/health owns this mapping now: the Home page's service strip needs the
-    // identical rule, and "absent is not zero" is too subtle to have two copies.
-    const { tone, state } = containerTone(isRunning, h);
+  const containers: svc.ContainerReading[] = [...info.entries()].map(([name, labels]) => ({
+    name,
+    unit: labels.unit ?? "",
+    image: labels.image ?? "",
+    running: (running.get(name) ?? 0) === 1,
+    // `undefined` means the series is absent, which @/health reads as
+    // "unchecked". `?? 0` here would report three containers as verified healthy
+    // on the strength of no evidence at all.
+    health: health.get(name),
+    podmanRestarts: restarts.get(name) ?? Number.NaN,
+    cpu: cpu.get(name) ?? Number.NaN,
+    memory: memory.get(name) ?? Number.NaN,
+    memoryHigh: memHigh.get(name) ?? Number.NaN,
+    refault: refault.get(name) ?? Number.NaN,
+    oomKills: oom.get(name) ?? Number.NaN,
+    uptime: end - (startTime.get(name) ?? Number.NaN),
+    activity: bars.get(name) ?? [],
+  }));
 
-    return {
-      name,
-      unit: labels.unit ?? "",
-      image: labels.image ?? "",
-      pod: labels.pod ?? "",
-      running: isRunning,
-      health: h,
-      restarts: restarts.get(name) ?? Number.NaN,
-      cpu: cpu.get(name) ?? Number.NaN,
-      memory: memory.get(name) ?? Number.NaN,
-      memoryHigh: memHigh.get(name) ?? Number.NaN,
-      refault: refault.get(name) ?? Number.NaN,
-      uptime: end - (startTime.get(name) ?? Number.NaN),
-      activity: bars.get(name) ?? [],
-      networks: declared?.networks ?? [],
-      role: declared?.role ?? "",
-      tone,
-      state,
-    };
-  });
-
-  // Worst first, then busiest. A rack sorted alphabetically buries the one row
-  // worth looking at somewhere in the middle.
-  //
-  // `off` and `ok` deliberately TIE. duckdns, unpackerr and the pod infra have
-  // no health check to fail, so ranking "unchecked" above "healthy" would pin
-  // the same three rows to the top for ever - which is how a sort order stops
-  // being read. They sort in by activity like everything else.
-  const rank: Record<Tone, number> = { fail: 0, warn: 1, off: 2, ok: 2 };
-  rows.sort((a, b) => rank[a.tone] - rank[b.tone] || b.cpu - a.cpu);
-
-  return { rows, unresolved: value(unresolved[0]?.value) };
+  return { rows: svc.serviceRows(units, containers), unresolved: value(unresolved[0]?.value) };
 }, 30_000);
 
 watch(win, () => {
@@ -200,76 +149,116 @@ watch(win, () => {
 });
 
 const rows = computed(() => rack.data.value?.rows ?? []);
+const attention = computed(() => svc.needsAttention(rows.value));
+const tally = computed(() => svc.serviceTally(rows.value));
+const lead = computed(() => svc.servicesLead(rows.value));
+const conds = computed(() => svc.conditionRows(rows.value));
 
-const tally = computed(() => {
-  const r = rows.value;
-  const counts = { ok: 0, warn: 0, fail: 0, off: 0 };
-  for (const row of r) counts[row.tone] += 1;
-  return counts;
-});
-
-const memoryRatio = (row: Row): number =>
-  Number.isFinite(row.memoryHigh) && row.memoryHigh > 0 ? row.memory / row.memoryHigh : Number.NaN;
-
-/**
- * A CONTAINER AT ITS MemoryHigh IS NOT NEWS, and colouring it amber is the
- * single most likely way this page would cry wolf.
- *
- * CLAUDE.md spends a section on it: Jellyfin sits at exactly 3.00G against a
- * 3G watermark with 6,398 `high` events seven minutes after a restart, and it
- * is fine - 0.385G of that is its working set and the rest is cold streaming
- * page cache the kernel reclaims for free. "A cgroup doing file I/O will
- * always sit at its MemoryHigh and always accumulate high events, because that
- * is what the watermark is for."
- *
- * So the ratio alone decides nothing. The second signal is the refault rate -
- * pages being read back in after reclaim, which is what actual starvation
- * looks like - and a restart, which is what it looks like once it has already
- * gone wrong.
- */
-function memoryTone(row: Row): Tone {
-  const ratio = memoryRatio(row);
-  if (!Number.isFinite(ratio)) return "off";
-
-  const thrashing = Number.isFinite(row.refault) && row.refault > 0;
-  if (ratio >= 0.98 && (thrashing || row.restarts > 0)) return "fail";
-  if (thrashing) return "warn";
-  return "ok";
-}
-
-// --- the applications, as a strip ------------------------------------------
+// ---------------------------------------------------------------------------
+// The applications
+// ---------------------------------------------------------------------------
 const apps = usePoll(async (signal) => {
-  const [indexers, indexerUp, queue, sessions, tdarr, torrent, torrentRate, vpn] = await Promise.all([
-    instantBy(SERVICES.arrIndexers, "service", signal),
-    instantBy(SERVICES.indexerUp, "indexer", signal),
-    instantBy(SERVICES.arrQueue, "service", signal),
-    instant(SERVICES.jellyfinSessions, signal),
-    instant(SERVICES.tdarrQueue, signal),
-    instant(SERVICES.torrentState, signal),
-    instantBy(SERVICES.torrentRate, "direction", signal),
-    labelsBy(SERVICES.vpnInfo, "__name__", signal),
-  ]);
+  const [indexers, indexerUp, queue, queueErrors, health, sessions, tdarr, torrent, rate, vpn] =
+    await Promise.all([
+      instantBy(SERVICES.arrIndexers, "service", signal),
+      instantBy(SERVICES.indexerUp, "indexer", signal),
+      instantBy(SERVICES.arrQueue, "service", signal),
+      instantBy(SERVICES.arrQueueErrors, "service", signal),
+      instant(SERVICES.arrHealth, signal),
+      instant(SERVICES.jellyfinSessions, signal),
+      instant(SERVICES.tdarrQueue, signal),
+      instant(SERVICES.torrentState, signal),
+      instantBy(SERVICES.torrentRate, "direction", signal),
+      labelsBy(SERVICES.vpnInfo, "__name__", signal),
+    ]);
 
-  const up = [...indexerUp.values()].filter((v) => v === 1).length;
+  // Two labels, so neither instantBy nor labelsBy fits: the key is the pair.
+  const byServiceSeverity = new Map<string, number>();
+  for (const s of health) {
+    const k = `${s.metric.service ?? "?"}|${s.metric.severity ?? "?"}`;
+    byServiceSeverity.set(k, value(s.value));
+  }
+
   const vpnLabels = [...vpn.values()][0];
 
-  return {
-    indexers: { up, total: indexerUp.size, perService: indexers },
+  return svc.appRows({
+    indexers,
+    indexerUp,
     queue,
+    queueErrors,
+    health: byServiceSeverity,
     sessions: value(sessions[0]?.value),
     tdarr: value(tdarr[0]?.value),
     torrentState: value(torrent[0]?.value),
-    down: torrentRate.get("download") ?? Number.NaN,
-    upRate: torrentRate.get("upload") ?? Number.NaN,
+    down: rate.get("download") ?? Number.NaN,
+    up: rate.get("upload") ?? Number.NaN,
     vpn: vpnLabels ? `${vpnLabels.city ?? ""} ${vpnLabels.country ?? ""}`.trim() : "",
-  };
+  });
 }, 60_000);
 
-const TORRENT_STATE = ["connected", "firewalled", "disconnected"];
+// ---------------------------------------------------------------------------
+// Presentation
+// ---------------------------------------------------------------------------
 
-// @/composables/useStaleness owns this now - it was byte-identical to
-// SystemPage's copy, and Home and Library would have made four.
-const metricsStale = useMetricsStale();
+/** A tone on a value, without a fourth colour: fail and warn speak, ok is the
+ *  ordinary body colour and off is the dim one. The System views' rule. */
+function toneClass(tone: Tone): Record<string, boolean> {
+  return { bad: tone === "fail", warnish: tone === "warn", dull: tone === "off" };
+}
+
+/** ok DRAWS NO RAIL. A teal edge down every healthy row is a wall of colour
+ *  that makes the two rows with a rail harder to find, not easier. */
+function rail(tone: Tone): string {
+  return tone === "ok" ? "transparent" : `var(--${tone})`;
+}
+
+/**
+ * The one caveat that cannot be inferred from the word beside it: grey is not
+ * green. home_server_container_health is ABSENT for duckdns, unpackerr and the
+ * pod's infra container, so "unchecked" means nobody is looking - which is a
+ * different thing from passing, and the only place it would otherwise be
+ * written down is a source file.
+ */
+function stateTip(row: svc.ServiceRow) {
+  return {
+    title: row.name,
+    lines: [row.state, row.image || row.unit],
+    caveat:
+      row.tone === "off" && row.present
+        ? "Grey is not green. This container defines no health check, so nobody is checking it - which is a different thing from passing."
+        : undefined,
+  };
+}
+
+/** The same for every row, so it is computed once rather than rebuilt
+ *  twenty-eight times on each render. */
+const activityTip = computed(() => ({
+  title: `CPU, last ${win.value.label}`,
+  lines: [
+    `${ACTIVITY_BARS} bars, one per ${fmt.duration(Math.round(win.value.seconds / ACTIVITY_BARS))}`,
+    "scaled to this row's own peak, not to the rack",
+  ],
+  caveat: "A grey bar is a missing sample, not an idle one.",
+}));
+
+function restartTip(row: svc.ServiceRow) {
+  return {
+    title: `${fmt.number(row.unitRestarts)} restart(s)`,
+    lines: [
+      "systemd's NRestarts, which survives the container being recreated",
+      "it resets on a clean start, so this is about now rather than ever",
+    ],
+    caveat:
+      Number.isFinite(row.podmanRestarts) && row.podmanRestarts > 0
+        ? `podman separately counts ${fmt.number(row.podmanRestarts)} for this container, which is a restart systemd did not order.`
+        : undefined,
+  };
+}
+
+/** The application's own page, where it has one. */
+function open(row: svc.ServiceRow): string | null {
+  return row.app ? appHome(row.app) : null;
+}
 </script>
 
 <template>
@@ -279,157 +268,268 @@ const metricsStale = useMetricsStale();
       <WindowPicker />
     </Teleport>
 
-    <!-- The rack -->
-    <section class="rack-head">
-      <span class="label">Containers</span>
-      <span class="mono counts">
-        {{ rows.length }} units / {{ tally.ok }} healthy / {{ tally.warn }} starting /
-        {{ tally.fail }} failing / {{ tally.off }} unchecked
-      </span>
-    </section>
+    <!-- THE HEADLINE IS THE COUNT THAT NEEDS SOMETHING DOING. "26 of 28 healthy"
+         reads as a pass mark; the two are the reason to be here. -->
+    <Band label="Right now">
+      <template #aside>
+        <span class="mono">
+          <span class="count">{{ tally.total }}</span> services
+        </span>
+      </template>
 
-    <StaleNote :reason="metricsStale" />
-
-    <div class="rack" :class="{ dim: !!metricsStale }">
-      <div class="row head mono">
-        <span>LED</span>
-        <span>CONTAINER</span>
-        <span>IMAGE</span>
-        <span>ACTIVITY</span>
-        <span class="r">CPU</span>
-        <span class="r">MEMORY</span>
-        <span class="r">RESTARTS</span>
-        <span class="r">UPTIME</span>
-      </div>
-
-      <div
-        v-for="row in rows"
-        :key="row.name"
-        class="row"
-        :style="{ borderLeftColor: `var(--${row.tone})` }"
-        v-bind="tip.bind(`row-${row.name}`, rowTip(row))"
-      >
-        <div class="leds">
-          <span v-bind="tip.hover(`led-${row.name}`, ledTip(row))">
-            <StatusDot :tone="row.tone" :live="row.tone === 'fail'" glow :size="7" />
-          </span>
-          <span v-bind="tip.hover(`run-${row.name}`, runTip(row))">
-            <StatusDot :tone="row.running ? 'ok' : 'off'" :size="7" />
-          </span>
-          <span v-bind="tip.hover(`rst-${row.name}`, restartTip(row))">
-            <StatusDot :tone="row.restarts > 0 ? 'warn' : 'off'" :size="7" />
-          </span>
+      <PanelBox :stale="metricsStale">
+        <div class="lead">
+          <StatusDot :tone="lead.tone" :live="lead.live" :size="9" />
+          <span class="reading mono">{{ lead.text }}</span>
         </div>
+        <p class="lead-sub mono">{{ lead.sub }}</p>
 
-        <div class="ident">
-          <div class="name">{{ row.name }}</div>
-          <div class="state mono" :style="{ color: `var(--${row.tone})` }">{{ row.state }}</div>
-        </div>
-
-        <div class="meta">
-          <div class="mono image truncate" :title="row.image">{{ fmt.shortImage(row.image) }}</div>
-          <div class="mono sub">
-            <span>{{ fmt.unitName(row.unit) }}</span>
-            <span v-if="row.pod">pod {{ row.pod }}</span>
-            <span v-else-if="row.networks.length">{{ row.networks.join(" ") }}</span>
+        <div class="conds">
+          <div v-for="c in conds" :key="c.id" class="cond">
+            <span class="label">{{ c.label }}</span>
+            <span class="mono cvalue" :class="toneClass(c.tone)">{{ c.value }}</span>
+            <span class="mono sub">{{ c.sub }}</span>
           </div>
         </div>
+      </PanelBox>
+    </Band>
 
-        <span v-bind="tip.hover(`act-${row.name}`, activityTip)">
-          <ActivityBars :values="row.activity" :tone="row.tone === 'off' ? 'off' : row.tone" :height="20" />
+    <!-- SECOND, AND IT IS THE POINT OF THE PAGE. Everything below is evidence;
+         this is the list, the sentence and the command. -->
+    <Band label="Needs attention">
+      <template #aside>
+        <span class="mono">
+          <span class="count">{{ attention.length }}</span> of
+          <span class="count">{{ tally.total }}</span>
         </span>
+      </template>
 
-        <div class="mono num">{{ fmt.percent(row.cpu, 1) }}</div>
+      <PanelBox :stale="metricsStale">
+        <table v-if="attention.length" class="tbl">
+          <thead>
+            <tr>
+              <th class="c-rail" />
+              <th>Service</th>
+              <!-- EVERY REMEDY IS A READ. This dashboard cannot restart anything -
+                   the podman socket is SELinux-denied from container_t - and that
+                   is not the only reason: a command that changes the host is a
+                   decision for the person, not a string a panel prints. -->
+              <th class="c-remedy p2">Look here first</th>
+              <th class="c-open" />
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in attention" :key="row.unit || row.name" :style="{ '--rail': rail(row.tone) }">
+              <td class="rail">
+                <StatusDot :tone="row.tone" :live="row.tone === 'fail'" :size="6" />
+              </td>
+              <td>
+                <div class="sname">{{ row.name }}</div>
+                <div class="sstate mono" :class="toneClass(row.tone)">{{ row.state }}</div>
+                <!-- NOT CLAMPED. This sentence is the reason the row is here. -->
+                <p class="issue">{{ row.issue }}</p>
+                <code v-if="row.remedy" class="fold2 cmd mono">{{ row.remedy }}</code>
+              </td>
+              <td class="c-remedy p2">
+                <code v-if="row.remedy" class="cmd mono">{{ row.remedy }}</code>
+                <span v-else class="mono dull">nothing to run - wait for it</span>
+              </td>
+              <td class="c-open">
+                <ChipLink
+                  v-if="row.app"
+                  label="open"
+                  :href="open(row)"
+                  :title="`open ${row.name}'s own interface`"
+                />
+              </td>
+            </tr>
+          </tbody>
+        </table>
 
-        <div class="mono num mem">
-          <span>{{ fmt.bytes(row.memory) }}</span>
-          <span class="cap" :style="{ color: `var(--${memoryTone(row)})` }">
-            {{ fmt.percent(memoryRatio(row), 0) }} of high
-          </span>
-        </div>
+        <!-- A CALM EMPTY STATE THAT STILL COUNTS THE GREY ONES. "All good" would
+             fold "nobody is checking three of these" into the same sentence as
+             "these passed", which is the one fold this application never makes. -->
+        <p v-else class="empty mono">
+          nothing needs attention - {{ tally.ok }} healthy, {{ tally.off }} with no health check,
+          nothing failing or restarting
+        </p>
 
-        <div class="mono num" :style="{ color: row.restarts > 0 ? 'var(--warn)' : 'var(--fg-5)' }">
-          {{ fmt.number(row.restarts) }}
-        </div>
+        <p v-if="(rack.data.value?.unresolved ?? 0) > 0" class="note unresolved mono">
+          {{ rack.data.value?.unresolved }} container(s) could not be mapped to a systemd unit, so
+          they are absent from every table here. That is what
+          home_server_container_identity_unresolved counts.
+        </p>
+      </PanelBox>
+    </Band>
 
-        <div class="mono num dim">{{ fmt.duration(row.uptime) }}</div>
-      </div>
-    </div>
+    <!-- THE BATTERY'S OWN PROSE, over the two sections this page is about.
+         `containers` grades the units and the probes; `update` grades the nightly
+         image roll that recreates every container on the host, which is the answer
+         to "why did this restart last night" and belongs beside the restart. -->
+    <FindingsPanel label="What the hourly battery found" :section="['containers', 'update']" />
 
-    <p v-if="(rack.data.value?.unresolved ?? 0) > 0" class="unresolved mono">
-      {{ rack.data.value?.unresolved }} container(s) could not be mapped to a systemd unit, so they are
-      absent from this table. That is what home_server_container_identity_unresolved counts.
-    </p>
+    <Band label="Services">
+      <template #aside><span>worst first, then busiest</span></template>
 
-    <!-- The applications. The network half of this section moved to
-         NetworkPage; what is left is application state, so it reads as a strip
-         above nothing rather than a sidebar around one panel. -->
-    <PanelBox label="Applications" :stale="metricsStale">
-      <div class="apps mono">
-        <div class="app">
-          <span>indexers up</span>
-          <span
-            class="av"
-            :style="{
-              color:
-                (apps.data.value?.indexers.up ?? 0) * 2 < (apps.data.value?.indexers.total ?? 0)
-                  ? 'var(--warn)'
-                  : 'var(--fg-2)',
-            }"
-          >
-            {{ apps.data.value?.indexers.up ?? "-" }} of {{ apps.data.value?.indexers.total ?? "-" }}
-          </span>
-        </div>
-        <div class="app">
-          <span>sonarr queue</span>
-          <span class="av">{{ fmt.number(apps.data.value?.queue.get("sonarr") ?? Number.NaN) }}</span>
-        </div>
-        <div class="app">
-          <span>radarr queue</span>
-          <span class="av">{{ fmt.number(apps.data.value?.queue.get("radarr") ?? Number.NaN) }}</span>
-        </div>
-        <div class="app">
-          <span>tdarr queue</span>
-          <span class="av">{{ fmt.number(apps.data.value?.tdarr ?? Number.NaN) }}</span>
-        </div>
-        <div class="app">
-          <span>jellyfin sessions</span>
-          <span class="av">{{ fmt.number(apps.data.value?.sessions ?? Number.NaN) }}</span>
-        </div>
-        <div class="app">
-          <span>torrent</span>
-          <span
-            class="av"
-            :style="{
-              color: (apps.data.value?.torrentState ?? 0) === 0 ? 'var(--ok)' : 'var(--warn)',
-            }"
-          >
-            {{ TORRENT_STATE[apps.data.value?.torrentState ?? 2] ?? "unknown" }}
-          </span>
-        </div>
-        <div class="app">
-          <span>torrent rate</span>
-          <span class="av">
-            {{ fmt.rate(apps.data.value?.down ?? Number.NaN) }} /
-            {{ fmt.rate(apps.data.value?.upRate ?? Number.NaN) }}
-          </span>
-        </div>
-        <div class="app">
-          <span>vpn exit</span>
-          <span class="av">{{ apps.data.value?.vpn || "-" }}</span>
-        </div>
-      </div>
-    </PanelBox>
+      <PanelBox :stale="metricsStale">
+        <p v-if="!rows.length" class="empty mono">no unit and no container reported</p>
 
+        <table v-else class="tbl">
+          <thead>
+            <tr>
+              <th class="c-rail" />
+              <th>Service</th>
+              <th class="c-image p4">Image</th>
+              <th class="c-act p3">Activity</th>
+              <th class="c-cpu r p2">CPU</th>
+              <th class="c-mem r p2">Memory</th>
+              <th class="c-rst r p3">Restarts</th>
+              <th class="c-up r p2">Uptime</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="row in rows"
+              :key="row.unit || row.name"
+              class="hov"
+              :style="{ '--rail': rail(row.tone) }"
+            >
+              <td class="rail">
+                <StatusDot :tone="row.tone" :live="row.tone === 'fail'" glow :size="6" />
+              </td>
+
+              <td>
+                <div class="ident">
+                  <span class="sname">{{ row.name }}</span>
+                  <ChipLink
+                    v-if="row.app"
+                    label="open"
+                    :href="open(row)"
+                    :title="`open ${row.name}'s own interface`"
+                  />
+                </div>
+
+                <div class="sstate mono" :class="toneClass(row.tone)" v-bind="tip.hover(`st-${row.name}`, stateTip(row))">
+                  {{ row.state }}<span v-if="row.role" class="role"> . {{ row.role }}</span>
+                </div>
+
+                <!-- The meta line, and everything a dropped column handed over.
+                     Each fold appears only once its own column has gone. -->
+                <div class="smeta mono">
+                  <span>{{ fmt.unitName(row.unit) }}</span>
+                  <span v-if="row.pod">pod {{ row.pod }}</span>
+                  <span v-else-if="row.networks.length">{{ row.networks.join(" ") }}</span>
+                  <span v-if="row.image" class="fold4 truncate">{{ fmt.shortImage(row.image) }}</span>
+                  <span v-if="row.unitRestarts > 0" class="fold3 warnish">
+                    {{ fmt.number(row.unitRestarts) }} restart(s)
+                  </span>
+                  <span class="fold2">cpu {{ fmt.percent(row.cpu, 1) }}</span>
+                  <span class="fold2">mem {{ fmt.bytes(row.memory) }}</span>
+                  <span class="fold2">up {{ fmt.duration(row.uptime) }}</span>
+                </div>
+              </td>
+
+              <td class="c-image p4">
+                <span class="mono image truncate" :title="row.image">{{ fmt.shortImage(row.image) }}</span>
+              </td>
+
+              <td class="c-act p3">
+                <span v-bind="tip.hover(`act-${row.name}`, activityTip)">
+                  <ActivityBars :values="row.activity" :tone="row.tone === 'off' ? 'off' : row.tone" :height="20" />
+                </span>
+              </td>
+
+              <td class="c-cpu r p2"><span class="mono num">{{ fmt.percent(row.cpu, 1) }}</span></td>
+
+              <td class="c-mem r p2">
+                <div class="mono num">{{ fmt.bytes(row.memory) }}</div>
+                <!-- A CONTAINER AT ITS MemoryHigh IS NOT NEWS, and colouring one
+                     amber is the likeliest way this page would cry wolf. The tone
+                     is the refault rate and the OOM counter; see memoryTone().
+
+                     SUPPRESSED RATHER THAN DASHED. With no container there is no
+                     ratio, and "- of high" is a sentence about a ceiling that is
+                     not being approached by anything. One dash above it already
+                     says the row has no reading. -->
+                <div
+                  v-if="Number.isFinite(svc.memoryRatio(row))"
+                  class="mono cap"
+                  :class="toneClass(row.memoryTone)"
+                >
+                  {{ fmt.percent(svc.memoryRatio(row), 0) }} of high
+                </div>
+              </td>
+
+              <td class="c-rst r p3">
+                <span
+                  class="mono num"
+                  :class="{ warnish: row.unitRestarts > 0 }"
+                  v-bind="tip.hover(`rst-${row.name}`, restartTip(row))"
+                >
+                  {{ fmt.number(row.unitRestarts) }}
+                </span>
+                <div v-if="svc.restartLine(row)" class="mono cap dull">{{ svc.restartLine(row) }}</div>
+              </td>
+
+              <td class="c-up r p2"><span class="mono num dull">{{ fmt.duration(row.uptime) }}</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </PanelBox>
+    </Band>
+
+    <!-- WHAT THE APPLICATIONS SAY ABOUT THEMSELVES, which is a different question
+         from whether their containers are healthy - and one nothing on this page
+         asked until now. An *arr with a dead indexer has an active unit and a
+         passing probe; the only symptom is that nothing is found. -->
+    <Band label="Applications">
+      <template #aside><span>what they report about themselves</span></template>
+
+      <PanelBox :stale="metricsStale">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th class="c-rail" />
+              <th class="c-app p2">Application</th>
+              <th>Reading</th>
+              <th class="c-open" />
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="a in apps.data.value ?? []" :key="a.id" :style="{ '--rail': rail(a.tone) }">
+              <td class="rail" />
+              <td class="c-app p2"><span class="mono aname">{{ a.label }}</span></td>
+              <td>
+                <!-- THE NAME RELOCATES RATHER THAN SHRINKING. Its own column is
+                     132px and a phone has about 300 for the whole table, so
+                     keeping it left of the reading spent half the row on one
+                     word and broke "connected, 6.2 MB/s down" into nine lines. -->
+                <div class="fold2 mono aname">{{ a.label }}</div>
+                <div class="mono areading" :class="toneClass(a.tone)">{{ a.reading }}</div>
+                <p v-if="a.issue" class="issue">{{ a.issue }}</p>
+              </td>
+              <td class="c-open">
+                <ChipLink v-if="a.app" label="open" :href="appHome(a.app)" :title="`open ${a.label}`" />
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </PanelBox>
+    </Band>
   </div>
 </template>
 
 <style scoped>
+/* Two rhythms, not one: --gap-lg between bands and --gap inside them is what
+   makes a page read as bands rather than as one stack of panels. Band owns the
+   second, the page owns this one - SystemLayout's rule, and this page had
+   neither because it had no bands. */
 .page {
   padding: 16px var(--pad-page) var(--pad-page);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--gap-lg);
+  min-width: 0;
 }
 
 .note {
@@ -437,168 +537,353 @@ const metricsStale = useMetricsStale();
   color: var(--fg-dim);
 }
 
+/* --- the header ----------------------------------------------------------- */
 
-.rack-head {
+.lead {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.counts {
-  font: var(--t-mono-sm);
-  color: var(--fg-5);
-}
-
-
-/* PANNED BELOW THE WIDTH IT NEEDS, rather than squeezed. Eight columns of
-   which seven are a fixed width - 672px of tracks, 84px of gaps and 28px of
-   padding is a 784px floor - and it sits directly in the page rather than in a
-   panel, so at 375px it pushed the whole document sideways. Converting it to
-   `.tbl` with column priority is the follow-up; this is the repair. */
-.rack {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-}
-
-.rack .row {
-  min-width: 784px;
-}
-
-.rack.dim {
-  opacity: 0.45;
-  filter: saturate(0.5);
-}
-
-.row {
-  display: grid;
-  grid-template-columns: 56px 148px minmax(0, 1fr) 90px 74px 128px 84px 92px;
   align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
-  border-radius: var(--r-sm);
-  background: var(--row);
-  border: 1px solid var(--line);
-  border-left: 2px solid var(--off);
-}
-
-.row:hover {
-  border-color: oklch(1 0 0 / 0.2);
-}
-
-.row.head {
-  background: none;
-  border: 0;
-  padding: 0 14px 4px;
-  font: var(--t-mono-xs);
-  letter-spacing: 0.1em;
-  color: var(--fg-dim);
-}
-
-.r {
-  text-align: right;
-}
-
-.leds {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-}
-
-.name {
-  font: var(--t-ui-md);
-}
-
-.state {
-  font: var(--t-mono-xs);
-  margin-top: 2px;
-}
-
-.meta {
+  gap: 10px;
   min-width: 0;
 }
 
-.image {
-  font: var(--t-mono-sm);
-  color: var(--fg-3);
+/* --t-mono-xl, "the one headline reading". One per view. */
+.reading {
+  font: var(--t-mono-xl);
+  color: var(--fg);
 }
 
-.sub {
-  display: flex;
-  gap: 10px;
-  margin-top: 3px;
-  font: var(--t-mono-xs);
+.lead-sub {
+  margin-top: 7px;
+  font: var(--t-mono-sm);
   color: var(--fg-5);
 }
 
-.num {
-  text-align: right;
+/* Three equal columns above 900, packed left below it, and a label-left readout
+   below 640 - the recipe /system/health and the round board already use. */
+.conds {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--gap) var(--gap-lg);
+  margin-top: 15px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-divider);
+}
+
+.cond {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.label {
+  font: var(--t-label);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--fg-5);
+}
+
+.cvalue {
   font: var(--t-mono-md);
   color: var(--fg-2);
 }
 
-.dim {
+.sub {
+  font: var(--t-mono-xs);
   color: var(--fg-5);
-  font-weight: 400;
 }
 
-.mem {
+/* --- the tables ----------------------------------------------------------- */
+
+.c-rail {
+  width: 30px;
+}
+
+/* "lscr.io/linuxserver/qbittorrent:libtorrentv1" shortens to 36 characters,
+   which is 216px at --t-mono-sm; anything longer truncates and keeps the full
+   reference on its title. */
+.c-image {
+  width: 200px;
+}
+
+/* 118px OF BARS PLUS 24px OF CELL PADDING, AND THE FIRST NUMBER IS ARITHMETIC
+   RATHER THAN AN ESTIMATE: 24 bars at 3px with a 2px gap between them is
+   24*3 + 23*2. At 96px the strip overflowed its own cell and drew straight
+   through the CPU reading beside it - a fixed table column clips nothing, and
+   ActivityBars keeps its bars 3px wide on purpose so that every row's strip is
+   comparable. */
+.c-act {
+  width: 146px;
+}
+
+/* "390.0%" - a rate, so a container using four cores reads above 100. */
+.c-cpu {
+  width: 76px;
+}
+
+/* Two lines: "2.99 GB" over "100% of high". */
+.c-mem {
+  width: 132px;
+}
+
+/* "2 by podman" is 73px at --t-mono-xs, and it is a second line under the
+   count rather than beside it. */
+.c-rst {
+  width: 104px;
+}
+
+/* "41d 06h". */
+.c-up {
+  width: 88px;
+}
+
+/* The remedy is a command line and must not wrap mid-flag. The longest one
+   here is `systemctl --user show windmill-worker-verify.service -p MemoryHigh
+   -p MemoryMax`, which does not fit any column - so it wraps on whitespace and
+   the column is sized for the common `journalctl` case. */
+.c-remedy {
+  width: 380px;
+}
+
+.c-open {
+  width: 84px;
+}
+
+.c-app {
+  width: 132px;
+}
+
+.ident {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
-.cap {
+.sname {
+  font: var(--t-ui-md);
+  color: var(--fg);
+}
+
+.sstate {
+  margin-top: 2px;
   font: var(--t-mono-xs);
 }
 
-.unresolved {
-  font: var(--t-mono-sm);
-  color: var(--warn);
-}
-
-
-
-
-
-
-
-/* A strip, not a sidebar: with the topology gone there is nothing to sit
-   beside, and eight facts in one column beside empty space reads as a leftover. */
-.apps {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 7px 18px;
-  margin-top: 8px;
-}
-
-.app {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  font: var(--t-mono-sm);
+/* The role is what a reader of twenty-eight infrastructure containers most
+   needs and never had: "reverse proxy, the only multi-homed thing here". It
+   takes the dim tier so the state word still reads as the state. */
+.role {
   color: var(--fg-5);
 }
 
-.av {
-  color: var(--fg-2);
-  font-weight: 500;
+.smeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 4px;
+  font: var(--t-mono-xs);
+  color: var(--fg-5);
+  min-width: 0;
 }
 
-@media (max-width: 1100px) {
-  .apps {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+/* The folds are flex items in the meta line, so they lay out inline rather than
+   as the blocks base.css makes them. */
+.smeta .fold4,
+.smeta .fold3,
+.smeta .fold2 {
+  display: none;
+}
+
+@media (max-width: 1180px) {
+  .smeta .fold4 {
+    display: inline;
   }
 }
 
-/* Two columns of "label   value" in 347px is about 165px a pair, which puts
-   the value under its own label as often as beside it. */
+@media (max-width: 900px) {
+  .smeta .fold3 {
+    display: inline;
+  }
+}
+
 @media (max-width: 640px) {
-  .apps {
-    grid-template-columns: minmax(0, 1fr);
+  .smeta .fold2 {
+    display: inline;
+  }
+}
+
+.image {
+  font: var(--t-mono-sm);
+  color: var(--fg-4);
+  display: block;
+}
+
+.num {
+  font: var(--t-mono-md);
+  color: var(--fg-2);
+}
+
+.cap {
+  display: block;
+  margin-top: 3px;
+  font: var(--t-mono-xs);
+}
+
+/* NOT CLAMPED, on either table. The sentence is the reason the row is there,
+   and FindingsPanel's two-line clamp is for a column 232px wide beside an id;
+   this one has the width of the table. */
+.issue {
+  margin-top: 6px;
+  font: var(--t-ui-sm);
+  color: var(--fg-3);
+}
+
+/* A command, not a label: it is meant to be selected and pasted into an ssh
+   session, so it takes a surface of its own and wraps on whitespace rather than
+   truncating - half a command line is worse than none. */
+.cmd {
+  display: inline-block;
+  padding: 5px 8px;
+  border-radius: var(--r-xs);
+  background: var(--fill);
+  color: var(--fg-2);
+  font: var(--t-mono-xs);
+  overflow-wrap: anywhere;
+}
+
+/* TWO CLASSES, TWO SPECIFICITIES, AND base.css LOSES WITHOUT THIS. Its
+   `.fold2 { display: none }` and this file's `.cmd { display: inline-block }`
+   are both one class, so the later one - the scoped rule - wins and the folded
+   copy rendered at every width. The command was on screen twice, side by side,
+   in the panel whose whole job is to say what to type. */
+.cmd.fold2 {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .cmd.fold2 {
+    display: inline-block;
+    margin-top: 7px;
+  }
+}
+
+.aname {
+  font: var(--t-mono-md);
+  color: var(--fg-2);
+}
+
+.areading {
+  font: var(--t-mono-sm);
+  color: var(--fg-3);
+}
+
+.empty {
+  font: var(--t-mono-sm);
+  color: var(--fg-dim);
+  padding: 6px 4px;
+}
+
+.unresolved {
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid var(--border-divider);
+  color: var(--warn);
+}
+
+/* --- the tone classes, LAST ---------------------------------------------
+   AND LAST IS NOT TIDINESS. Every one of these is a single class, and so are
+   `.num`, `.areading` and `.cvalue` - equal specificity, so the later rule in
+   the file wins. Written where they used to be, above the tables, `.num` beat
+   `.warnish` and a unit with nine restarts printed its nine in the ordinary
+   body colour; `.areading` beat `.bad` and Prowlarr's two errors read as an
+   ordinary sentence beside a red rail. The rail was right and the value was
+   not, on the one page whose job is to make a fault easy to find.
+
+   `.dull`, NOT `.dim`: base.css owns a global `.dim` that means STALE -
+   "opacity 0.42, and desaturating as well as dimming is load-bearing" - so a
+   scoped `.dim { color: var(--fg-5) }` does not replace it, it ADDS to it. The
+   two rows with no health check rendered at 42% opacity under a saturation
+   filter, which is this application's one visual claim that a reading is out of
+   date. An unmeasured thing must not borrow the appearance of an unrefreshed
+   one, in either direction. */
+.bad {
+  color: var(--fail-text);
+}
+
+.warnish {
+  color: var(--warn);
+}
+
+.dull {
+  color: var(--fg-5);
+}
+
+/* --- the tablet ----------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .conds {
+    display: flex;
+    flex-wrap: wrap;
+  }
+}
+
+/* --- the phone ------------------------------------------------------------ */
+
+@media (max-width: 640px) {
+  /* THE RAIL NEEDS ITS WIDTH BACK ON THE CELL ONCE THE HEADER IS GONE. Under
+     table-layout: fixed the column widths come from the first row, and
+     display: none on the thead makes that the first BODY row - which carries no
+     widths, so the surviving columns split evenly. */
+  .tbl td.rail {
+    width: 30px;
+  }
+
+  .tbl thead {
+    display: none;
+  }
+
+  /* The open chip is the only fixed column left on the applications table
+     once the name has folded, and it still needs its width back by hand: with
+     the header gone the widths come from the first body row. */
+  .tbl td.c-open {
+    width: 74px;
+  }
+
+  .aname.fold2 {
+    margin-bottom: 5px;
+  }
+
+  /* The label moves left of its value: three rows, one condition each, labels in
+     a column of their own. The 92px fallback is the width of RESTARTS at
+     --t-label, measured, and is what a browser without subgrid uses. */
+  .conds {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    column-gap: var(--gap);
+    row-gap: 14px;
+  }
+
+  .cond {
+    grid-template-columns: 92px 1fr;
+    grid-template-columns: subgrid;
+    display: grid;
+    grid-column: 1 / -1;
+    align-items: center;
+    column-gap: var(--gap);
+    row-gap: 4px;
+  }
+
+  .cond .label {
+    grid-area: 1 / 1;
+  }
+
+  .cond .cvalue {
+    grid-area: 1 / 2;
+  }
+
+  .cond .sub {
+    grid-area: 2 / 2;
   }
 }
 </style>

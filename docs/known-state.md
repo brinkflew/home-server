@@ -4863,3 +4863,83 @@ Recorded 2026-09-07, with the board's filter, the step rail and the three render
   `skipped` reads a repair's number for a hand run; and dropping the floor reads the previous round's.
   Measured against the live database: 25 rounds, 11 rows changed, and `attempts` the only key
   that moved.
+
+### The page that answers "is anything down" could not draw a service that was down
+- **`podman ps` LISTS RUNNING CONTAINERS, so every series the Services rack was built from exists
+  only for a container that is up.** `home_server_container_running` is 1 for all 28 rows on this
+  host and can be nothing else; `containerTone`'s `stopped` branch was unreachable in production; and
+  a service that stopped did not turn red on the rack, it **vanished** from it. The rack was at its
+  emptiest at the exact moment it mattered most. Same family as the Caddy outage two hundred entries
+  up, from the other side: *a dependency failure is `inactive`, not `failed`, and a container that
+  never started is absent rather than unhealthy.*
+- **`source_units` had known since it was written and no page had ever read it.** It enumerates the
+  QUADLET GENERATOR DIRECTORY rather than podman, in its own words because *"deriving the unit list
+  from running containers would make this source blindest at the moment it matters most"*. The rack
+  is `home_server_unit_state{kind=~"container|pod"}` now, with a container joined ONTO a unit. The
+  `kind` selector belongs in the query and not the page: the fourteen `.build` and `.network` units
+  rest INACTIVE when all is well, so a rack that drew them would report fourteen healthy networks as
+  fourteen dead services.
+- **The RESTARTS column read the one counter on this host that cannot be non-zero.** podman's field
+  is reset when a quadlet recreates the container, which is every restart - it read 0 through all
+  6,224 of Pocket ID's. systemd's `NRestarts` survives because the unit outlives its containers. The
+  memory rule carried the same dead clause: `ratio >= 0.98 && (thrashing || restarts > 0)` was
+  reading podman's number, so that arm had never once fired. podman's count is kept, stated only when
+  the two DISAGREE, because that is the one thing it can say the other cannot.
+- **`pod {{ row.pod }}` was dead code and `docs/dashboard.md` had said so without anyone acting.**
+  This podman fills `Pod` with an id and leaves `PodName` empty, so `home_server_container_info{pod}`
+  is `""` for every container on the host - perfect in the fixtures, absent on the server. Pod
+  membership comes from `topology.ts` now, and `svc.topologyFor()` resolves the pod's infra container
+  through its UNIT: podman names it `<pod>-infra` while topology declares the node as the pod,
+  because `bin/lint-repo.sh` compares that file against `PodName=` in `stacks/`.
+- **The fixture could not have contradicted any of it.** It gave all three torrent-pod members
+  `torrent-pod.service` where the host gives each its own `.container` quadlet, and it had never
+  carried a stopped service at all - which is exactly why nothing could see that the page had no way
+  to draw one. `duckdns` is absent from `CONTAINERS` and present in `UNITS` at `state: 4` now.
+  `containers.units_active` fails beside it while `containers.failed_units` PASSES, which is the
+  finding and not a contradiction.
+- **Two CSS ordering defects, and a screenshot showed neither.** `base.css` owns a global `.dim`
+  meaning STALE, so a scoped `.dim { color: var(--fg-5) }` does not replace it, it ADDS to it: the
+  rows with no health check rendered at 42% opacity under a saturation filter, which is this
+  application's one claim that a reading is out of date. And the tone classes sat ABOVE the table
+  rules at equal specificity, so `.num` beat `.warnish` - nine restarts printed in the body colour -
+  and `.areading` beat `.bad`, so Prowlarr's two errors read as an ordinary sentence beside a red
+  rail. The rail was right and the value was not.
+- **`home_server_arr_health_issues` and `home_server_arr_queue_errors` had no consumer anywhere.** An
+  *arr with a dead indexer is healthy by every container-level signal - active unit, passing probe -
+  and the fault exists only in its own `/health`. The down indexers are NAMED now rather than
+  counted: `13 of 15` was the whole of what the page could say and which two is the only part anybody
+  can act on.
+
+### The drawing of the segmentation asserted in words what nothing measured
+- **`10 bridges, all isolate=true` was static text compiled into the bundle**, and no check on this
+  host read `isolate` on a stack segment at all - `agents.runner_isolation` and `ci.runner_isolation`
+  both read the option, and both only on the ephemeral `net-conduct-*` / `net-ci-*` networks. A
+  hand-edited network with isolation removed passed every check in this repository, underneath a page
+  saying in words that it could not happen.
+- **The collector already had all three answers in hand and threw them away.** `podman ps
+  --format json` carries `Ports` and `Networks` and is called twice; `podman network ls --format json`
+  carries `options`, `subnets` and `driver` and is called once, with everything but the subnet map
+  discarded. Three new metric families at ZERO new subprocess cost.
+- **Membership inferred from `rate(...[5m])` is blind to a restart.** A rate needs two samples, so a
+  container that came back inside the window returned no series and dropped silently out of its own
+  segment; a failed subnet join looked identical to a real detachment.
+- **`isolate` reads EMPTY, never `false`**, when the option is absent - and podman's own default
+  bridge is genuinely in that state. Only a segment `stacks/` declares may be graded on it, or the
+  check fires on every host for ever, and on `net-ci-*` every time CI runs.
+- **A stopped container drew grey, one day after the identical fix on `/services`.**
+  `container_running` is absent rather than 0, so `containerTone`'s `!running` branch was unreachable
+  from the page whose whole subject is reachability. Third instance of "fixing one call-site instance
+  is not evidence about the others".
+- **The `torrent` box was dead on the host and healthy in dev**: the graph joined on `topology.ts`'s
+  node name and the metric carries podman's `torrent-infra`. The fixture built its pairs the same way,
+  so it could not contradict the consumer. The bridge is DERIVED - a node is a pod if anything
+  declares it as its pod - because a hardcoded pair breaks silently on the second pod.
+- **The traffic animation had never run once.** The component set `animation-duration` inline and
+  `tokens.css` defined `@keyframes flow`, and NOTHING set `animation-name` - the only `.flow` selector
+  in the application was inside `prefers-reduced-motion`, turning it off. The staleness gate, the dash
+  period argument and three paragraphs of design reasoning all drove nothing. Unfindable by
+  screenshot by construction: the magnitude tick is drawn in both motion modes precisely so a still
+  works, so a still of a live drawing and a dead one are identical.
+- Two more that only appeared once it was on screen: the headline counted five over a table of seven
+  because the lead and the list were two derivations of one question, and a segment copied its
+  member's sentence so one finding printed twice, a line apart.

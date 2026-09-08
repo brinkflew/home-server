@@ -9,7 +9,7 @@
 // =============================================================================
 
 import { AGENTS, ALL_QUERIES, AVAILABILITY, CI, NETWORK, SERVICES, SYSTEM } from "../src/queries";
-import { CONTAINERS, wave } from "./model";
+import { CONTAINERS, UNITS, wave } from "./model";
 import { NODES } from "../src/topology";
 
 type At = (t: number) => number;
@@ -235,8 +235,27 @@ function bySeries(): Record<string, SeriesSpec[]> {
     metric: { container: c.name },
     at: constant(c.name === "bazarr" ? 840 : 0),
   }));
-  table[SERVICES.oomKills] = [{ metric: { container: "bazarr", event: "oom_kill" }, at: constant(4) }];
+  // Every container, not only the one that has been killed: the series is
+  // written for all of them so a rule can alert on it, and a page that only ever
+  // saw it non-zero could not tell "no kills" from "not measured".
+  table[SERVICES.oomKills] = CONTAINERS.map((c) => ({
+    metric: { container: c.name, event: "oom_kill" },
+    at: constant(c.oomKills),
+  }));
   table[SERVICES.identityUnresolved] = [{ metric: {}, at: constant(0) }];
+
+  // --- the units -----------------------------------------------------------
+  // The half podman cannot see, and the half that makes a stopped service
+  // visible at all. UNITS carries duckdns.service with no container under it;
+  // see the comment on it in model.ts.
+  table[SERVICES.unitState] = UNITS.map((u) => ({
+    metric: { __name__: "home_server_unit_state", unit: u.unit, kind: u.kind },
+    at: constant(u.state),
+  }));
+  table[SERVICES.unitRestarts] = UNITS.map((u) => ({
+    metric: { __name__: "home_server_unit_restarts_total", unit: u.unit, kind: u.kind },
+    at: constant(u.restarts),
+  }));
 
   // --- applications --------------------------------------------------------
   table[SERVICES.arrIndexers] = [
@@ -248,10 +267,28 @@ function bySeries(): Record<string, SeriesSpec[]> {
     { metric: { service: "sonarr", state: "total" }, at: constant(3) },
     { metric: { service: "radarr", state: "total" }, at: constant(1) },
   ];
+  // THREE SEVERITIES PER SERVICE, THE WAY THE COLLECTOR WRITES THEM - it emits
+  // error, warning and notice for every application it reached, so a zero is a
+  // measurement and an absent pair is an application that did not answer. A
+  // fixture carrying only the non-zero rows would make those two look alike,
+  // which is the distinction the Applications band grades on.
   table[SERVICES.arrHealth] = [
+    { metric: { service: "sonarr", severity: "error" }, at: constant(0) },
     { metric: { service: "sonarr", severity: "warning" }, at: constant(1) },
+    { metric: { service: "sonarr", severity: "notice" }, at: constant(2) },
+    { metric: { service: "radarr", severity: "error" }, at: constant(0) },
     { metric: { service: "radarr", severity: "warning" }, at: constant(0) },
+    { metric: { service: "radarr", severity: "notice" }, at: constant(0) },
     { metric: { service: "prowlarr", severity: "error" }, at: constant(2) },
+    { metric: { service: "prowlarr", severity: "warning" }, at: constant(0) },
+    { metric: { service: "prowlarr", severity: "notice" }, at: constant(1) },
+  ];
+  // 1 while the download queue is reporting errors. Sonarr's is, which is what a
+  // stalled grab looks like from the outside - and CLAUDE.md records that it
+  // reports itself as `downloading` everywhere else.
+  table[SERVICES.arrQueueErrors] = [
+    { metric: { service: "sonarr" }, at: constant(1) },
+    { metric: { service: "radarr" }, at: constant(0) },
   ];
   table[SERVICES.indexerUp] = [
     ...INDEXERS.map((indexer) => ({ metric: { indexer }, at: constant(1) })),
@@ -317,13 +354,38 @@ function bySeries(): Record<string, SeriesSpec[]> {
     "prowlarr/net-solver": [12e3, 1.1e6],
     "flaresolverr/net-solver": [1.1e6, 12e3],
   };
+  // THE POD'S CONTAINER IS `torrent-infra` AND THIS FIXTURE USED TO CALL IT
+  // `torrent`. topology.ts names the node after the pod; podman names the
+  // container after its infra member, and the metric carries podman's name. So
+  // the page's join was broken on the live host and perfect here - the graph
+  // read "not measured" on every one of the torrent box's rails in production
+  // and drew it healthy in dev, for as long as both existed.
+  //
+  // WRITTEN AS A LITERAL, NOT THROUGH network.ts's metricNameFor(). Deriving it
+  // from the consumer is exactly how this hid: a fixture built out of the code
+  // it is testing cannot contradict that code, so it would go on agreeing with
+  // a bridge that had broken. This string is podman's, checked against
+  // `podman ps` on the host.
+  const POD_CONTAINER = "torrent-infra";
+  const containerFor = (node: string): string => (node === "torrent" ? POD_CONTAINER : node);
+
   const netPairs = NODES.flatMap((n) =>
-    n.networks.map((network) => ({ container: n.name, network })),
-  ).concat([{ container: "torrent-infra", network: "tunnel" }]);
+    n.networks.map((network) => ({ container: containerFor(n.name), network })),
+  ).concat([{ container: POD_CONTAINER, network: "tunnel" }]);
 
   // bazarr on net-arr is deliberately ABSENT, so the "not measured" grey is on
   // screen in dev - the same discipline as the six missing uptime days.
-  const measured = netPairs.filter((p) => !(p.container === "bazarr" && p.network === "net-arr"));
+  //
+  // duckdns is absent for a different reason and it must stay that way: it is
+  // the STOPPED service, so it has no container, no counters and no attachment.
+  // That is the state /network could not draw at all - a member declared in
+  // stacks/ that holds no address, which the old page rendered as an ordinary
+  // grey box meaning "nobody is checking".
+  const measured = netPairs.filter(
+    (p) =>
+      !(p.container === "bazarr" && p.network === "net-arr") &&
+      p.container !== "duckdns",
+  );
 
   const rateFor = (c: string, n: string): [number, number] =>
     NET_RATE[`${c}/${n}`] ?? [18e3, 9e3];
@@ -340,6 +402,81 @@ function bySeries(): Record<string, SeriesSpec[]> {
   }));
   table[NETWORK.pairs] = [{ metric: {}, at: constant(measured.length) }];
   table[NETWORK.unmapped] = [{ metric: {}, at: constant(0) }];
+
+  // --- the bridges themselves ----------------------------------------------
+  // Ten declared segments, the three CI lanes and podman's own default, which
+  // is what the live host reports. The last four are here for a reason beyond
+  // completeness: an undeclared network must be DRAWN and never GRADED, and
+  // podman's own bridge is the one that genuinely carries no isolate option -
+  // so a rule that fires on "isolate is not true" without asking whether
+  // stacks/ declares the segment would report a permanent fault on every host.
+  //
+  // NET-SOLVER IS MISSING isolate DELIBERATELY. It is the segment that exists
+  // to contain headless Chrome pointed at attacker-controlled pages, so it is
+  // the worst one to lose, and nothing in this repository could previously
+  // notice: agents.runner_isolation and ci.runner_isolation both read the
+  // option, and both only on the ephemeral networks.
+  const SUBNET: Record<string, string> = {
+    "net-ingress": "172.21.10.0/24",
+    "net-arr": "172.21.11.0/24",
+    "net-solver": "172.21.12.0/24",
+    "net-download": "172.21.13.0/24",
+    "net-media": "172.21.14.0/24",
+    "net-transcode": "172.21.15.0/24",
+    "net-egress": "172.21.16.0/24",
+    "net-metrics": "172.21.17.0/24",
+    "net-dashboard": "172.21.18.0/24",
+    "net-agents": "172.21.19.0/24",
+    "net-ci-1": "10.89.0.0/24",
+    "net-ci-2": "10.89.1.0/24",
+    "net-ci-3": "10.89.2.0/24",
+    podman: "10.88.0.0/16",
+  };
+  table[NETWORK.info] = Object.keys(SUBNET).map((id) => ({
+    metric: {
+      network: id,
+      driver: "bridge",
+      subnet: SUBNET[id] as string,
+      isolate: id === "podman" || id === "net-solver" ? "" : "true",
+    },
+    at: constant(1),
+  }));
+
+  // --- membership, as podman reports it ------------------------------------
+  // Derived from NODES so a topology change cannot leave it behind, MINUS the
+  // stopped service and PLUS one attachment stacks/ does not declare. The stray
+  // is the other half of the drift axis: a segment can be wrong by missing a
+  // member it should have or by carrying one it should not, and those are
+  // opposite faults that a single "3 wrong" would hide.
+  const attachments = NODES.flatMap((n) =>
+    n.networks.map((network) => ({ container: containerFor(n.name), network })),
+  )
+    .filter((a) => a.container !== "duckdns")
+    .concat([{ container: "bazarr", network: "net-download" }]);
+
+  table[NETWORK.attached] = attachments.map((a) => ({
+    metric: { container: a.container, network: a.network },
+    at: constant(1),
+  }));
+
+  // --- published ports ------------------------------------------------------
+  // Caddy's two match stacks/ exactly. Windmill's is the loopback case, which
+  // firewalld never sees. JELLYFIN'S IS DECLARED AND NOT PUBLISHED - the state
+  // the page had no way to express, because the port list was a hand-written
+  // copy of git and git cannot notice that podman stopped doing something. And
+  // tdarr-server's is the mirror: published and declared nowhere.
+  table[NETWORK.ports] = [
+    { metric: { container: "caddy", host_ip: "", host_port: "80", protocol: "tcp" }, at: constant(80) },
+    { metric: { container: "caddy", host_ip: "", host_port: "443", protocol: "tcp" }, at: constant(443) },
+    {
+      metric: { container: "windmill-server", host_ip: "127.0.0.1", host_port: "8300", protocol: "tcp" },
+      at: constant(8000),
+    },
+    {
+      metric: { container: "tdarr-server", host_ip: "", host_port: "8265", protocol: "tcp" },
+      at: constant(8265),
+    },
+  ];
 
   // --- CI lanes -------------------------------------------------------------
   //

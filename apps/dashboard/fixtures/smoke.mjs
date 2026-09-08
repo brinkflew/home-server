@@ -77,7 +77,12 @@ const { laneLead, laneTally, silentLanes, hostRows, hostTally, HOST_IDS } =
 // on the largest page in the application. FOUR of them were wrong. See the block
 // at the foot of this file, and the banner in src/system.ts.
 const sys = await load("/src/system.ts");
-const { statusDocument } = await load("/fixtures/model.ts");
+// THE SAME EXTRACTION, FOR /services, AND THE SAME REASON. Every decision it
+// carries has a wrong answer that renders perfectly - a stopped service drawn as
+// an absent row, a restart counter that is 0 by construction, an unmeasured
+// container drawn green. See the block at the foot of this file.
+const svc = await load("/src/services.ts");
+const { statusDocument, UNITS, CONTAINERS } = await load("/fixtures/model.ts");
 
 let failures = 0;
 const check = (name, got, want) => {
@@ -221,19 +226,6 @@ for (const name of ["sonarr", "caddy", "prowlarr", "jellyfin"]) {
 }
 check("no route passes through a terminal", through, []);
 
-const L = G.layout();
-check("every box has a finite position", L.nodes.every((n) => Number.isFinite(n.x) && Number.isFinite(n.y)), true);
-check("the hub spans more than one rail", (L.hub?.rails.length ?? 0) > 1, true);
-check("no two boxes overlap", (() => {
-  const ext = L.nodes.map((n) => ({ ...n, bot: n.y + n.h + (n.members.length ? n.members.length * 12 + 10 : 0) }));
-  for (let i = 0; i < ext.length; i++)
-    for (let j = i + 1; j < ext.length; j++) {
-      const a = ext[i], b = ext[j];
-      if (a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.bot && b.y < a.bot) return `${a.name}/${b.name}`;
-    }
-  return null;
-})(), null);
-
 // Rate to motion. Zero must be still: a link carrying a keepalive is idle, and
 // animating it spends the reader's attention on nothing.
 check("below the floor is still", G.intensity(512), 0);
@@ -241,6 +233,250 @@ check("absent is still", G.intensity(Number.NaN), 0);
 check("the scale is logarithmic", G.intensity(1024 ** 2) > 0.5 && G.intensity(1024 ** 2) < 0.7, true);
 check("the ceiling clamps", G.intensity(1024 ** 4), 1);
 check("busier is faster", G.flowDuration(10e6) < G.flowDuration(10e3), true);
+
+
+// --- rounded elbows ----------------------------------------------------------
+// The corner radius is the one piece of arithmetic here that fails at ONE
+// viewport: leg lengths move with the column count, so a radius that is fine at
+// three columns pulls a curve's start point past the previous corner at one,
+// and the line visibly doubles back.
+console.log("\n-- rounded paths --");
+
+const straight = G.roundedPath([[0, 0], [10, 0], [20, 0]]);
+check("a collinear vertex emits no curve", straight.includes("Q"), false);
+check("a collinear vertex still reaches the end", straight.endsWith("L 20 0"), true);
+
+const corner = G.roundedPath([[0, 0], [100, 0], [100, 100]], 9);
+check("a corner is one quadratic", (corner.match(/Q/g) ?? []).length, 1);
+check("the curve starts short of the corner", corner.includes("L 91 0"), true);
+
+// The clamp: a 10-unit leg cannot carry a 9-unit radius at both ends.
+const tight = G.roundedPath([[0, 0], [10, 0], [10, 10]], 9);
+const tightNums = (tight.match(/-?\d+(\.\d+)?/g) ?? []).map(Number);
+check("no coordinate is pulled past the previous corner", tightNums.every((n) => n >= 0), true);
+check("the radius clamps to half the shorter leg", tight.includes("L 5 0"), true);
+
+check("a duplicated point is not a zero-length leg", G.roundedPath([[0, 0], [0, 0], [5, 0]]), "M 0 0 L 5 0");
+check("one point is a move and nothing else", G.roundedPath([[3, 4]]), "M 3 4");
+check("no point is an empty path", G.roundedPath([]), "");
+check("a non-finite point is dropped", G.roundedPath([[0, 0], [Number.NaN, 5], [9, 0]]), "M 0 0 L 9 0");
+
+
+// --- the segmentation, as /network derives it --------------------------------
+const N = await load("/src/network.ts");
+
+console.log("\n-- network --");
+
+// THE NAME BRIDGE. topology.ts calls the node `torrent` and podman calls the
+// container `torrent-infra`; the graph joined on the node name, so that box read
+// "not measured" on every rail on the live host and drew healthy in dev.
+check("a pod resolves to podman's infra container", N.metricNameFor("torrent"), "torrent-infra");
+check("an ordinary container is its own metric name", N.metricNameFor("sonarr"), "sonarr");
+check("the bridge inverts", N.nodeNameFor("torrent-infra"), "torrent");
+check("a name merely ending in -infra is left alone", N.nodeNameFor("redis-infra"), "redis-infra");
+
+// A STOPPED SERVICE MUST BE RED. `podman ps` lists running containers, so
+// container_running is ABSENT rather than 0 and the old page fell back to grey -
+// the same defect fixed on /services, in the page whose subject is reachability.
+const nUnits = [
+  { unit: "sonarr.service", kind: "container", state: 0, restarts: 0 },
+  { unit: "duckdns.service", kind: "container", state: 4, restarts: 0 },
+  { unit: "bazarr.service", kind: "container", state: 0, restarts: 0 },
+  { unit: "flaresolverr.service", kind: "container", state: 0, restarts: 0 },
+  { unit: "radarr.service", kind: "container", state: 0, restarts: 0 },
+];
+const nContainers = [
+  { name: "sonarr", unit: "sonarr.service", running: true, health: 0 },
+  { name: "bazarr", unit: "bazarr.service", running: true, health: 0 },
+  { name: "flaresolverr", unit: "flaresolverr.service", running: true, health: undefined },
+  { name: "radarr", unit: "radarr.service", running: true, health: 0 },
+];
+const V = N.memberVerdicts(nUnits, nContainers);
+check("a running container is ok", V.get("sonarr").tone, "ok");
+check("a stopped service is a failure, not a shrug", V.get("duckdns").tone, "fail");
+check("and it says which", V.get("duckdns").state, "not running");
+check("no health check is grey, never green", V.get("flaresolverr").tone, "off");
+
+// THE TWO SIDES. topology.ts is what stacks/ declares; the series are what
+// podman has done. Where they differ is the finding, and neither outranks.
+const nets = [
+  { id: "net-arr", driver: "bridge", subnet: "172.21.11.0/24", isolate: "true" },
+  { id: "net-solver", driver: "bridge", subnet: "172.21.12.0/24", isolate: "" },
+  { id: "net-ci-1", driver: "bridge", subnet: "10.89.0.0/24", isolate: "true" },
+  { id: "podman", driver: "bridge", subnet: "10.88.0.0/16", isolate: "" },
+];
+const att = new Map([
+  ["sonarr", new Set(["net-arr"])],
+  ["bazarr", new Set(["net-arr", "net-download"])],
+  ["flaresolverr", new Set(["net-solver"])],
+  ["ci-1-999", new Set(["net-ci-1"])],
+]);
+const nRx = new Map([["sonarr|net-arr", 1000], ["torrent-infra|tunnel", 4e6]]);
+const nTx = new Map([["bazarr|net-arr", 2000], ["torrent-infra|tunnel", 1e6]]);
+const segRows = N.segmentRows(nets, att, nRx, nTx, V);
+const row = (id) => segRows.find((r) => r.id === id);
+
+check("every declared segment is drawn, live or not", segRows.filter((r) => r.kind === "declared").length, T.NETWORKS.length);
+check("a declared segment podman does not have is a failure", row("net-media").tone, "fail");
+check("isolate missing on a declared segment is a failure", row("net-solver").tone, "fail");
+check("and the sentence names the option", row("net-solver").issue.includes("isolate=true"), true);
+
+// AN UNDECLARED NETWORK IS DRAWN AND NEVER GRADED. podman's own bridge carries
+// no isolate option at all, so a rule that only asked "is isolate true" would
+// report a permanent fault on every host, for ever.
+check("podman's own bridge is not a finding", row("podman").tone, "ok");
+check("a CI lane's network is not a finding either", row("net-ci-1").tone, "ok");
+check("and it says whose it is", row("net-ci-1").state, "driver-owned");
+
+// The two opposite drifts, which must never be added into one number.
+const arr = row("net-arr");
+check("a stray attachment is a warning", arr.members.find((m) => m.name === "bazarr" && !m.declared) === undefined, true);
+check("a declared member podman does not report is flagged", arr.members.find((m) => m.name === "radarr").issue.includes("does not report"), true);
+// A DOWN SERVICE AND A LOST BRIDGE ARE DIFFERENT FAULTS, and both leave the
+// attachment series absent - only the unit tells them apart.
+check("a service that is down says so instead", row("net-egress").members.find((m) => m.name === "duckdns").issue.includes("not running"), true);
+// AND GREY IS NOT A FINDING. A member whose liveness nothing reported could be
+// detached or could simply be unmeasured; claiming the first is how a dead
+// collector turns into a page full of red.
+check("an unmeasured member is not accused of anything", arr.members.find((m) => m.name === "unpackerr").issue, null);
+check("a stray on a segment stacks/ does not declare it on", row("net-download").members.some((m) => m.name === "bazarr" && !m.declared), true);
+check("a stray reads as undeclared, not as missing", row("net-download").members.find((m) => m.name === "bazarr" && !m.declared).issue.includes("does not declare"), true);
+
+// MEASURED IS rx OR tx. Set from the receive loop alone, a pair carrying only
+// transmit printed a byte figure AND the words "not measured".
+check("transmit alone still counts as measured", arr.measured, true);
+check("and the bytes are both directions", arr.bytes, 3000);
+
+check("the tunnel is on the page at all", row("tunnel") !== undefined, true);
+check("the tunnel is not judged on isolate", row("tunnel").tone, "ok");
+
+// PORTS, FROM BOTH SIDES. git cannot notice that podman stopped publishing.
+const live = [
+  { container: "caddy", hostIp: "", hostPort: "80", containerPort: 80, protocol: "tcp" },
+  { container: "tdarr-server", hostIp: "", hostPort: "8265", containerPort: 8265, protocol: "tcp" },
+  { container: "windmill-server", hostIp: "127.0.0.1", hostPort: "8300", containerPort: 8000, protocol: "tcp" },
+];
+const declared = [
+  { node: "caddy", mapping: "80 -> 80" },
+  { node: "jellyfin", mapping: "8096 -> 8096" },
+  { node: "windmill-server", mapping: "127.0.0.1:8300 -> 8000" },
+];
+const ports = N.portRows(live, declared);
+const port = (m) => ports.find((p) => p.mapping === m);
+check("a publish in both halves is ok", port("80 -> 80").tone, "ok");
+check("declared and not published is a failure", port("8096 -> 8096").tone, "fail");
+check("published and not declared is a warning", port("8265 -> 8265").tone, "warn");
+check("a loopback publish is marked as one", port("127.0.0.1:8300 -> 8000").loopback, true);
+check("a LAN publish is not", port("80 -> 80").loopback, false);
+check("worst first", ports[0].tone, "fail");
+
+// A FILTER OVER WHAT IS ALREADY DRAWN, never a second reading.
+const attRows = N.attentionRows(segRows, ports, 2);
+check("every attention row came from a row above it", attRows.every((a) => a.issue.length > 0), true);
+check("unmapped interfaces are a finding", attRows.some((a) => a.key === "unmapped"), true);
+check("nothing wrong means nothing listed", N.attentionRows([], [], 0), []);
+
+const netLead = N.networkLead(segRows, ports, attRows);
+// THE HEADLINE COUNTS THE LIST UNDER IT. Two derivations of "what is wrong"
+// drift, and the one nobody scrolls to is the one that goes stale - which is
+// how this page came to read "5 things need attention" over a table of seven.
+check("the headline is the count that needs doing", netLead.text, `${attRows.length} things need attention`);
+check("nothing measured is not a pass", N.networkLead([], [], []).tone, "off");
+check("one is not 1 thing(s)", N.networkLead(segRows, ports, [attRows[0]]).text, "one thing needs attention");
+
+// ONE FINDING, PRINTED ONCE. A segment inherits its members' trouble for the
+// table's rail and must not repeat their sentence in the list.
+check("a member's drift is not also a segment row",
+  attRows.filter((a) => a.key === "seg-net-arr"), []);
+check("a segment-level fault still is", attRows.some((a) => a.key === "seg-net-solver"), true);
+check("the state names the drift, not the container's health",
+  attRows.find((a) => a.subject === "bazarr" && a.where === "on net-download").state, "undeclared");
+const netConds = N.conditionRows(segRows, ports);
+check("three conditions", netConds.map((c) => c.id), ["segments", "attachments", "ports"]);
+check("absent and stray are named apart", netConds[1].sub.includes("declared and absent"), true);
+
+
+// --- the drawing -------------------------------------------------------------
+// GROUPS BY NETWORK, WITH THE MULTI-HOMED ON A SPINE. Straddling a trust
+// boundary is the security-relevant fact about a container, so it has to be a
+// line rather than an entry in a list.
+const netModel = N.graphModel(segRows);
+const spineNames = netModel.spine.map((s) => s.name);
+check("a single-homed service is inside its group", netModel.groups.find((g) => g.id === "net-solver").members.map((m) => m.name), ["flaresolverr"]);
+check("a multi-homed service is not in any group", netModel.groups.every((g) => !g.members.some((m) => m.name === "caddy")), true);
+check("it is on the spine instead", spineNames.includes("caddy"), true);
+check("prowlarr, the one hop out of net-solver, is too", spineNames.includes("prowlarr"), true);
+check("the tunnel finally has a box", spineNames.includes("tunnel"), true);
+check("and so do the two terminals", spineNames.includes("wan") && spineNames.includes("internet"), true);
+check("the spine leads with the worst offender", netModel.spine[0].name, "caddy");
+
+// EVERY RUNG, because the layout is the one thing here that changes shape with
+// the viewport - and the version this replaces did not reflow at all, it shrank.
+for (const cols of [3, 2, 1]) {
+  const L = G.layout(netModel, cols);
+  const label = `at ${cols} column(s)`;
+
+  check(`${label} every group has a finite position`, L.groups.every((g) => Number.isFinite(g.x) && Number.isFinite(g.y)), true);
+  check(`${label} every spine node does too`, L.spine.every((n) => Number.isFinite(n.x) && Number.isFinite(n.y)), true);
+
+  check(`${label} no two groups overlap`, (() => {
+    for (let i = 0; i < L.groups.length; i++)
+      for (let j = i + 1; j < L.groups.length; j++) {
+        const a = L.groups[i], b = L.groups[j];
+        if (a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h) return `${a.id}/${b.id}`;
+      }
+    return null;
+  })(), null);
+
+  check(`${label} no member escapes its group`, L.groups.every((g) =>
+    g.members.every((m) => m.x >= g.x && m.x + m.w <= g.x + g.w && m.y >= g.y && m.y + m.h <= g.y + g.h)), true);
+
+  // THE ROUTING INVARIANT. caddy alone needs eight lines reaching most of the
+  // canvas, so a line aimed straight at its target draws through the boxes it
+  // passes. Every horizontal run lives in a band between two grid rows.
+  const spokes = L.elbows.filter((e) => L.groups.some((g) => g.id === e.target));
+  check(`${label} no elbow runs through a group`, spokes.every((e) =>
+    L.groups.every((g) => !(e.tickY > g.y && e.tickY < g.y + g.h))), true);
+
+  // ONE LANE PER SPINE NODE PER BAND. Two nodes sharing one reads as one line.
+  check(`${label} no two spine nodes share a lane`, (() => {
+    const byLane = new Map();
+    for (const e of spokes) {
+      const key = `${Math.round(e.tickY)}`;
+      const held = byLane.get(key);
+      if (held && held !== e.node) return `${held}/${e.node} at y=${key}`;
+      byLane.set(key, e.node);
+    }
+    return null;
+  })(), null);
+
+  check(`${label} every membership is drawn`, spokes.length,
+    netModel.spine.reduce((n, s) => n + s.networks.filter((x) => netModel.groups.some((g) => g.id === x)).length, 0));
+  check(`${label} the drawing is at least as wide as its grid`, L.width >= G.gridWidth(cols) - 1, true);
+}
+
+// EVERY FINDING ID IS ONE bin/verify-host.sh ACTUALLY EMITS. /network names
+// seven checks across five sections rather than pulling whole sections, and
+// CLAUDE.md's objection to a hand-maintained watchlist is answered here and
+// nowhere else: a renamed check fails this, instead of silently dropping a
+// finding off the one page somebody opens after being paged about it.
+const batteryNet = await readFile(new URL("../../../bin/verify-host.sh", import.meta.url), "utf8")
+  .catch(() => null);
+if (batteryNet === null) {
+  console.log("SKIP  bin/verify-host.sh is not readable from here");
+} else {
+  const emitted = new Set(
+    [...batteryNet.matchAll(/\b(?:ok|warn|fail|note) ([a-z_]+\.[a-z_0-9]+)/g)].map((mm) => mm[1]),
+  );
+  check("every finding id the network page names is one the battery emits",
+    N.FINDING_IDS.filter((id) => !emitted.has(id)), []);
+}
+
+// The fold is arithmetic on the layout's own constants, not a literal.
+check("three columns need the most room", G.columnsFor(G.gridWidth(3)), 3);
+check("one pixel under drops to two", G.columnsFor(G.gridWidth(3) - 1), 2);
+check("a phone gets one", G.columnsFor(390), 1);
+check("an unmeasured panel assumes the widest", G.columnsFor(0), 3);
 
 
 // --- the two fleets ----------------------------------------------------------
@@ -2024,6 +2260,179 @@ if (battery === null) {
     check("...which the old rule did not", Array.from({ length: 4 }, (_, i) => i + 1).filter((nth) => nth % 2 !== 0),
       [1, 3]);
   }
+}
+
+// ---------------------------------------------------------------------------
+// /services, and the state the page could not draw
+// ---------------------------------------------------------------------------
+//
+// THE RACK WAS BUILT FROM THE CONTAINERS AND `podman ps` LISTS RUNNING ONES, so
+// home_server_container_running is 1 for every row that exists and can be
+// nothing else. A service that stopped did not go red, it disappeared - and
+// CLAUDE.md has the outage: "a dependency failure is `inactive`, not `failed`,
+// and a container that never started is absent rather than unhealthy". Every
+// check below is about a reading that renders perfectly while being wrong.
+{
+  console.log("\n-- services --");
+
+  // The fixture host, in the shape ServicesPage hands to serviceRows().
+  const containers = CONTAINERS.map((c) => ({
+    name: c.name,
+    unit: c.unit,
+    image: c.image,
+    running: c.running,
+    health: c.health,
+    podmanRestarts: c.restarts,
+    cpu: c.cpu,
+    memory: c.memory,
+    memoryHigh: c.memoryHigh,
+    refault: c.name === "bazarr" ? 840 : 0,
+    oomKills: c.oomKills,
+    uptime: c.startedAgo,
+    activity: [],
+  }));
+  const units = UNITS.map((u) => ({ unit: u.unit, kind: u.kind, state: u.state, restarts: u.restarts }));
+  const rows = svc.serviceRows(units, containers);
+  const by = (name) => rows.find((r) => r.name === name);
+
+  for (const r of svc.needsAttention(rows)) {
+    console.log(`   ${String(r.tone).padEnd(5)} ${r.name.padEnd(20)} ${r.state.padEnd(16)} ${r.remedy ?? "-"}`);
+  }
+
+  // --- the row that did not exist -------------------------------------------
+  check("every unit gets a row", rows.length, units.length);
+  check("a stopped service is a row, not an absence", !!by("duckdns"), true);
+  check("...and it is a failure", by("duckdns").tone, "fail");
+  check("...whose unit is inactive rather than failed", by("duckdns").unitState, 4);
+  check("...with no container behind it", by("duckdns").present, false);
+  check("the tally counts it", svc.serviceTally(rows).absent, 1);
+  // Down outranks degraded-but-running, and it has to be said: a service with no
+  // container has no CPU either, so the busyness tiebreak alone would sort the
+  // one thing that is completely down to the BOTTOM of the failures.
+  check("down sorts above degraded", rows[0].name, "duckdns");
+
+  // --- the counter that can actually be non-zero -----------------------------
+  //
+  // podman's is reset when a quadlet recreates the container, which is every
+  // restart, so it read 0 through all 6,224 of Pocket ID's.
+  check("systemd's counter is the one on the row", by("bazarr").unitRestarts, 9);
+  check("podman's is 0 on that row, as it is on the host", by("bazarr").podmanRestarts, 0);
+  check("a looping unit with a healthy container is a finding", by("ntfy-alertmanager").tone, "warn");
+  check("...and it names the state", by("ntfy-alertmanager").state, "restarting");
+  check("podman's count is only stated when it differs", svc.restartLine(by("joal")), "2 by podman");
+  check("...and never otherwise", svc.restartLine(by("caddy")), null);
+
+  // --- absent is not zero, still ---------------------------------------------
+  check("no health check is grey", by("unpackerr").tone, "off");
+  check("...and says nobody is checking", by("unpackerr").state, "running, unchecked");
+  check("grey is not a finding", svc.needsAttention(rows).some((r) => r.name === "unpackerr"), false);
+  check("an unhealthy container is a failure", by("bazarr").tone, "fail");
+  check("a starting one is amber", by("jellyseerr").tone, "warn");
+
+  // --- the pod, whose container is not called what the topology calls it ------
+  //
+  // podman names it `<pod>-infra` and topology declares the node as the pod,
+  // because bin/lint-repo.sh compares that file against `PodName=` in stacks/.
+  // The `pod` label cannot bridge it: it is EMPTY for every container on this
+  // host, which is what made ServicesPage's `pod {{ row.pod }}` dead code.
+  check("the pod's infra container resolves through its unit",
+    svc.topologyFor("torrent-infra", "torrent-pod.service")?.name, "torrent");
+  check("an ordinary container resolves by name",
+    svc.topologyFor("caddy", "caddy.service")?.name, "caddy");
+  check("a pod member carries its pod from topology", by("qbittorrent").pod, "torrent");
+  check("...and it is not read off the metric", by("qbittorrent").networks, []);
+
+  // --- memory: the likeliest way this page would cry wolf ---------------------
+  //
+  // Jellyfin sits AT its 3G watermark with thousands of `high` events and is
+  // fine: that is what the watermark is for. The signals are the refault rate
+  // and an OOM kill, never the ratio on its own.
+  const mem = (over) => svc.memoryTone({ memory: 3e9, memoryHigh: 3e9, refault: 0, oomKills: 0, unitRestarts: 0, ...over });
+  check("at MemoryHigh and quiet is not news", mem({}), "ok");
+  check("faulting pages back in is", mem({ memory: 1e9, refault: 12 }), "warn");
+  check("...and at the watermark it is a failure", mem({ refault: 12 }), "fail");
+  check("an OOM kill is unambiguous", mem({ oomKills: 1 }), "fail");
+  check("...even below the watermark", mem({ memory: 1e8, oomKills: 1 }), "fail");
+  check("no ceiling is unmeasured, not healthy", mem({ memoryHigh: Number.NaN }), "off");
+  check("the OOM row's word matches its light", by("flaresolverr").state, "oom-killed");
+  check("...and its light is red", by("flaresolverr").tone, "fail");
+  // MEMORY ONLY EVER MAKES A ROW WORSE. memoryTone answers `off` for anything
+  // with no MemoryHigh, `off` outranks `ok`, and taking the plain worst of the
+  // two would draw a healthy service as unmeasured over a ceiling it never had.
+  check("an unmeasured ceiling does not grey a healthy row",
+    svc.serviceRows(
+      [{ unit: "x.service", kind: "container", state: 0, restarts: 0 }],
+      [{ name: "x", unit: "x.service", image: "i", running: true, health: 0, podmanRestarts: 0,
+         cpu: 0, memory: 1e8, memoryHigh: Number.NaN, refault: 0, oomKills: 0, uptime: 1, activity: [] }],
+    )[0].tone,
+    "ok",
+  );
+
+  // --- the three conditions ---------------------------------------------------
+  const conds = svc.conditionRows(rows);
+  check("the units condition counts the inactive one", conds[0].value, `${units.length - 1} of ${units.length} active`);
+  check("the restart condition sums per unit", conds[2].value, "12 on 2");
+  check("...and names them", conds[2].sub, "bazarr ntfy-alertmanager");
+
+  // --- the headline ----------------------------------------------------------
+  const lead = svc.servicesLead(rows);
+  check("the headline counts what needs doing, not what is fine", lead.text, "5 of 28 need attention");
+  check("...and is red while something is failing", lead.tone, "fail");
+  check("nothing measured is not a healthy host", svc.servicesLead([]).tone, "off");
+  check("a clean host says so", svc.servicesLead(rows.filter((r) => r.tone === "ok")).text, "21 services up");
+
+  // --- the applications, which are a different question ----------------------
+  //
+  // An *arr with a dead indexer is healthy by every container-level signal:
+  // active unit, passing probe, and the fault exists only in its own /health.
+  const apps = svc.appRows({
+    indexers: new Map([["sonarr", 11], ["radarr", 13], ["prowlarr", 15]]),
+    indexerUp: new Map([["1337x", 1], ["Nyaa", 1], ["The Pirate Bay", 0]]),
+    queue: new Map([["sonarr", 3], ["radarr", 1]]),
+    queueErrors: new Map([["sonarr", 1], ["radarr", 0]]),
+    health: new Map([["sonarr|error", 0], ["sonarr|warning", 1], ["prowlarr|error", 2], ["prowlarr|warning", 0]]),
+    sessions: 2,
+    tdarr: 1,
+    torrentState: 0,
+    down: 1e6,
+    up: 1e5,
+    vpn: "Amsterdam Netherlands",
+  });
+  const app = (id) => apps.find((a) => a.id === id);
+  check("a queue error is a finding", app("sonarr").tone, "warn");
+  check("...and it says so first", app("sonarr").issue.startsWith("the download queue is reporting errors"), true);
+  check("an application reporting errors is a failure", app("prowlarr").tone, "fail");
+  // "13 of 15" was the whole of what this page could say, and which two is the
+  // only part anybody can act on.
+  check("the down indexers are named", app("prowlarr").issue.includes("The Pirate Bay"), true);
+  check("radarr is quiet", app("radarr").issue, null);
+  check("a torrent client that is firewalled is amber",
+    svc.appRows({ indexers: new Map(), indexerUp: new Map(), queue: new Map(), queueErrors: new Map(),
+      health: new Map(), sessions: 0, tdarr: 0, torrentState: 1, down: 0, up: 0, vpn: "" })
+      .find((a) => a.id === "qbittorrent").tone,
+    "warn",
+  );
+  // An application that did not answer must not read healthy - the same rule
+  // src/health.ts states for an absent health series.
+  check("an application that did not answer is grey",
+    svc.appRows({ indexers: new Map(), indexerUp: new Map(), queue: new Map(), queueErrors: new Map(),
+      health: new Map(), sessions: Number.NaN, tdarr: Number.NaN, torrentState: Number.NaN, down: Number.NaN,
+      up: Number.NaN, vpn: "" })
+      .find((a) => a.id === "jellyfin").tone,
+    "off",
+  );
+
+  // --- the unit half, arm by arm ---------------------------------------------
+  const live = (present, running, health, state, restarts) =>
+    svc.liveness(present, running, health, state, restarts, "x.service");
+  check("a failed unit is a failure", live(false, false, undefined, 2, 0).state, "unit failed");
+  check("...and it is not being retried", live(false, false, undefined, 2, 0).remedy, "systemctl --user status x.service");
+  check("an inactive unit with no container is 'not running'", live(false, false, undefined, 4, 0).state, "not running");
+  check("a starting unit with no container yet is amber", live(false, false, undefined, 1, 0).tone, "warn");
+  check("nothing measured at all is grey", live(false, false, undefined, Number.NaN, Number.NaN).tone, "off");
+  check("a restart outranks a passing probe", live(true, true, 0, 0, 4).state, "restarting");
+  check("an unhealthy container outranks a restart", live(true, true, 2, 0, 4).state, "unhealthy");
+  check("a healthy one is healthy", live(true, true, 0, 0, 0).state, "healthy");
 }
 
 await server.close();

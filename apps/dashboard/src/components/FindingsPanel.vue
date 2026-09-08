@@ -47,17 +47,61 @@ import { STATUS_RANK } from "@/types";
 const props = withDefaults(
   defineProps<{
     label?: string;
-    /** Restrict to one status.json section id, e.g. "ci". Unset means all. */
-    section?: string | null;
+    /**
+     * Restrict to status.json section ids, e.g. "ci". Unset means all.
+     *
+     * A LIST, BECAUSE ONE PAGE'S SUBJECT IS NOT ALWAYS ONE SECTION. /services
+     * asks "is anything wrong with the services", and the battery answers that
+     * across two: `containers` grades the units and the health checks, `update`
+     * grades the nightly image roll that recreates every one of them - which is
+     * the answer to "why did this restart last night" and belongs on the page
+     * showing the restart, not two pages away. It is still ONE surface with one
+     * tone function; what widens is the question, not the vocabulary.
+     */
+    section?: string | string[] | null;
+    /**
+     * Named check ids, unioned with `section`.
+     *
+     * A HAND-MAINTAINED WATCHLIST, WHICH CLAUDE.md WARNS AGAINST IN EXACTLY
+     * THESE WORDS - "any hand-maintained watchlist is a check that stops firing
+     * the moment a name drifts". It is answered here and only here: smoke.mjs
+     * asserts every id this application names against the ids bin/verify-host.sh
+     * actually emits, so a drifted name fails the build rather than silently
+     * dropping a finding off a page.
+     *
+     * It exists because /network's subject spans five sections and owns none of
+     * them. `net` is one check about the LAN address; the segmentation is graded
+     * by agents.runner_isolation and ci.runner_isolation, the port surface by
+     * host.firewalld, and the collector's own view of it by two metrics checks.
+     * Pulling those whole sections would put eighteen unrelated collector checks
+     * and the CDI spec on a page about bridges.
+     */
+    ids?: string[] | null;
     /** Include passing checks. Only sensible with `section` - the whole battery
      *  is 105 checks and a wall of green is how a reader learns to skip it. */
     all?: boolean;
   }>(),
-  { label: "Findings", section: null, all: false },
+  { label: "Findings", section: null, ids: null, all: false },
 );
 
 const host = useHostStore();
 const batteryStale = useBatteryStale();
+
+/** null when unrestricted; a set otherwise, so one section and five cost the
+ *  same at every call site below. */
+const sections = computed<Set<string> | null>(() => {
+  if (!props.section) return null;
+  return new Set(Array.isArray(props.section) ? props.section : [props.section]);
+});
+
+const wanted = computed<Set<string> | null>(() => (props.ids?.length ? new Set(props.ids) : null));
+
+/** Whether this panel is restricted at all, by either selector. */
+const restricted = computed(() => sections.value !== null || wanted.value !== null);
+
+function matches(c: { id: string; section: string }): boolean {
+  return (sections.value?.has(c.section) ?? false) || (wanted.value?.has(c.id) ?? false);
+}
 
 /**
  * Worst-first, and for a section that ordering has to be REDONE rather than
@@ -66,11 +110,11 @@ const batteryStale = useBatteryStale();
  * below four passes purely because of where it sits in a shell script.
  */
 const problems = computed(() => {
-  if (!props.section) return host.problems;
+  if (!restricted.value) return host.problems;
 
-  if (!props.all) return host.problems.filter((c) => c.section === props.section);
+  if (!props.all) return host.problems.filter(matches);
 
-  const checks = (host.doc?.checks ?? []).filter((c) => c.section === props.section);
+  const checks = (host.doc?.checks ?? []).filter(matches);
   return [...checks].sort(
     (a, b) => STATUS_RANK[b.status] - STATUS_RANK[a.status] || a.id.localeCompare(b.id),
   );
@@ -91,10 +135,13 @@ function railFor(status: string): string {
 /** "14 checks, 2 not passing" for a section; the whole battery otherwise. */
 const tally = computed(() => {
   if (!host.doc) return null;
-  if (!props.section) {
+  if (!restricted.value) {
     return `${host.doc.summary.total} checks, ${host.problems.length} not passing`;
   }
-  const all = host.doc.checks.filter((c) => c.section === props.section);
+  const all = host.doc.checks.filter(matches);
+  // NOT `all.length ? ... : null`: zero checks in the named sections is what
+  // the empty state below reports as unmeasured, and it needs the null.
+  if (!all.length) return null;
   const bad = all.filter((c) => c.status !== "pass").length;
   return `${all.length} checks, ${bad} not passing`;
 });
@@ -139,12 +186,17 @@ const tally = computed(() => {
         </tbody>
       </table>
     </div>
-    <p v-else-if="section && !tally" class="empty mono">
-      this section is absent from the battery's last run - not passing, unmeasured
+    <!-- `host.doc &&` IS LOAD-BEARING. Without it this fires while the document
+         is still in flight and reports a section as unmeasured on every first
+         paint - and it could never fire for the case it was written for, because
+         the tally used to answer the string "0 checks, 0 not passing" for a
+         section the battery has no checks in. -->
+    <p v-else-if="restricted && host.doc && !tally" class="empty mono">
+      these checks are absent from the battery's last run - not passing, unmeasured
     </p>
     <p v-else class="empty mono">every check passed</p>
 
-    <p v-if="!section && host.doc && !host.doc.mode.routes" class="note mono">
+    <p v-if="!restricted && host.doc && !host.doc.mode.routes" class="note mono">
       The public route battery was not walked in this run. Those checks are absent, not passing.
     </p>
   </PanelBox>

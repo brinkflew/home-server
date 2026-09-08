@@ -1,54 +1,115 @@
 <script setup lang="ts">
 /**
- * Network: the segmentation, the routes across it, and the traffic on it.
+ * Network: the segmentation, what is attached to it, and what is open to the host.
  *
- * Split out of Services because the two answer different questions. Services
- * asks "is this container healthy"; this page asks "what can reach what, and
- * what is actually moving" - and the second needed a data layer before it could
- * be drawn at all.
+ * WHAT THE PAGE USED TO OPEN WITH WAS NOT A READING. "10 bridges, all
+ * isolate=true / 46 declared routes / 3 published ports" - three constants
+ * compiled into the bundle, printed identically on a healthy host and on one
+ * whose collector had been dead for a week. The first of them was worse than
+ * decorative: nothing on this host checked isolate on a stack segment at all,
+ * so it was a security property asserted on screen and measured nowhere.
  *
- * THERE IS NO WindowPicker HERE, deliberately. Every number on this page is an
- * instant query over rate(...[5m]); the 1h/6h/24h/7d control would change
- * nothing on screen, and a control that does nothing is a lie about a control.
- * It comes back the day this page grows a traffic-over-time lane.
+ * All three are measured now. src/network.ts carries the arguments and the
+ * arms; this file polls, hands them in, and draws what comes back.
+ *
+ * THERE IS NO WindowPicker HERE, deliberately, and the reason is unchanged.
+ * Every number on this page is an instant query over rate(...[5m]); the
+ * 1h/6h/24h/7d control would change nothing on screen, and a control that does
+ * nothing is a lie about a control. It comes back the day this page grows a
+ * traffic-over-time lane.
+ *
+ * SELECTION IS IN THE URL. Clicking a segment or a service filters the two
+ * tables and lights the drawing, and ?focus= is what makes that state a thing
+ * somebody can send to somebody else - the same reason every round on the
+ * fleet board has its own address.
  */
-import { computed } from "vue";
+import { computed, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 
-import PanelBox from "@/components/PanelBox.vue";
+import Band from "@/components/Band.vue";
+import FindingsPanel from "@/components/FindingsPanel.vue";
 import NetworkGraph from "@/components/NetworkGraph.vue";
-import StaleNote from "@/components/StaleNote.vue";
+import PanelBox from "@/components/PanelBox.vue";
+import StatusDot from "@/components/StatusDot.vue";
 
+import { instant, instantBy, labelsBy, value } from "@/api/prometheus";
 import { usePoll } from "@/composables/usePoll";
 import { useMetricsStale } from "@/composables/useStaleness";
 import { useTooltip } from "@/composables/useTooltip";
-import { containerTone } from "@/health";
-import type { Tone } from "@/types";
-import { instant, instantBy, value } from "@/api/prometheus";
-import { NETWORK, SERVICES } from "@/queries";
-import { NETWORKS, PUBLISHED } from "@/topology";
-import { PATHS } from "@/paths";
 import * as fmt from "@/format";
+import * as net from "@/network";
+import { NETWORK, SERVICES } from "@/queries";
+import { PUBLISHED } from "@/topology";
+import type { Tone } from "@/types";
 
 const tip = useTooltip();
 const metricsStale = useMetricsStale();
+const route = useRoute();
+const router = useRouter();
 
-/** The graph colours its boxes live. Services gets this from its rack; this
- *  page has no rack, so it asks for the same two series directly - the shape
- *  ServiceStrip already uses. `health` stays undefined when absent: a container
- *  with no health check defined must not read as verified-healthy. */
-const net = usePoll(async (signal) => {
-  const [running, health, rx, tx, unmapped] = await Promise.all([
-    instantBy(SERVICES.running, "container", signal),
-    instantBy(SERVICES.health, "container", signal),
-    instant(NETWORK.rx, signal),
-    instant(NETWORK.tx, signal),
-    instant(NETWORK.unmapped, signal),
-  ]);
+/**
+ * THE UNIT SERIES IS HERE BECAUSE A STOPPED CONTAINER MUST BE RED.
+ *
+ * `podman ps` lists running containers, so home_server_container_running is
+ * ABSENT rather than 0 for one that stopped - it never entered the tone map and
+ * every box fell back to grey. Enumerating from home_server_unit_state is the
+ * same fix, from the same source, that /services was rebuilt on, and
+ * network.ts calls that page's own liveness() rather than restating it.
+ */
+const poll = usePoll(async (signal) => {
+  const [unitState, unitRestarts, info, running, health, netInfo, attached, ports, rx, tx, unmapped] =
+    await Promise.all([
+      instantBy(SERVICES.unitState, "unit", signal),
+      instantBy(SERVICES.unitRestarts, "unit", signal),
+      labelsBy(SERVICES.info, "container", signal),
+      instantBy(SERVICES.running, "container", signal),
+      instantBy(SERVICES.health, "container", signal),
+      instant(NETWORK.info, signal),
+      instant(NETWORK.attached, signal),
+      instant(NETWORK.ports, signal),
+      instant(NETWORK.rx, signal),
+      instant(NETWORK.tx, signal),
+      instant(NETWORK.unmapped, signal),
+    ]);
 
-  const tones = new Map<string, Tone>();
-  for (const [name, up] of running) {
-    tones.set(name, containerTone(up === 1, health.get(name)).tone);
+  const units: net.UnitReading[] = [...unitState].map(([unit, state]) => ({
+    unit,
+    kind: "",
+    state,
+    restarts: unitRestarts.get(unit) ?? Number.NaN,
+  }));
+
+  const containers: net.ContainerReading[] = [...info].map(([name, labels]) => ({
+    name,
+    unit: labels.unit ?? "",
+    running: running.get(name) === 1,
+    health: health.get(name),
+  }));
+
+  const networks: net.NetworkReading[] = netInfo.map((s) => ({
+    id: s.metric.network ?? "",
+    driver: s.metric.driver ?? "",
+    subnet: s.metric.subnet ?? "",
+    isolate: s.metric.isolate ?? "",
+  }));
+
+  const membership = new Map<string, Set<string>>();
+  for (const s of attached) {
+    const c = s.metric.container;
+    const n = s.metric.network;
+    if (!c || !n) continue;
+    const set = membership.get(c) ?? new Set<string>();
+    set.add(n);
+    membership.set(c, set);
   }
+
+  const published: net.PortReading[] = ports.map((s) => ({
+    container: s.metric.container ?? "",
+    hostIp: s.metric.host_ip ?? "",
+    hostPort: s.metric.host_port ?? "",
+    containerPort: value(s.value),
+    protocol: s.metric.protocol ?? "",
+  }));
 
   // Keyed on the PAIR, because neither instantBy nor a single label can express
   // it. Neither a container name nor a network name may contain "|".
@@ -63,16 +124,45 @@ const net = usePoll(async (signal) => {
   };
 
   return {
-    tones,
+    units,
+    containers,
+    networks,
+    membership,
+    published,
     rx: pair(rx),
     tx: pair(tx),
     unmapped: value(unmapped[0]?.value),
   };
 }, 30_000);
 
-const tones = computed(() => net.data.value?.tones ?? new Map<string, Tone>());
-const rx = computed(() => net.data.value?.rx ?? new Map<string, number>());
-const tx = computed(() => net.data.value?.tx ?? new Map<string, number>());
+const verdicts = computed(() =>
+  net.memberVerdicts(poll.data.value?.units ?? [], poll.data.value?.containers ?? []),
+);
+
+const segments = computed(() =>
+  net.segmentRows(
+    poll.data.value?.networks ?? [],
+    poll.data.value?.membership ?? new Map(),
+    poll.data.value?.rx ?? new Map(),
+    poll.data.value?.tx ?? new Map(),
+    verdicts.value,
+  ),
+);
+
+const ports = computed(() =>
+  net.portRows(
+    poll.data.value?.published ?? [],
+    PUBLISHED.map((p) => ({ node: p.node, mapping: p.mapping })),
+  ),
+);
+
+const attention = computed(() =>
+  net.attentionRows(segments.value, ports.value, poll.data.value?.unmapped ?? Number.NaN),
+);
+const lead = computed(() => net.networkLead(segments.value, ports.value, attention.value));
+const conds = computed(() => net.conditionRows(segments.value, ports.value));
+const tally = computed(() => net.networkTally(segments.value, ports.value));
+const model = computed(() => net.graphModel(segments.value));
 
 /**
  * MOTION IS THE CLAIM "THIS IS HAPPENING NOW", so a stale reading must stop it.
@@ -84,37 +174,110 @@ const tx = computed(() => net.data.value?.tx ?? new Map<string, number>());
  */
 const flowing = computed(() => {
   if (metricsStale.value) return false;
-  const at = net.lastOk.value;
+  const at = poll.lastOk.value;
   if (!Number.isFinite(at)) return false;
   return Date.now() / 1000 - at < 90;
 });
 
-/** Per-segment totals, from the same pair map. Summed over members, so it
- *  double-counts every intra-segment byte - once as a sender's transmit and
- *  once as the receiver's receive. Reported as "seen on" rather than as a
- *  throughput for exactly that reason. */
-const perSegment = computed(() =>
-  NETWORKS.map((n) => {
-    let bytes = 0;
-    let measured = false;
-    for (const [key, v] of rx.value) {
-      if (key.endsWith(`|${n.id}`)) {
-        bytes += v;
-        measured = true;
-      }
-    }
-    for (const [key, v] of tx.value) {
-      if (key.endsWith(`|${n.id}`)) bytes += v;
-    }
-    return { id: n.id, purpose: n.purpose, bytes, measured };
-  }),
-);
-
-const tunnel = computed(() => {
-  const r = rx.value.get("torrent-infra|tunnel");
-  const t = tx.value.get("torrent-infra|tunnel");
-  return r === undefined && t === undefined ? null : { rx: r ?? 0, tx: t ?? 0 };
+// --- selection ----------------------------------------------------------------
+const focus = computed<string | null>(() => {
+  const q = route.query.focus;
+  return typeof q === "string" && q.length ? q : null;
 });
+
+function setFocus(value: string | null): void {
+  const query = { ...route.query };
+  if (value) query.focus = value;
+  else delete query.focus;
+  void router.replace({ query });
+}
+
+/** A focus naming nothing on this page is a dead filter, and a dead filter
+ *  renders as an empty table with no explanation. Cleared rather than kept. */
+watch([focus, segments], () => {
+  if (!focus.value || segments.value.length === 0) return;
+  const known =
+    segments.value.some((s) => s.id === focus.value) ||
+    segments.value.some((s) => s.members.some((m) => m.name === focus.value));
+  if (!known) setFocus(null);
+});
+
+const shownSegments = computed(() => {
+  if (!focus.value) return segments.value;
+  return segments.value.filter(
+    (s) => s.id === focus.value || s.members.some((m) => m.name === focus.value),
+  );
+});
+
+const shownPorts = computed(() => {
+  if (!focus.value) return ports.value;
+  const names = new Set(
+    segments.value
+      .filter((s) => s.id === focus.value)
+      .flatMap((s) => s.members.map((m) => m.metric)),
+  );
+  return ports.value.filter((p) => p.container === focus.value || names.has(p.container));
+});
+
+// --- Presentation -------------------------------------------------------------
+
+/** A tone on a value, without a fourth colour: fail and warn speak, ok is the
+ *  ordinary body colour and off is the dim one. The System views' rule. */
+function toneClass(tone: Tone): Record<string, boolean> {
+  return { bad: tone === "fail", warnish: tone === "warn", dull: tone === "off" };
+}
+
+/** ok DRAWS NO RAIL. A teal edge down every healthy row is a wall of colour
+ *  that makes the two rows with a rail harder to find, not easier. */
+function rail(tone: Tone): string {
+  return tone === "ok" ? "transparent" : `var(--${tone})`;
+}
+
+function isolateText(s: net.SegmentRow): string {
+  if (s.kind === "tunnel") return "n/a";
+  if (s.isolate === undefined) return fmt.NO_DATA;
+  return s.isolate === "true" ? "yes" : "NO";
+}
+
+function isolateTone(s: net.SegmentRow): Tone {
+  if (s.kind === "tunnel") return "off";
+  if (s.isolate === undefined) return "off";
+  if (s.isolate === "true") return "ok";
+  return s.declared ? "fail" : "off";
+}
+
+function memberTip(s: net.SegmentRow, m: net.MemberRef) {
+  return {
+    title: `${m.name} on ${s.id}`,
+    lines: [
+      m.state,
+      m.declared ? "declared in stacks/" : "not declared in stacks/",
+      m.attached ? "podman reports it attached" : "podman does not report this attachment",
+      Number.isFinite(m.rx) ? `received ${fmt.rate(m.rx)}` : "received: not measured",
+      Number.isFinite(m.tx) ? `sent ${fmt.rate(m.tx)}` : "sent: not measured",
+    ],
+    caveat: m.issue ?? undefined,
+  };
+}
+
+function portTip(p: net.PortRow) {
+  return {
+    title: p.mapping,
+    lines: [
+      p.container,
+      p.loopback
+        ? "bound to 127.0.0.1, so it is not a way in at all - only a process on the host can reach it"
+        : "the only way in that does not go through a bridge",
+      p.declared ? "declared in stacks/" : "not declared in stacks/",
+      p.live ? "podman is publishing it" : "podman is not publishing it",
+    ],
+    caveat:
+      p.issue ??
+      (p.loopback
+        ? "firewalld does NOT govern this one. A loopback publish never reaches the INPUT chain, which is why it needs no rule and gets no protection from one either."
+        : "firewalld governs this separately, and host.firewalld below is the check that grades it. A publish with no matching rule is a closed port on a container that looks perfectly healthy."),
+  };
+}
 </script>
 
 <template>
@@ -123,110 +286,235 @@ const tunnel = computed(() => {
       <span class="mono note">read only</span>
     </Teleport>
 
-    <section class="head">
-      <span class="label">Network</span>
-      <span class="mono counts">
-        {{ NETWORKS.length }} bridges, all isolate=true / {{ PATHS.length }} declared routes /
-        {{ PUBLISHED.length }} published ports
-      </span>
-    </section>
+    <Band label="Right now">
+      <template #aside>
+        <span class="mono">{{ tally.segments }} segments, {{ tally.attachments }} attachments</span>
+      </template>
+      <PanelBox :stale="metricsStale">
+        <div class="lead">
+          <StatusDot :tone="lead.tone" :live="lead.live" glow :size="8" />
+          <span class="reading" :class="toneClass(lead.tone)">{{ lead.text }}</span>
+        </div>
+        <p class="lead-sub mono">{{ lead.sub }}</p>
 
-    <StaleNote :reason="metricsStale" />
-
-    <section class="lower">
-      <PanelBox label="Segments and traffic" :stale="metricsStale">
-        <template #aside>
-          <span>hover or focus a container to trace its routes</span>
-        </template>
-        <NetworkGraph :tones="tones" :rx="rx" :tx="tx" :flowing="flowing" />
-      </PanelBox>
-
-      <div class="side">
-        <PanelBox label="Seen on each segment" :stale="metricsStale">
-          <ul class="segs">
-            <li v-for="s in perSegment" :key="s.id" class="seg mono">
-              <span class="sname">{{ s.id }}</span>
-              <span class="sval" :class="{ absent: !s.measured }">
-                {{ s.measured ? fmt.rate(s.bytes) : "not measured" }}
-              </span>
-            </li>
-          </ul>
-          <p class="hint mono">
-            Both directions of every member, added up - so an intra-segment byte is counted twice,
-            once as a send and once as the matching receive. It is a measure of how busy a bridge is,
-            not of throughput across it.
-          </p>
-        </PanelBox>
-
-        <PanelBox label="Egress" :stale="metricsStale">
-          <div class="apps mono">
-            <div class="app">
-              <span
-                v-bind="
-                  tip.bind('egress-tunnel', {
-                    title: 'the VPN tunnel',
-                    lines: [
-                      'gluetun\'s tun0, inside the torrent pod',
-                      'every byte qBittorrent and JOAL have moved',
-                    ],
-                    caveat:
-                      'The pod has no other route out, which is what makes the kill-switch structural rather than a firewall rule.',
-                  })
-                "
-                >tunnel</span
-              >
-              <span class="av">
-                {{ tunnel ? `${fmt.rate(tunnel.rx)} / ${fmt.rate(tunnel.tx)}` : "not measured" }}
-              </span>
-            </div>
+        <div class="conds">
+          <div v-for="c in conds" :key="c.id" class="cond">
+            <span class="label">{{ c.label }}</span>
+            <span class="cvalue mono" :class="toneClass(c.tone)">{{ c.value }}</span>
+            <span class="sub mono">{{ c.sub }}</span>
           </div>
-          <p class="hint mono">
-            The only place the pod's egress is visible. gluetun, qBittorrent and JOAL share one
-            network namespace, so there is one set of counters for all three and no per-container
-            split exists to report.
-          </p>
-        </PanelBox>
+        </div>
+      </PanelBox>
+    </Band>
 
-        <PanelBox label="Published ports">
-          <template #aside>
-            <span>{{ PUBLISHED.length }} in the whole stack</span>
-          </template>
-          <ul class="ports">
-            <li
-              v-for="p in PUBLISHED"
-              :key="`${p.node}-${p.mapping}`"
-              class="port mono"
-              v-bind="
-                tip.bind(`port-${p.node}-${p.mapping}`, {
-                  title: p.mapping,
-                  lines: [
-                    p.node,
-                    p.isLoopback
-                      ? 'bound to 127.0.0.1, so it is not a way in at all - only a process on the host can reach it'
-                      : 'the only way in that does not go through a bridge',
-                  ],
-                  caveat: p.isLoopback
-                    ? 'firewalld does NOT govern this one. A loopback publish never reaches the INPUT chain, which is why it needs no rule and gets no protection from one either.'
-                    : 'firewalld governs this separately. A publish with no matching rule is a closed port on a container that looks perfectly healthy.',
-                })
-              "
+    <Band label="Needs attention">
+      <template #aside>
+        <span class="mono">{{ attention.length }} of {{ tally.segments + tally.attachments + tally.ports }}</span>
+      </template>
+      <PanelBox :stale="metricsStale">
+        <p v-if="!attention.length" class="empty mono">
+          Nothing here disagrees with stacks/. Every declared segment exists and carries
+          isolate=true, every declared attachment is one podman reports, and no interface
+          failed to map.
+        </p>
+        <table v-else class="tbl">
+          <thead>
+            <tr>
+              <th class="c-rail" />
+              <th>What</th>
+              <th class="c-state p3">State</th>
+              <th class="c-issue p2">Look here first</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="a in attention" :key="a.key" class="hov" :style="{ '--rail': rail(a.tone) }">
+              <td class="rail">
+                <StatusDot :tone="a.tone" :live="a.tone === 'fail'" glow :size="6" />
+              </td>
+              <td>
+                <div class="ident">
+                  <span class="sname mono">{{ a.subject }}</span>
+                  <span class="role mono">{{ a.where }}</span>
+                </div>
+                <div class="smeta mono">
+                  <span class="fold3" :class="toneClass(a.tone)">{{ a.state }}</span>
+                  <span class="fold2">{{ a.issue }}</span>
+                </div>
+              </td>
+              <td class="c-state p3 mono" :class="toneClass(a.tone)">{{ a.state }}</td>
+              <td class="c-issue p2 issue">{{ a.issue }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </PanelBox>
+    </Band>
+
+    <FindingsPanel
+      label="What the hourly battery found"
+      :ids="net.FINDING_IDS"
+    />
+
+    <Band label="The segmentation">
+      <template #aside>
+        <span v-if="focus" class="mono">
+          showing {{ focus }}
+          <button type="button" class="clear" @click="setFocus(null)">clear</button>
+        </span>
+        <span v-else class="mono">click a segment or a service to filter what is below</span>
+      </template>
+      <PanelBox :stale="metricsStale">
+        <NetworkGraph
+          :model="model"
+          :segments="segments"
+          :flowing="flowing"
+          :focus="focus"
+          @update:focus="setFocus"
+        />
+      </PanelBox>
+    </Band>
+
+    <Band label="Segments">
+      <template #aside>
+        <span class="mono">declared first, then what the host has that stacks/ does not</span>
+      </template>
+      <PanelBox :stale="metricsStale">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th class="c-rail" />
+              <th class="c-seg">Segment</th>
+              <th class="c-purpose p4">Purpose</th>
+              <th class="p2">Members</th>
+              <th class="c-subnet p3">Subnet</th>
+              <th class="c-seen r p2">Seen on it</th>
+              <th class="c-iso r p2">Isolated</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="s in shownSegments"
+              :key="s.id"
+              class="hov"
+              :style="{ '--rail': rail(s.tone) }"
             >
-              <span class="pmap">{{ p.mapping }}</span>
-              <span class="pnode">{{ p.node }}</span>
-            </li>
-          </ul>
-          <p class="hint mono">
-            Everything else is reached by container name over its own bridge.
-          </p>
-        </PanelBox>
-      </div>
-    </section>
+              <td class="rail">
+                <StatusDot :tone="s.tone" :live="s.tone === 'fail'" glow :size="6" />
+              </td>
+              <td class="c-seg">
+                <div class="ident">
+                  <span class="sname mono">{{ s.id }}</span>
+                  <span class="sstate mono" :class="toneClass(s.tone)">{{ s.state }}</span>
+                </div>
+                <div class="smeta mono">
+                  <span class="fold4">{{ s.purpose }}</span>
+                  <span v-if="s.subnet" class="fold3">{{ s.subnet }}</span>
+                  <span class="fold2">{{ s.measured ? fmt.rate(s.bytes) : "not measured" }}</span>
+                  <span class="fold2" :class="toneClass(isolateTone(s))">
+                    isolate {{ isolateText(s) }}
+                  </span>
+                  <!-- NAMES RATHER THAN THE CHIPS THEMSELVES. Seven chips in
+                       the 124px the members column has left at 390 is one per
+                       line and a row eight lines tall; the same seven names on
+                       the meta line wrap across the whole cell and read. The
+                       chips are a control, and a control nobody can hit is not
+                       one worth keeping the column for. -->
+                  <span v-if="s.members.length" class="fold2">
+                    {{ s.members.map((m) => m.name).join(" ") }}
+                  </span>
+                </div>
+              </td>
+              <td class="c-purpose p4 role">{{ s.purpose }}</td>
+              <td class="p2">
+                <div class="chips">
+                  <button
+                    v-for="m in s.members"
+                    :key="m.metric"
+                    type="button"
+                    class="mchip mono"
+                    :class="[toneClass(m.tone), { ghost: !m.attached }]"
+                    v-bind="tip.hover(`m-${s.id}-${m.metric}`, memberTip(s, m))"
+                    @click="setFocus(m.name)"
+                  >
+                    <StatusDot :tone="m.tone" :size="5" />
+                    {{ m.name }}
+                  </button>
+                  <span v-if="!s.members.length" class="role mono">no member</span>
+                </div>
+              </td>
+              <td class="c-subnet p3 mono role">{{ s.subnet || fmt.NO_DATA }}</td>
+              <td class="c-seen r p2 num" :class="{ dull: !s.measured }">
+                {{ s.measured ? fmt.rate(s.bytes) : fmt.NO_DATA }}
+              </td>
+              <td class="c-iso r p2 num" :class="toneClass(isolateTone(s))">
+                {{ isolateText(s) }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="hint mono">
+          A rate is both directions of every member added up, so an intra-segment byte is counted
+          twice - once as a send and once as the matching receive. It measures how busy a bridge is,
+          not throughput across it, and which peer any of it reached is not measurable on this host.
+        </p>
+      </PanelBox>
+    </Band>
 
-    <p v-if="(net.data.value?.unmapped ?? 0) > 0" class="unmapped mono">
-      {{ net.data.value?.unmapped }} interface(s) matched no podman network and are not a tunnel, so
-      their traffic is absent from this page. That is what
-      home_server_container_network_unmapped_interfaces counts.
-    </p>
+    <Band label="Published ports">
+      <template #aside>
+        <span class="mono">{{ tally.ports }} in the whole stack</span>
+      </template>
+      <PanelBox :stale="metricsStale">
+        <p v-if="!shownPorts.length" class="empty mono">
+          No publish here. Everything else is reached by container name over its own bridge.
+        </p>
+        <table v-else class="tbl">
+          <thead>
+            <tr>
+              <th class="c-rail" />
+              <th class="c-port">Port</th>
+              <th>Container</th>
+              <th class="c-bind p3">Bind</th>
+              <th class="c-what p2">What it is</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="p in shownPorts"
+              :key="p.key"
+              class="hov"
+              :style="{ '--rail': rail(p.tone) }"
+              v-bind="tip.hover(`port-${p.key}`, portTip(p))"
+            >
+              <td class="rail">
+                <StatusDot :tone="p.tone" :live="p.tone === 'fail'" glow :size="6" />
+              </td>
+              <td class="c-port mono">{{ p.mapping }}</td>
+              <td>
+                <div class="ident">
+                  <span class="sname mono">{{ p.container }}</span>
+                  <span class="sstate mono" :class="toneClass(p.tone)">{{ p.state }}</span>
+                </div>
+                <div class="smeta mono">
+                  <span class="fold3">{{ p.loopback ? "127.0.0.1" : "every address" }}</span>
+                  <span class="fold2">{{
+                    p.loopback ? "firewalld never sees it" : "firewalld governs it"
+                  }}</span>
+                </div>
+              </td>
+              <td class="c-bind p3 mono role">{{ p.loopback ? "127.0.0.1" : "every address" }}</td>
+              <td class="c-what p2 issue">
+                {{
+                  p.issue ??
+                  (p.loopback
+                    ? "loopback only - firewalld never sees this one"
+                    : "faces the LAN, and firewalld governs it separately")
+                }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </PanelBox>
+    </Band>
   </div>
 </template>
 
@@ -235,7 +523,8 @@ const tunnel = computed(() => {
   padding: 16px var(--pad-page) var(--pad-page);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--gap-lg);
+  min-width: 0;
 }
 
 .note {
@@ -243,72 +532,199 @@ const tunnel = computed(() => {
   color: var(--fg-dim);
 }
 
-.head {
+/* --- the header --- */
+.lead {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
+  align-items: center;
+  gap: 10px;
 }
 
-.counts {
+.reading {
+  font: var(--t-mono-xl);
+  color: var(--fg-1);
+}
+
+.lead-sub {
+  margin-top: 5px;
   font: var(--t-mono-sm);
   color: var(--fg-5);
 }
 
-.lower {
+.conds {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
-  align-items: start;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
 }
 
-.side {
+.cond {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 3px;
+  min-width: 0;
 }
 
-.segs,
-.ports {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.seg,
-.port {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 9px;
-  padding: 5px 4px;
-  border-radius: var(--r-xs);
-  font: var(--t-mono-sm);
-}
-
-.port {
-  grid-template-columns: 92px 1fr;
-}
-
-.seg:hover,
-.port:hover {
-  background: oklch(1 0 0 / 0.04);
-}
-
-.sname,
-.pmap {
+.cvalue {
+  font: var(--t-mono-md);
   color: var(--fg-2);
 }
 
-.sval {
+.sub {
+  font: var(--t-mono-xs);
+  color: var(--fg-5);
+}
+
+/* --- the tables --- */
+.c-rail {
+  width: 30px;
+}
+
+.c-seg {
+  width: 224px; /* "net-transcode" beside "membership drift" */
+}
+
+.c-purpose {
+  width: 190px;
+}
+
+.c-subnet {
+  width: 128px; /* "172.21.19.0/24" */
+}
+
+.c-seen {
+  width: 96px; /* "16.0 MB/s" */
+}
+
+.c-iso {
+  width: 78px;
+}
+
+.c-state {
+  width: 152px; /* "membership drift" */
+}
+
+.c-issue {
+  width: 380px;
+}
+
+.c-port {
+  width: 168px; /* "127.0.0.1:8300 -> 8000" */
+}
+
+.c-bind {
+  width: 118px;
+}
+
+.c-what {
+  width: 320px;
+}
+
+.ident {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sname {
+  font: var(--t-mono-md);
+  color: var(--fg-2);
+}
+
+.sstate {
+  font: var(--t-mono-xs);
+  color: var(--fg-5);
+}
+
+.role {
+  font: var(--t-mono-xs);
+  color: var(--fg-5);
+}
+
+/* The meta line, and everything a dropped column handed over. Each fold
+   appears only once its own column has gone. */
+.smeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 3px;
+  font: var(--t-mono-xs);
+  color: var(--fg-5);
+}
+
+/* The folds are flex items in the meta line, so they lay out inline rather
+   than as the blocks base.css makes them. */
+.smeta .fold4,
+.smeta .fold3,
+.smeta .fold2 {
+  display: none;
+}
+
+@media (max-width: 1180px) {
+  .smeta .fold4 {
+    display: inline;
+  }
+}
+
+@media (max-width: 900px) {
+  .smeta .fold3 {
+    display: inline;
+  }
+}
+
+@media (max-width: 640px) {
+  .smeta .fold2 {
+    display: inline;
+  }
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+
+.mchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: var(--pad-chip);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs);
+  background: var(--surface-chip);
   color: var(--fg-3);
+  font: var(--t-mono-xs);
+  cursor: pointer;
 }
 
-/* Absent is not zero, and it must not look like a small number. */
-.absent {
-  color: var(--fg-dim);
+.mchip:hover {
+  border-color: var(--accent);
+  color: var(--fg-2);
 }
 
-.pnode {
+/* DECLARED AND NOT ATTACHED IS AN OUTLINE, NOT A DIMMED CHIP. base.css owns a
+   global .dim that means STALE, and a member podman does not report is not a
+   stale reading - it is a present one saying something is missing. */
+.ghost {
+  border-style: dashed;
+  background: none;
+}
+
+.num {
+  font: var(--t-mono-sm);
+  color: var(--fg-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.issue {
+  font: var(--t-mono-xs);
+  color: var(--fg-4);
+}
+
+.empty {
+  font: var(--t-mono-sm);
   color: var(--fg-5);
 }
 
@@ -320,53 +736,68 @@ const tunnel = computed(() => {
   color: var(--fg-5);
 }
 
-.apps {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
+.clear {
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
 }
 
-.app {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  font: var(--t-mono-sm);
-  color: var(--fg-5);
+/* --- the tone classes, LAST ---
+   AND LAST IS NOT TIDINESS. Every one of these is a single class, and so are
+   .num, .issue and .cvalue - equal specificity, so the later rule in the file
+   wins. Written above the tables, .num beat .warnish and a segment without
+   isolate printed its NO in the ordinary body colour, beside a red rail.
+   Found on /services on 2026-09-08 and true here for the same reason.
+
+   .dull, NOT .dim: base.css owns a global .dim that means STALE, so a scoped
+   .dim { color: var(--fg-5) } does not replace it, it ADDS 42% opacity and a
+   saturation cut to a row whose only fault is that nobody is checking it. */
+.bad {
+  color: var(--fail-text);
 }
 
-.av {
-  color: var(--fg-2);
-  font-weight: 500;
-}
-
-.unmapped {
-  font: var(--t-mono-sm);
+.warnish {
   color: var(--warn);
 }
 
-@media (max-width: 1400px) {
-  .lower {
-    grid-template-columns: 1fr;
-  }
+.dull {
+  color: var(--fg-5);
+}
 
-  .side {
-    flex-direction: row;
-  }
-
-  .side > * {
-    flex: 1;
+/* --- the tablet --- */
+@media (max-width: 900px) {
+  .conds {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-/* AND BACK TO A COLUMN. The rule above turns a stack into a row when the
-   sidebar can no longer sit beside the graph, which is right at 1200 and
-   actively wrong at 375: it left two panels in about 160px each, one of them
-   holding a 92px fixed track. A fold that gets WORSE as the screen narrows is
-   the shape of every breakpoint in this app that was written for one viewport
-   and never revisited. */
-@media (max-width: 900px) {
-  .side {
-    flex-direction: column;
+/* --- the phone --- */
+@media (max-width: 640px) {
+  .conds {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* THE RAIL NEEDS ITS WIDTH BACK ON THE CELL ONCE THE HEADER IS GONE. Under
+     table-layout: fixed the column widths come from the first row, and
+     display: none on the thead makes that the first BODY row - which carries
+     no widths, so the surviving columns split evenly. */
+  .tbl td.rail {
+    width: 30px;
+  }
+
+  .tbl thead {
+    display: none;
+  }
+
+  /* The segment cell is the only one left, so it takes the table. Its measured
+     width is what the header used to set, and the header has gone. */
+  .tbl td.c-seg {
+    width: auto;
   }
 }
 </style>

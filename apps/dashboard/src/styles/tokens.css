@@ -347,6 +347,15 @@
 }
 
 /* The traffic flow on the Network page.
+
+   THE KEYFRAME IS HERE AND THE RULE THAT RUNS IT IS IN NetworkGraph.vue, which
+   is a correction rather than a preference. Until 2026-09-08 this block was the
+   whole of it: the component set animation-duration inline and NOTHING
+   anywhere set animation-name, so the only `.flow` selector in the application
+   was the one below that turns it off. The animation had never run once, and no
+   screenshot could show that - which is why the magnitude tick, drawn for the
+   opposite reason, was the only thing anyone had ever seen move.
+
    ANIMATED BY THE DASH PERIOD, NEVER BY THE PATH LENGTH. If the keyframe ran to
    the path's own length, a long spoke and a short one at the same rate would
    travel at visibly different apparent speeds - which is decoration pretending

@@ -496,10 +496,43 @@ def source_container_network(m):
         raise RuntimeError("podman network ls failed")
     by_subnet = {}
     for net in json.loads(raw_nets):
-        for sub in net.get("subnets") or []:
-            cidr = sub.get("subnet")
-            if cidr:
-                by_subnet[cidr] = net.get("name", "")
+        name = net.get("name", "")
+        subnets = [
+            sub.get("subnet") for sub in (net.get("subnets") or [])
+            if sub.get("subnet")
+        ]
+        for cidr in subnets:
+            by_subnet[cidr] = name
+        if not name:
+            continue
+        # THE BRIDGE ITSELF, FROM A CALL THIS SOURCE ALREADY MAKES. Until
+        # 2026-09-08 everything but `subnets` was parsed and thrown away, and
+        # the dashboard drew "all isolate=true" as a static sentence compiled
+        # into the bundle - a security property asserted on screen and measured
+        # nowhere on the host. agents.runner_isolation and ci.runner_isolation
+        # both inspect `isolate`, but only on the ephemeral net-conduct-* and
+        # net-ci-* networks, so a stack segment that lost it would pass every
+        # check in this repository.
+        #
+        # ISOLATE IS A LABEL ON AN INFO SERIES, not a gauge of its own.
+        # home_server_container_info already carries pod/unit/image this way and
+        # `home_server_network_info{isolate!="true"}` is the alert expression; a
+        # second series would cost one per network for no new answer.
+        #
+        # A NETWORK IS NOT SKIPPED FOR BEING EPHEMERAL. _is_ephemeral keys on a
+        # container label and there is no network equivalent, but more to the
+        # point net-ci-* and net-conduct-* are exactly what a reader wants to
+        # see here: they are created and destroyed by the drivers and appear on
+        # no page at all today. There are at most a handful at a time.
+        m.add("home_server_network_info", 1, {
+            "network": name,
+            "driver": net.get("driver", ""),
+            "subnet": subnets[0] if subnets else "",
+            "isolate": (net.get("options") or {}).get("isolate", ""),
+        }, "One per podman network. The value is always 1; everything this "
+           "says is in the labels. isolate is netavark's inter-bridge block "
+           "and reads empty rather than false when the option is absent - "
+           "which is the state stacks/ must never be in.")
 
     pairs = 0
     unmapped = 0
@@ -515,6 +548,26 @@ def source_container_network(m):
         # accumulate on disk entirely unobserved.
         if _is_ephemeral(c):
             continue
+
+        # MEMBERSHIP AS A FACT, NOT AS A SIDE EFFECT OF CARRYING TRAFFIC.
+        # Emitted BEFORE both skips below, so attachment is strictly more
+        # available than the byte counters: this is podman's own answer and
+        # needs no /proc read, no PID and no subnet join.
+        #
+        # The dashboard used to infer membership from rate(...[5m]) over the
+        # receive counter, which returns NO SERIES AT ALL for a container
+        # restarted inside the window - so a service that had just come back
+        # fell silently out of the segment it belongs to. It also could not
+        # tell "detached" from "the subnet join failed", which
+        # unmapped_interfaces counts globally and names nobody.
+        for attached in c.get("Networks") or []:
+            m.add("home_server_container_attached", 1,
+                  {"container": (c.get("Names") or ["?"])[0],
+                   "network": attached},
+                  "This container is attached to this network, as podman "
+                  "reports it. Membership only - it says nothing about "
+                  "whether anything has moved across the bridge.")
+
         # A container reporting no networks of its own is a pod member: it
         # shares the infra container's namespace, so its /proc/<pid>/net/dev is
         # literally the SAME counter. Reading all four members would report the
@@ -805,6 +858,38 @@ def source_containers(m):
               "counter")
         m.add("container_start_time_seconds", _started_at(c), labels,
               "Unix timestamp the container started.")
+
+        # THE HOST PORT SURFACE, WHICH NOTHING MEASURED UNTIL 2026-09-08.
+        # `podman ps --format json` has carried this array all along and both
+        # callers dropped it; the Network page drew a hand-written copy out of
+        # topology.ts instead, with the host-side numbers resolved by hand
+        # because bin/lint-repo.sh can only compare the text after the last ":"
+        # (the host side is a ${VAR} in stacks/ and the bind address another).
+        #
+        # THE CONTAINER PORT IS THE VALUE. CLAUDE.md's rule from
+        # home_server_torrent_listen_port - the port number is the value, not a
+        # label. A publish is IDENTIFIED by where it is bound, so host_ip and
+        # host_port are the labels and the value says where it lands.
+        #
+        # host_ip is "" for a publish that faces the LAN and 127.0.0.1 for one
+        # that does not, and the difference is not cosmetic: firewalld governs
+        # the first and never sees the second, because a loopback publish never
+        # reaches the INPUT chain. It is written through unchanged rather than
+        # normalised to 0.0.0.0, so the empty string keeps meaning "podman said
+        # nothing here" rather than an address this script chose.
+        for pub in c.get("Ports") or []:
+            host_port = pub.get("host_port")
+            container_port = pub.get("container_port")
+            if host_port is None or container_port is None:
+                continue
+            m.add("home_server_container_published_port", container_port, {
+                "container": name,
+                "host_ip": pub.get("host_ip", ""),
+                "host_port": str(host_port),
+                "protocol": pub.get("protocol", ""),
+            }, "A port published on the host, valued with the container port "
+               "it lands on. Almost nothing here publishes: everything else is "
+               "reached by container name over its own bridge.")
 
         # duckdns, unpackerr and the pod's infra container define no
         # healthcheck. The health gauge is ABSENT for them rather than zero,
