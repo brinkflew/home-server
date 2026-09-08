@@ -420,6 +420,18 @@ reads as a ship phase in flight. `awaiting merge` was the obvious replacement an
 claim, and false on every round that was declined or stopped after publishing. So the fraction
 stands alone and the state pill beside it says which nothing it is.
 
+**BOTH HALVES COME FROM THE RUN LOG AND NOTHING ELSE MAY SUPPLY THEM.** `phase` is the phase in
+flight and `done` is what is behind it, and neither is a field conduct maintains: `chain.phase` is
+the flow's `phase` ARGUMENT - `"ship"`, written once by `chain_open` - and `chain.done` belongs to
+the one chain row a reused worktree holds. Reading the first of those blinked the `ship` node
+through plan, dev, verify and review for as long as the rail existed, and it read as a phase because
+it spells one. **A run row opens at the START of a phase**, so `done` counts only rows whose
+`result` is not NULL - conduct's own in-flight predicate - which is also what makes the `at` state
+reachable at all. A KILLED run is still done: `abandon_runs` closes it as `killed`, and those are
+the steps a stopped round got through. `bin/lint-repo.sh` leg 10 asserts all of it against the same
+contract `fixtures/fleet.ts` states, because the fixture stated it correctly and nothing had ever
+compared the producer with it.
+
 **AND THE `Right now` CONDITIONS ARE THREE EQUAL COLUMNS AT AND ABOVE 900.** The argument against
 that was about a different panel: the header it replaced WAS five facts - conduct, phase, quota,
 worktrees, intake - each handed a fifth of 1360 with no primary among them, and the complaint was

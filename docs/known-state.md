@@ -4752,3 +4752,38 @@ Recorded 2026-09-07, with the board's filter, the step rail and the three render
   new deployment with no fallback at all: the same trade as the reclaim, one boot later and one boot
   less recoverable. No check asserts it, because an assertion that an unset environment variable is
   still unset is a check that can only ever pass.
+
+### The board blinked one step through four of them, and the field it read was never a phase
+- **`chain.phase` is the flow's `phase` ARGUMENT and not the phase in flight.** `chain_open` writes it
+  once at the planning step and nothing updates it; `poll._intake_start` passes `"ship"`, and poll.py
+  states the rule beside the generic handler - *"the flow's `phase` field says what the WORK is -
+  `ship` - and a planning step that read this field would run a second dev phase with a planning
+  prompt"*. The collector preferred it over the run log for every open round, so the rail's pulsing
+  node sat on `ship` from the first minute of a round through plan, dev, verify and review, the
+  phase clock read `ship 14m` off the review's own run row, and the ETA priced the ship phase while
+  the gate was running. **It reads as a phase because it SPELLS one**: had the argument been
+  `upskald` the board would have said `no phase` and somebody would have looked in 2026-08.
+- **A run row is opened at the START of a phase, so counting one as finished drew the phase in flight
+  as done.** `state.start_run` inserts with `result NULL` and `finish_run` is the only writer of that
+  column, which is conduct's own in-flight predicate and one this file already states twice for the
+  failure counts. The consequence is three readers at once: `PhaseSteps` filled the node, so the `at`
+  state that component exists for was UNREACHABLE; `phaseLabel` counted it in the numerator; and
+  `_fleet_eta`'s `if name == phase` branch - written to subtract the running phase's own elapsed time
+  - could never fire, so a round that had just started planning was priced at the four phases after
+  the plan. **A killed run is still done and deliberately**: `abandon_runs` closes it as `killed`,
+  which is not NULL, and those are the steps a stopped round got through - what the red rail says.
+- **`_fleet_phase_started` asked for the folded worktree**, so the one phase that claims a worktree of
+  its own could never be found: `_fleet_parent` has already turned `<id>-verify` back into `<id>` by
+  the time it is called. The gate's elapsed time was therefore absent from every ETA. The browser's
+  `phaseClock` carries this exact clause and says why; the collector's half had never had it.
+- **The fixture was RIGHT and that is why nothing caught any of it.** `fixtures/fleet.ts` states the
+  contract correctly - `phase: "dev"` with `done: ["plan"]`, `phase: "plan"` with `done: []` - and
+  smoke.mjs asserts `phaseLabel` against it down to the string `plan 0/6`. So the three readers were
+  tested, the producer was not, and the two disagreed for as long as they both existed. This is the
+  mirror of the `staged_version` entry: there a fixture derived from its consumer could not
+  contradict it, here a fixture INDEPENDENT of its producer was never compared with one.
+- **`bin/lint-repo.sh` leg 10 is that comparison, and it is the collector's only unit test.** It
+  builds a round mid-gate in an in-memory database and asserts what the fixture asserts; the static
+  half greps for `chain["phase"]` by name, because reaching that line needs `source_fleet` and eight
+  tables of fixture. All three halves were made to FAIL before they were trusted. Measured against
+  the live database: 24 rounds derived, one row changed, and the 23 closed ones byte-identical.

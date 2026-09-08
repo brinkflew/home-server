@@ -1614,6 +1614,18 @@ signal read green.
 - `df` under-read `/boot` by 19.2 MiB to every gate at once - ext4's root reserve is excluded from
   Avail for root too. A boot slot cannot live on another disk: ostree has one bootfs, by karg.
 
+### The board blinked one step through four of them, and the field it read was never a phase
+- `chain.phase` is the flow's `phase` ARGUMENT - `"ship"` for every round - written once by
+  `chain_open` and never updated. The collector preferred it over the run log, so the rail pulsed on
+  `ship` through plan, dev, verify and review. It reads as a phase because it SPELLS one.
+- A run row opens at the START of a phase, so counting it as done drew the phase in flight as
+  finished, made `PhaseSteps`' `at` state unreachable and left `_fleet_eta` unable to subtract the
+  running phase's own elapsed time. A KILLED run is still done - `abandon_runs` closes it.
+- `_fleet_phase_started` asked for the folded worktree, so a running verification was invisible to
+  the ETA. The browser's `phaseClock` had carried that clause all along.
+- The fixture was RIGHT and that is why nothing caught it: the three readers were tested against
+  `fixtures/fleet.ts` and the producer never was. `bin/lint-repo.sh` leg 10 is the comparison.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

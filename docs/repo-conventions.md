@@ -75,10 +75,19 @@ next start. Two consequences that are easy to be surprised by:
 
 ## Editing this repository
 
-There is still no build, no lint in the compiler sense and no test suite. What exists is
-`bin/lint-repo.sh`, which asserts the four conventions nothing else enforces: every tracked text
-file is ASCII, every script in `bin/` is executable, the shell passes shellcheck, and the quadlets
-generate.
+There is still no build and no lint in the compiler sense. What exists is `bin/lint-repo.sh`, which
+asserts the conventions nothing else enforces: every tracked text file is ASCII, every script in
+`bin/` is executable, the shell passes shellcheck, and the quadlets generate. It has grown legs that
+are semantic rather than hygienic - `topology.ts` and `paths.ts` against `stacks/`, and the fact and
+metric names that share one exposition file.
+
+**Leg 10 is a unit test, and calling it anything else would be pretending.** `_fleet_derive_rounds`
+in `bin/collect-metrics.py` reconstructs a round from conduct's run log, three readers in the
+dashboard take its answer as fact, and the only thing exercising those readers is a hand-written
+fixture that states the contract independently - so the producer and the fixture disagreed for as
+long as they both existed and nothing anywhere could see it. The leg builds a round mid-gate in an
+in-memory database and asserts what the fixture asserts. It is here rather than in
+`apps/dashboard/fixtures/smoke.mjs` because that harness is node and this function is python.
 
 **The shellcheck leg SKIPS rather than FAILS when shellcheck is absent, and it had therefore never
 run.** It was installed on neither machine until 2026-08-14, so the linter reported `all checks

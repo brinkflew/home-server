@@ -3260,6 +3260,13 @@ def _fleet_derive_rounds(conn):
                 "started_at": row["started_at"],
                 "ended_at": row["ended_at"],
                 "done": [],
+                # WHICH PHASES HAVE A RUN ROW AT ALL, which `done` answered
+                # until it stopped counting the one in flight. It is the filter
+                # below that wants it - "did a plan run on this group" - and a
+                # round whose plan is still running must not vanish off the
+                # board for the six minutes it takes. Popped before the rows are
+                # emitted: nothing renders it.
+                "seen": set(),
                 "phase": row["phase"],
                 "odoo_task": row.get("odoo_task"),
                 "task": row["task"],
@@ -3275,7 +3282,21 @@ def _fleet_derive_rounds(conn):
             open_group[worktree] = group
 
         group["phase"] = row["phase"]
-        if row["phase"] not in group["done"]:
+        group["seen"].add(row["phase"])
+        # THE PHASE IN FLIGHT IS NOT ONE OF THE PHASES BEHIND IT, and `done` is
+        # read as "what is no longer remaining" by three consumers at once: the
+        # rail fills a node, phaseLabel counts the numerator, and _fleet_eta
+        # subtracts the phase from the sum. A run row is opened at the START of
+        # a phase - state.start_run inserts it with result NULL and closes it at
+        # the end - so counting one that has not ended drew the phase in flight
+        # as finished, made the `at` state PhaseSteps exists for UNREACHABLE,
+        # and left the ETA counting only the phases after the one running.
+        #
+        # conduct's OWN PREDICATE, the one this file already states twice: a
+        # NULL result is in flight, NOT a failure. A run that FAILED is done and
+        # deliberately so - those are the steps a stopped round got through,
+        # which is exactly what the red rail beside it is saying.
+        if row["result"] is not None and row["phase"] not in group["done"]:
             group["done"].append(row["phase"])
         group["ended_at"] = row["ended_at"]
         group["cost_usd"] += row["cost_usd"] or 0.0
@@ -3287,7 +3308,7 @@ def _fleet_derive_rounds(conn):
         # runs until the first plan, so without this guard it would adopt the id
         # of the round that ENDED it and claim hand-driven work for a task that
         # had nothing to do with it.
-        if group["odoo_task"] is None and "plan" in group["done"]:
+        if group["odoo_task"] is None and "plan" in group["seen"]:
             group["odoo_task"] = row.get("odoo_task")
         if group["task"] is None:
             group["task"] = row["task"]
@@ -3326,7 +3347,7 @@ def _fleet_derive_rounds(conn):
     # the fleet attempted work it never attempted. A group with a task but no
     # plan IS kept: that is hand-driven work from before the fleet chose its
     # own, and it really did happen.
-    rounds = [g for g in rounds if "plan" in g["done"] or g["task"]]
+    rounds = [g for g in rounds if "plan" in g["seen"] or g["task"]]
 
     rounds.reverse()
 
@@ -3348,6 +3369,11 @@ def _fleet_derive_rounds(conn):
         worktree = group["worktree_id"]
         group["latest_on_worktree"] = worktree not in newest
         newest.add(worktree)
+        # `seen` IS THE FILTER'S AND NOT THE BROWSER'S. DOC_FLEET's shape is
+        # what the bundle's types are written from, and a set does not survive
+        # json.dumps anyway - so dropping it here is both the contract and the
+        # thing that would have failed loudly had it been forgotten.
+        group.pop("seen", None)
     return rounds
 
 
@@ -3374,11 +3400,18 @@ def _fleet_phase_started(conn, worktree_id, phase):
 
     result IS NULL is in flight rather than failed - conduct's own predicate,
     and the one the first version of this file got backwards.
+
+    AND THE VERIFICATION IS ASKED FOR UNDER BOTH NAMES. `worktree_id` arrives
+    folded - _fleet_parent has already turned `<id>-verify` back into `<id>` -
+    so asking for it verbatim could never find the one phase that claims a
+    worktree of its own, and the gate's elapsed time was silently absent from
+    every ETA. FLEET_VERIFY_SUFFIX is the same fold, applied the other way; the
+    browser's phaseClock already carries this exact clause and says so.
     """
     row = conn.execute(
-        "SELECT started_at FROM run WHERE worktree_id = ? AND phase = ?"
+        "SELECT started_at FROM run WHERE worktree_id IN (?, ?) AND phase = ?"
         " AND result IS NULL ORDER BY id DESC LIMIT 1",
-        (worktree_id, phase),
+        (worktree_id, worktree_id + FLEET_VERIFY_SUFFIX, phase),
     ).fetchone()
     if row is None:
         return None
@@ -3860,7 +3893,17 @@ def source_fleet(m, doc):
                 # The chain knows the task even when the run rows predate
                 # run.odoo_task, so prefer it for the round in flight.
                 row["odoo_task"] = chain["odoo_task"] or row["odoo_task"]
-                row["phase"] = chain["phase"] or row["phase"]
+                # AND NOT `chain.phase`, WHICH HAS NEVER BEEN THE PHASE IN
+                # FLIGHT. It is the flow's `phase` ARGUMENT, written once by
+                # chain_open and never updated again: poll._intake_start passes
+                # "ship" and poll.py says so out loud - *"the flow's `phase`
+                # field says what the WORK is - `ship`"*. It happens to spell one
+                # of FLEET_PHASES, so it read as a phase rather than as nonsense:
+                # every open round named `ship` from its first minute, the rail
+                # blinked the ship node through plan, dev, verify and review, and
+                # the ETA priced the ship phase while the review was running.
+                # The run log is the only thing that knows which phase is in
+                # flight, and _fleet_derive_rounds has already read it.
                 row["attempts"] = chain["attempts"] or row["attempts"]
                 row["closed_at"] = None
             else:

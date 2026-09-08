@@ -565,6 +565,126 @@ else
 	skip "no $vh or $cm"
 fi
 
+# ------------------------------------------------------------------------------
+say "Round derivation"
+# ------------------------------------------------------------------------------
+# THE ONE PIECE OF LOGIC IN THIS REPOSITORY THAT NOTHING ELSE COULD SEE WRONG.
+#
+# `_fleet_derive_rounds` reconstructs a round from the run log, and three readers
+# in the browser take its answer as fact: PhaseSteps fills a node, phaseLabel
+# counts the numerator, and _fleet_eta prices what is left. The dashboard's smoke
+# test drives all three - against fixtures/fleet.ts, which STATES the contract
+# correctly and is written by hand, so it can only ever agree with itself.
+#
+# It went wrong for as long as it existed and nothing anywhere could tell: the
+# board blinked the `ship` node through plan, dev, verify and review, because
+# `chain.phase` is the flow's WORK argument rather than the phase in flight, and
+# because a run row opened at the START of a phase was counted as one behind it.
+# Every key was present, every type was right, and the fixture said the opposite.
+#
+# So this is the collector's only unit test, and it is here rather than in
+# fixtures/smoke.mjs because that harness is node and this function is python.
+# It builds a round in memory and asserts what the fixture asserts.
+cm=bin/collect-metrics.py
+if [ -f "$cm" ] && command -v python3 >/dev/null 2>&1; then
+	drift=$(python3 - "$cm" <<-'PY'
+		import importlib.util
+		import sqlite3
+		import sys
+
+		spec = importlib.util.spec_from_file_location("collect_metrics", sys.argv[1])
+		cm = importlib.util.module_from_spec(spec)
+		spec.loader.exec_module(cm)
+
+		conn = sqlite3.connect(":memory:")
+		conn.row_factory = sqlite3.Row
+		conn.execute("""
+		    CREATE TABLE run (
+		        id INTEGER PRIMARY KEY, project TEXT, phase TEXT,
+		        worktree_id TEXT, started_at TEXT, ended_at TEXT, result TEXT,
+		        exit_code INTEGER, cost_usd REAL, tokens_in INTEGER,
+		        tokens_out INTEGER, task TEXT, odoo_task INTEGER, error TEXT,
+		        branch TEXT)
+		""")
+
+		def run(phase, worktree, result, started, ended=None):
+		    conn.execute(
+		        "INSERT INTO run (project, phase, worktree_id, started_at,"
+		        " ended_at, result, cost_usd, tokens_in, tokens_out, task,"
+		        " odoo_task) VALUES ('p', ?, ?, ?, ?, ?, 0.0, 0, 0, 'do it', 7)",
+		        (phase, worktree, started, ended, result))
+
+		# One round, mid-gate: plan and dev behind it, the verification running
+		# on the worktree of its own that _fleet_parent folds back.
+		run("plan", "wt", "ok", "2026-01-01T00:00:00Z", "2026-01-01T00:05:00Z")
+		run("dev", "wt", "ok", "2026-01-01T00:05:00Z", "2026-01-01T00:40:00Z")
+		run("verify", "wt-verify", None, "2026-01-01T00:40:00Z")
+		conn.commit()
+
+		bad = []
+		rounds = cm._fleet_derive_rounds(conn)
+		if len(rounds) != 1:
+		    bad.append("one round became %d" % len(rounds))
+		else:
+		    got = rounds[0]
+		    if got["phase"] != "verify":
+		        bad.append("the phase in flight reads %r, not 'verify'"
+		                   % got["phase"])
+		    if got["done"] != ["plan", "dev"]:
+		        bad.append("done is %r - the phase in flight is not behind it"
+		                   % (got["done"],))
+		    if got["worktree_id"] != "wt":
+		        bad.append("the verification's worktree did not fold back: %r"
+		                   % got["worktree_id"])
+		    if "seen" in got:
+		        bad.append("`seen` is the filter's and must not reach the browser")
+
+		# The gate's elapsed time is what the ETA subtracts, and the worktree it
+		# is asked for is the folded one.
+		if cm._fleet_phase_started(conn, "wt", "verify") is None:
+		    bad.append("a running verification is invisible to _fleet_phase_started")
+
+		# A round whose PLAN is still running must stay on the board - the filter
+		# asks whether a plan ran, which `done` can no longer answer.
+		second = sqlite3.connect(":memory:")
+		second.row_factory = sqlite3.Row
+		conn.backup(second)
+		second.execute("DELETE FROM run")
+		second.execute(
+		    "INSERT INTO run (project, phase, worktree_id, started_at, task,"
+		    " odoo_task) VALUES ('p', 'plan', 'wt2', '2026-01-01T01:00:00Z',"
+		    " NULL, 7)")
+		second.commit()
+		fresh = cm._fleet_derive_rounds(second)
+		if len(fresh) != 1 or fresh[0]["done"] != []:
+		    bad.append("a round whose plan is still running reads %r"
+		               % ([(r["phase"], r["done"]) for r in fresh],))
+
+		print("\n".join(bad))
+	PY
+	)
+	if [ -n "$drift" ]; then
+		bad "_fleet_derive_rounds does not agree with fixtures/fleet.ts - the"
+		printf '        board reads phase as what is running and done as what is behind it\n'
+		printf '%s\n' "$drift" | sed 's/^/    /'
+	else
+		ok "a round mid-gate names its phase, folds its verification and counts neither as done"
+	fi
+	# AND THE ONE SOURCE THAT MAY NEVER SUPPLY THAT PHASE, asserted by name
+	# because reaching it needs source_fleet and eight tables of fixture.
+	# chain.phase is the flow's `phase` ARGUMENT - written once by chain_open,
+	# never updated, and "ship" for every round the ship flow has ever run. It
+	# spells one of FLEET_PHASES, so reading it looked like reading a phase.
+	if grep -q 'chain\["phase"\]' "$cm"; then
+		bad "$cm reads chain[\"phase\"], which is the flow's own argument and"
+		printf '        never the phase in flight - the run log is the only source for that\n'
+	else
+		ok "chain.phase, which is the flow's argument, reaches no reader"
+	fi
+else
+	skip "no $cm, or python3 is not installed"
+fi
+
 echo
 if [ "$fails" -gt 0 ]; then
 	printf '\033[31m%d check(s) FAILED\033[0m\n' "$fails"
