@@ -193,9 +193,32 @@ export const SERVICES = {
    *  the reason Jellyfin looks like it is at its ceiling when it needs 400 MB. */
   memory: "container_memory_working_set_bytes",
   memoryHigh: "home_server_container_memory_high_bytes",
+  /** MemoryMax, the hard limit. DEFINED SINCE THE COLLECTOR EXISTED AND READ BY
+   *  NOTHING until 2026-09-08 - so the page could not say that every unit here
+   *  has another 33-50% of headroom above the watermark it draws the ratio
+   *  against, which is half of why "58% of high" read worse than it is. */
   memoryLimit: "container_spec_memory_limit_bytes",
-  /** Real starvation, as opposed to a cgroup doing ordinary file I/O. */
+  /** CORROBORATION, NOT A SIGNAL, and this docblock used to say the opposite -
+   *  "real starvation, as opposed to a cgroup doing ordinary file I/O" - which
+   *  is the sentence that made a floor of zero on it look reasonable. It counts
+   *  re-reads of file pages evicted at ANY time, global reclaim included, so it
+   *  fires on ordinary file I/O here: sampled on 2026-09-08, EIGHT OF THE NINE
+   *  containers it selected had a pgscan rate of zero - they had reclaimed
+   *  nothing at all. See memoryTone() in services.ts. */
   memoryRefault: `rate(home_server_container_memory_workingset_refault_file_total[${RATE}])`,
+  /** THE ARBITER, in bin/collect-metrics.py's own words on the help text it
+   *  publishes with these: "real starvation shows here, and a cgroup merely
+   *  holding cache does not". Present for all 28 containers since the collector
+   *  existed, and read by no page until the refault rate had already spent a
+   *  day calling a quiet host starved.
+   *
+   *  `some` is "at least one task delayed", `full` is "every runnable task
+   *  delayed" - the kernel's own vocabulary, which the collector renames to
+   *  waiting/stalled after cAdvisor. They are two signals rather than one
+   *  scaled: measured over 30 days they diverged in 1,707 samples, by up to
+   *  2,837x. */
+  memoryStallSome: `rate(container_pressure_memory_waiting_seconds_total[${RATE}])`,
+  memoryStallFull: `rate(container_pressure_memory_stalled_seconds_total[${RATE}])`,
   oomKills: 'home_server_container_memory_events_total{event="oom_kill"}',
 
   identityUnresolved: "home_server_container_identity_unresolved",

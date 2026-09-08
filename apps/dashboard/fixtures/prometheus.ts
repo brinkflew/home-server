@@ -227,13 +227,33 @@ function bySeries(): Record<string, SeriesSpec[]> {
     at: swing(`mem${c.name}`, c.memory, c.memory * 0.05),
   }));
   table[SERVICES.memoryHigh] = CONTAINERS.map((c) => ({ metric: { container: c.name }, at: constant(c.memoryHigh) }));
+  // OFF THE MODEL. This computed `Math.round(c.memoryHigh * 1.5)` and so did
+  // fixtures/smoke.mjs, independently - and the real ratio is 1.28 to 1.5, so
+  // both were wrong in the same way at once. See MEM_MAX in model.ts.
   table[SERVICES.memoryLimit] = CONTAINERS.map((c) => ({
     metric: { container: c.name },
-    at: constant(Math.round(c.memoryHigh * 1.5)),
+    at: constant(c.memoryLimit),
   }));
+  // OFF THE MODEL, NOT RESTATED HERE. This read `c.name === "bazarr" ? 840 : 0`,
+  // and fixtures/smoke.mjs restated the identical expression independently - two
+  // spellings of one rule, in the two files whose job is to check each other,
+  // and between them the reason a `refault > 0` rule could not be contradicted
+  // by any fixture. See REFAULT and STALL_SOME in model.ts.
   table[SERVICES.memoryRefault] = CONTAINERS.map((c) => ({
     metric: { container: c.name },
-    at: constant(c.name === "bazarr" ? 840 : 0),
+    at: constant(c.refault),
+  }));
+  // NaN IS AN ABSENT SERIES, NOT A ZERO - instant() drops any sample that
+  // formats to "NaN", so jellyseerr's three rate series are simply missing here
+  // exactly as they are missing on the host for a container younger than the
+  // rate window. That is the state memoryTone has to answer `off` for.
+  table[SERVICES.memoryStallSome] = CONTAINERS.map((c) => ({
+    metric: { container: c.name },
+    at: constant(c.stallSome),
+  }));
+  table[SERVICES.memoryStallFull] = CONTAINERS.map((c) => ({
+    metric: { container: c.name },
+    at: constant(c.stallFull),
   }));
   // Every container, not only the one that has been killed: the series is
   // written for all of them so a rule can alert on it, and a page that only ever

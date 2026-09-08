@@ -70,7 +70,19 @@ const IMAGES: Record<string, string> = {
   torrent: "localhost/podman-pause:5.4.0",
 };
 
-/** Memory ceilings, matching the MemoryHigh= in stacks/. */
+/**
+ * Memory ceilings, matching the `MemoryHigh=` in `stacks/`.
+ *
+ * IT SAID THAT BEFORE AND IT WAS NOT TRUE. Measured against every quadlet on
+ * 2026-09-08: bazarr was 512 MiB here against 1536M in stacks/, prowlarr 512 MiB
+ * against 1G, qbittorrent 1 GiB against 2G, and twelve more took the 256 MiB
+ * default while their units declare 64M to 1G explicitly. That was harmless only
+ * for as long as the `ratio >= 0.98` arm of memoryTone was dead code; it is a
+ * live arm now, so a wrong ceiling makes the fixture exercise fiction.
+ *
+ * MemoryMax is derived rather than tabulated: it is 1.33-1.5x MemoryHigh on
+ * every unit here, and fixtures/prometheus.ts already generated it that way.
+ */
 const MEM_HIGH: Record<string, number> = {
   jellyfin: 3 * 1024 ** 3,
   "tdarr-server": 2 * 1024 ** 3,
@@ -79,14 +91,158 @@ const MEM_HIGH: Record<string, number> = {
   caddy: 512 * 1024 ** 2,
   sonarr: 1024 ** 3,
   radarr: 1024 ** 3,
-  prowlarr: 512 * 1024 ** 2,
-  bazarr: 512 * 1024 ** 2,
-  qbittorrent: 1024 ** 3,
+  prowlarr: 1024 ** 3,
+  bazarr: 1536 * 1024 ** 2,
+  qbittorrent: 2 * 1024 ** 3,
   dashboard: 64 * 1024 ** 2,
+  jellyseerr: 1024 ** 3,
+  tinyauth: 256 * 1024 ** 2,
+  "pocket-id": 512 * 1024 ** 2,
+  ntfy: 128 * 1024 ** 2,
+  "ntfy-alertmanager": 64 * 1024 ** 2,
+  "node-exporter": 128 * 1024 ** 2,
+  alertmanager: 128 * 1024 ** 2,
+  duckdns: 128 * 1024 ** 2,
+  unpackerr: 512 * 1024 ** 2,
+  gluetun: 256 * 1024 ** 2,
+  joal: 512 * 1024 ** 2,
+  "windmill-db": 512 * 1024 ** 2,
+  "windmill-server": 768 * 1024 ** 2,
+  "windmill-worker": 512 * 1024 ** 2,
+  "windmill-worker-verify": 512 * 1024 ** 2,
   // MemoryHigh=1G, MemoryMax=2G in stacks/media/flaresolverr.container. Taken
   // from the unit rather than defaulted, because this is the row whose finding
   // IS its memory and a made-up ceiling would make its ratio fiction.
   flaresolverr: 1024 ** 3,
+};
+
+/**
+ * MemoryMax, the hard limit, from the `MemoryMax=` in `stacks/`.
+ *
+ * TABULATED RATHER THAN DERIVED, and that is the point. Both fixture files were
+ * computing it as `Math.round(memoryHigh * 1.5)` INDEPENDENTLY - the same
+ * duplicated-literal shape that let a `refault > 0` rule ship unchallenged, one
+ * field over. It is not 1.5x either: the real ratio runs from 1.28 (jellyseerr,
+ * 1G to 1536M) to 1.5, and it is 1.33 on most of the *arrs.
+ */
+const MEM_MAX: Record<string, number> = {
+  jellyfin: 4 * 1024 ** 3,
+  "tdarr-server": 3 * 1024 ** 3,
+  "tdarr-node-01": 8 * 1024 ** 3,
+  prometheus: 768 * 1024 ** 2,
+  caddy: 768 * 1024 ** 2,
+  sonarr: 1536 * 1024 ** 2,
+  radarr: 1536 * 1024 ** 2,
+  prowlarr: 1536 * 1024 ** 2,
+  bazarr: 2 * 1024 ** 3,
+  qbittorrent: 3 * 1024 ** 3,
+  dashboard: 128 * 1024 ** 2,
+  jellyseerr: 1536 * 1024 ** 2,
+  tinyauth: 384 * 1024 ** 2,
+  "pocket-id": 768 * 1024 ** 2,
+  ntfy: 256 * 1024 ** 2,
+  "ntfy-alertmanager": 128 * 1024 ** 2,
+  "node-exporter": 192 * 1024 ** 2,
+  alertmanager: 256 * 1024 ** 2,
+  duckdns: 192 * 1024 ** 2,
+  unpackerr: 768 * 1024 ** 2,
+  gluetun: 512 * 1024 ** 2,
+  joal: 768 * 1024 ** 2,
+  "windmill-db": 768 * 1024 ** 2,
+  "windmill-server": 1024 ** 3,
+  "windmill-worker": 768 * 1024 ** 2,
+  "windmill-worker-verify": 768 * 1024 ** 2,
+  flaresolverr: 2 * 1024 ** 3,
+};
+
+/**
+ * container_memory_working_set_bytes, measured on the host on 2026-09-08.
+ *
+ * IT WAS A FLAT 64 MiB FOR EVERY ROW, and that only looked harmless while
+ * MEM_HIGH was wrong in the same direction. Correcting the ceilings against
+ * stacks/ put ntfy-alertmanager - 64 MiB of memory against its real 64M
+ * watermark - at a ratio of exactly 1.000, which is a shape the host does not
+ * have: its actual working set is 6.4 MiB, a tenth of its ceiling. A fixture
+ * whose every row sits at its limit cannot exercise a rule about limits.
+ *
+ * Working set, not memory.current: the cold page cache is exactly what the
+ * ratio must not count. Rows patched below override this deliberately.
+ */
+const MEMORY: Record<string, number> = {
+  "windmill-db": 309608448,
+  jellyfin: 226381824,
+  flaresolverr: 222019584,
+  bazarr: 194641920,
+  "tdarr-server": 180244480,
+  jellyseerr: 173481984,
+  sonarr: 151633920,
+  radarr: 137179136,
+  prowlarr: 110833664,
+  "tdarr-node-01": 80842752,
+  prometheus: 76226560,
+  caddy: 48431104,
+  gluetun: 35463168,
+  qbittorrent: 35373056,
+  joal: 34017280,
+  "windmill-server": 32546816,
+  alertmanager: 30932992,
+  dashboard: 29413376,
+  tinyauth: 22089728,
+  "node-exporter": 18165760,
+  ntfy: 16998400,
+  "pocket-id": 16199680,
+  "windmill-worker-verify": 15097856,
+  "windmill-worker": 13737984,
+  unpackerr: 12505088,
+  "ntfy-alertmanager": 6742016,
+  duckdns: 6070272,
+  torrent: 577536,
+};
+
+/**
+ * rate(...workingset_refault_file_total[5m]) in pages/s, measured on the host on
+ * 2026-09-08.
+ *
+ * NON-ZERO ON HALF THE RACK, WHICH IS THE ENTIRE POINT. This fixture used to
+ * hardcode 840 for bazarr and 0 for the other twenty-six, so a rule warning on
+ * `refault > 0` could not be contradicted by it - and that is exactly what
+ * shipped. On the host, a mean of 9 of 27 containers were selected by that
+ * expression at any instant over six hours and 25 of 27 at the peak, every one
+ * of them holding cache. tdarr-node-01's rate is one page every four and a half
+ * minutes, and it drew "memory starved".
+ */
+const REFAULT: Record<string, number> = {
+  "tdarr-node-01": 0.0037,
+  "tdarr-server": 0.022,
+  jellyfin: 1.14,
+  prowlarr: 1.24,
+  radarr: 1.16,
+  caddy: 1.95,
+  "windmill-db": 1.42,
+  alertmanager: 0.31,
+  "pocket-id": 0.42,
+  tinyauth: 0.44,
+  jellyseerr: 0.14,
+  dashboard: 0.13,
+  "node-exporter": 0.11,
+  prometheus: 0.29,
+  flaresolverr: 95.4,
+};
+
+/**
+ * rate(container_pressure_memory_waiting_seconds_total[5m]) - PSI `some`, the
+ * share of wall time at least one task in the cgroup was delayed on memory.
+ *
+ * THESE ARE THE HOST'S THIRTY-DAY MAXIMA, NOT ITS TYPICAL READING, so the
+ * fixture sits at the worst this fleet has ever been rather than at its quietest
+ * - which is the reading a floor has to survive. Everything not named here is 0.
+ */
+const STALL_SOME: Record<string, number> = {
+  qbittorrent: 0.01225,
+  bazarr: 0.01031,
+  flaresolverr: 0.00229,
+  jellyfin: 0.00153,
+  "tdarr-node-01": 0.00071,
 };
 
 export interface FixtureContainer {
@@ -105,6 +261,16 @@ export interface FixtureContainer {
   /** cgroup OOM kills since this container was created. The one memory event
    *  that is unambiguous - see memoryTone() in src/services.ts. */
   oomKills: number;
+  /** MemoryMax. See MEM_MAX - it is NOT MemoryHigh times a constant. */
+  memoryLimit: number;
+  /** rate(...workingset_refault_file_total[5m]), pages/s. See REFAULT. */
+  refault: number;
+  /** PSI `some` and `full` as fractions of wall time. NaN here means the SERIES
+   *  IS ABSENT rather than zero - fixtures/prometheus.ts drops any sample that
+   *  formats to NaN, the way a rate is simply missing for a container younger
+   *  than its own window. */
+  stallSome: number;
+  stallFull: number;
 }
 
 /**
@@ -143,10 +309,14 @@ export const CONTAINERS: FixtureContainer[] = NODES.filter((n) => n.name !== STO
     running: true,
     restarts: 0,
     cpu: 0.01,
-    memory: 64 * 1024 ** 2,
+    memory: MEMORY[n.name] ?? 64 * 1024 ** 2,
     memoryHigh: MEM_HIGH[n.name] ?? 256 * 1024 ** 2,
+    memoryLimit: MEM_MAX[n.name] ?? 384 * 1024 ** 2,
     startedAgo: 41 * 86400 + 6 * 3600,
     oomKills: 0,
+    refault: REFAULT[n.name] ?? 0,
+    stallSome: STALL_SOME[n.name] ?? 0,
+    stallFull: 0,
   };
 });
 
@@ -168,7 +338,29 @@ patch("bazarr", { health: 2, restarts: 0, startedAgo: 96, memory: 508 * 1024 ** 
 // exercises the "starting" branch that ServicesPage and the Home strip both have.
 // With bazarr already unhealthy and unpackerr defining no check at all, the strip
 // then renders all four tones at once, which is the point of a fixture.
-patch("jellyseerr", { health: 1, startedAgo: 40, memory: 180 * 1024 ** 2 });
+//
+// AND THE ROW WITH NO PRESSURE READING AT ALL, which is honest rather than
+// contrived: it is forty seconds old, and a rate needs two samples in its five
+// minute window. So it reaches memoryTone with a MemoryHigh gauge and no
+// arbiter, and the answer has to be `off` - unmeasured, not verified fine.
+// Under the old rule an absent refault made `thrashing` false and returned
+// `ok`: health asserted from nothing, which is the family docs/known-state.md
+// files as "Absence read as health in one function and as a failure in the
+// next". NaN is an ABSENT SERIES in fixtures/prometheus.ts, not a zero.
+patch("jellyseerr", {
+  health: 1,
+  startedAgo: 40,
+  memory: 180 * 1024 ** 2,
+  refault: Number.NaN,
+  stallSome: Number.NaN,
+  stallFull: Number.NaN,
+});
+// THE ROW THE OLD RULE DREW RED, AND THE ONE CLAUDE.md SPENDS A SECTION SAYING
+// IS FINE. 2.99G of a 3G watermark is a ratio of 0.997, so `ratio >= 0.98 &&
+// refault > 0` made this container a FAILURE - the very one every memory
+// argument on this page is built from. anon 0.385G, pgsteal tracking pgscan to
+// five digits, and the rest cold streaming page cache the kernel reclaims for
+// nothing. Its worst memory stall in thirty days is 0.153% of wall time.
 patch("jellyfin", { cpu: 3.9, memory: 2.99 * 1024 ** 3, startedAgo: 15 * 3600 + 38 * 60 });
 patch("tdarr-node-01", { cpu: 1.6, memory: 1.4 * 1024 ** 3 });
 patch("prowlarr", { cpu: 0.06, memory: 220 * 1024 ** 2 });
@@ -184,6 +376,33 @@ patch("dashboard", { cpu: 0.002, memory: 14 * 1024 ** 2 });
 // an OOM KILL is, so this row is the only one whose finding is its memory, with
 // its liveness perfectly healthy. Nothing else exercises that path.
 patch("flaresolverr", { memory: 1004 * 1024 ** 2, oomKills: 2 });
+
+// THE STARVED ROW, AND NEITHER AN OOM KILL NOR AN UNHEALTHY PROBE SAYS SO.
+// stacks/infra/windmill-db.container mounts /dev/shm under a 512M MemoryHigh,
+// and docs/known-state.md's "A filesystem that counts against the memory
+// ceiling" is what that costs: tmpfs pages are charged to the cgroup and, with
+// no swap, cannot be reclaimed - so memory.current pins at the watermark and the
+// kernel throttles the allocator instead of freeing anything. In the recorded
+// incident `memory.events max` and `oom_kill` BOTH stayed 0, no unit failed, no
+// container went unhealthy, no check fired and no alert reached the phone.
+//
+// PSI IS THE ONLY WITNESS THAT SHAPE HAS, and a tmpfs-pinned cgroup refaults NO
+// file pages at all - there is no file cache left to evict - so the rule this
+// replaces could not have seen it however high its floor was set. This row's
+// liveness is perfect on purpose, so memory is the only finding on it.
+patch("windmill-db", {
+  memory: 505 * 1024 ** 2, // ratio 0.986 against the unit's own 512M
+  refault: 3.2,
+  stallSome: 0.41,
+  stallFull: 0.19, // >= STALL_FAIL, with no OOM kill anywhere
+});
+
+// AMBER AT A RATIO OF 0.375 WITH A REFAULT RATE OF EXACTLY ZERO, which is the
+// combination the old rule was structurally incapable of drawing. A cgroup being
+// reclaimed for ANON pressure faults no file pages back in and sits nowhere near
+// its watermark; nothing but PSI can see it. Without this row the warn arm would
+// render in dev exactly as often as it did before - never.
+patch("sonarr", { memory: 384 * 1024 ** 2, refault: 0, stallSome: 0.071, stallFull: 0.004 });
 
 // A CONTAINER THAT RESTARTED WITHOUT ITS UNIT RESTARTING, which is podman's own
 // doing and the one thing podman's counter can say that systemd's cannot. It is

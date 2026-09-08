@@ -90,9 +90,19 @@ export interface ContainerReading {
   cpu: number;
   memory: number;
   memoryHigh: number;
-  /** Pages faulted back in after being reclaimed: the difference between a
-   *  cgroup holding cold cache and one that is actually starved. */
+  /** MemoryMax, the hard limit - a different number from the watermark above,
+   *  and the one nothing on this page read until 2026-09-08. */
+  memoryLimit: number;
+  /** Pages faulted back in after being reclaimed. CORROBORATION, NOT A SIGNAL:
+   *  it counts re-reads of file pages evicted at ANY time, global reclaim
+   *  included, so on a 15.8 GB host serving a 7.3 TB library it is ordinary
+   *  file I/O and is non-zero on cgroups doing no reclaim of their own. */
   refault: number;
+  /** PSI `some`: the fraction of wall time at least one task in this cgroup was
+   *  delayed on memory. THE ARBITER - see memoryTone(). */
+  stallSome: number;
+  /** PSI `full`: the fraction of wall time EVERY runnable task was delayed. */
+  stallFull: number;
   oomKills: number;
   uptime: number;
   activity: number[];
@@ -123,7 +133,12 @@ export interface ServiceRow {
   cpu: number;
   memory: number;
   memoryHigh: number;
+  /** MemoryMax, the hard limit. Every unit here sits 33-50% below its watermark
+   *  again at the ceiling, and the page could not say so until 2026-09-08. */
+  memoryLimit: number;
   refault: number;
+  stallSome: number;
+  stallFull: number;
   oomKills: number;
   uptime: number;
   activity: number[];
@@ -313,38 +328,200 @@ export function memoryRatio(row: Pick<ServiceRow, "memory" | "memoryHigh">): num
  * at its MemoryHigh and always accumulate high events, because that is what the
  * watermark is for."
  *
- * So the ratio alone decides nothing. The second signal is the refault rate -
- * pages read back in after reclaim, which is what actual starvation looks like -
- * and an OOM kill, which is what it looks like once it has already gone wrong.
+ * THE FIRST VERSION OF THIS FUNCTION MADE THAT ARGUMENT AND THEN LOST IT ONE
+ * LEVEL DOWN. It ended `if (thrashing) return "warn"`, where thrashing was
+ * `refault > 0` - a floor of zero on a rate. Measured on the live host on
+ * 2026-09-08: a mean of NINE OF TWENTY-SEVEN containers flagged at any instant
+ * over six hours, peaking at TWENTY-FIVE, while the worst working set on the
+ * host was 58% of its watermark, the worst in six hours was 91%, and there had
+ * been zero OOM kills and zero `max` events host-wide. tdarr-node-01 was drawn
+ * "memory starved" at a refault rate of 0.0037 pages per second - one page
+ * every four and a half minutes.
  *
- * THE RESTART CLAUSE READS THE UNIT'S COUNTER NOW, AND USED TO READ PODMAN'S.
- * That made this arm dead code: podman's field is reset when the container is
+ * `workingset_refault_file` counts re-reads of file pages evicted at ANY time,
+ * global reclaim included, so on a 15.8 GB host serving a 7.3 TB library it
+ * fires on ordinary file I/O: eight of the nine containers it selected in one
+ * sample had a pgscan rate of zero, having reclaimed nothing at all.
+ *
+ * AND IT IS BLIND TO THE ONE MEMORY INCIDENT THIS HOST HAS ACTUALLY RECORDED,
+ * which is the half that makes it wrong rather than merely noisy. A cgroup
+ * pinned by tmpfs has NO file cache to evict, so it refaults nothing: those
+ * pages are charged to it and, with no swap, cannot be reclaimed at all.
+ * docs/known-state.md's "A filesystem that counts against the memory ceiling"
+ * is exactly that shape, and records what it cost - "`memory.events max` and
+ * `oom_kill` both stayed 0 for the whole run - MemoryHigh throttles, it does
+ * not kill - so no unit failed, no container went unhealthy, no check fired and
+ * no alert reached the phone." Pressure is the only witness that shape has.
+ *
+ * SO PSI IS THE GATE, WHICH IS WHAT THE COLLECTOR ALREADY CALLED IT.
+ * bin/collect-metrics.py publishes container_pressure_memory_* under the words
+ * "The arbiter: real starvation shows here, and a cgroup merely holding cache
+ * does not", and this page read neither series. docs/known-state.md names four
+ * signals for real starvation - a large `anon`, `pgsteal` falling short of
+ * `pgscan`, a climbing `workingset_refault_file`, AND nonzero pressure - and
+ * the rule implemented one of the four with no floor.
+ *
+ * Refault keeps a place, on the watermark arm only: at the ceiling it is what
+ * separates a cgroup there because of reclaim thrash from one holding anon. It
+ * speaks nowhere on its own.
+ *
+ * THE RESTART CLAUSE READS THE UNIT'S COUNTER, AND USED TO READ PODMAN'S. That
+ * made this arm dead code: podman's field is reset when the container is
  * recreated, which a quadlet does on every restart, so `restarts > 0` was never
  * true here on the live host.
  */
+
+/**
+ * PSI `some` above anything thirty days of healthy operation produced.
+ *
+ * The per-container maxima over that window, sampled every ten minutes:
+ * qbittorrent 0.0122, bazarr 0.0103, flaresolverr 0.0023, jellyfin 0.0015,
+ * tdarr-node-01 0.0007. So 0.05 is four times the worst reading this host has
+ * ever taken, and well below the ten percent the kernel's own pressure-stall
+ * documentation treats as meaningful. A genuinely thrashing cgroup does not sit
+ * near this floor - it sits in the tens of percent.
+ *
+ * Measured the other way round on 2026-09-08: this expression selected NOTHING
+ * at every ten-minute sample across the whole thirty-day window, where the
+ * refault expression it replaces was selecting nine at that moment.
+ */
+export const STALL_WARN = 0.05;
+
+/**
+ * PSI `full`: EVERY runnable task in the cgroup delayed, not merely one.
+ *
+ * NOT A SCALED READING OF THE SAME NUMBER. The two levels diverged in 1,707 of
+ * the thirty-day samples, by up to 2,837x, so this is a second signal. A cgroup
+ * making no progress at all a tenth of the time is starved by definition, and
+ * the thirty-day ceiling for `full` on this host is the same 0.0122 - one
+ * momentary sample on a single-task cgroup, where `some` and `full` coincide.
+ */
+export const STALL_FAIL = 0.1;
+
 export function memoryTone(
-  row: Pick<ServiceRow, "memory" | "memoryHigh" | "refault" | "oomKills" | "unitRestarts">,
+  row: Pick<
+    ServiceRow,
+    "memory" | "memoryHigh" | "refault" | "oomKills" | "unitRestarts" | "stallSome" | "stallFull"
+  >,
 ): Tone {
-  // AN OOM KILL IS UNAMBIGUOUS AND IS CHECKED BEFORE THE RATIO. The kernel
-  // killed something in this cgroup; no reading of the watermark makes that
-  // benign, and the counter resets with the container so it is about now.
+  // AN OOM KILL IS UNAMBIGUOUS AND IS CHECKED BEFORE EVERYTHING ELSE. The
+  // kernel killed something in this cgroup; no reading of the watermark or of
+  // the pressure makes that benign, and the counter resets with the container
+  // so it is about now.
   if (Number.isFinite(row.oomKills) && row.oomKills > 0) return "fail";
 
   const ratio = memoryRatio(row);
   if (!Number.isFinite(ratio)) return "off";
 
-  const thrashing = Number.isFinite(row.refault) && row.refault > 0;
-  if (ratio >= 0.98 && (thrashing || row.unitRestarts > 0)) return "fail";
-  if (thrashing) return "warn";
+  // ABSENCE IS NOT HEALTH, and the reachable case is not exotic: memoryHigh is a
+  // gauge and these two are rates, so a container in its first minute - or the
+  // window after a collector gap - has a ceiling and no pressure reading at all.
+  // Answering `ok` there is the same mistake ServicesPage.vue already refuses
+  // for `health`, where `?? 0` would report three containers as verified healthy
+  // on the strength of no evidence. docs/known-state.md files it under "Absence
+  // read as health in one function and as a failure in the next".
+  //
+  // BOTH LEVELS COME OUT OF ONE memory.pressure READ, so they arrive together or
+  // not at all and partial absence is a corner. Where it happens, the level that
+  // DID answer is a measurement and is graded: treating a real reading as no
+  // reading would be this defect's mirror.
+  const waiting = row.stallSome;
+  const stalled = row.stallFull;
+  if (!Number.isFinite(waiting) && !Number.isFinite(stalled)) return "off";
+
+  // NOTHING RUNNABLE IN THE CGROUP COULD RUN, whatever the cause. This arm needs
+  // no corroboration and takes none.
+  if (Number.isFinite(stalled) && stalled >= STALL_FAIL) return "fail";
+
+  // THE ARBITER. Nothing below is reached without a stall, which is the whole
+  // correction: the refault rate no longer speaks on its own.
+  if (Number.isFinite(waiting) && waiting >= STALL_WARN) {
+    // CORROBORATION ESCALATES AND NEVER TRIGGERS. Pressed against the watermark
+    // AND faulting reclaimed pages back in is starvation before `full` has
+    // climbed - the shape the old rule was reaching for with `ratio >= 0.98 &&
+    // thrashing`, which is kept here behind the gate rather than in front of it.
+    // Refault is not required: the tmpfs case above produces none.
+    const thrashing = Number.isFinite(row.refault) && row.refault > 0;
+    if (ratio >= 0.98 && (thrashing || row.unitRestarts > 0)) return "fail";
+    return "warn";
+  }
+
   return "ok";
 }
 
-/** The memory sentence, for a row whose memory is what is wrong with it. */
+/**
+ * The memory cell's SECOND caption line, and THE ONLY SURFACE AN UNMEASURABLE
+ * MEMORY READING HAS.
+ *
+ * The decision lives here rather than in the template because serviceRows()
+ * ignores memoryTone's `off` on purpose - memory only ever makes a row worse,
+ * never grey - so the LED is the row's liveness, the state word is its liveness,
+ * and nothing else on the row can report that the arbiter did not answer. A grey
+ * "70% of high" on its own reads as "nobody is checking the ratio", when what is
+ * unchecked is the stall.
+ *
+ * ONE SHORT LINE, NEVER A SUFFIX ON THE ONE ABOVE IT. `.c-mem` is 132px, sized
+ * for "100% of high"; "70% of high, stall not read" is twice that, and a fixed
+ * table column clips rather than wraps.
+ *
+ * AND THE STRING IS MEASURED RATHER THAN CHOSEN. The caption has 108px of the
+ * 132 after padding; "100% of high" is 84px there, "stall not measured" is 126
+ * and WRAPPED - which cost that row 14px of height against every other row on
+ * the rack, the only visible difference between them. "stall not read" is 98px
+ * and is the longest wording that fits. Anything longer goes to the tooltip,
+ * which is where the reason it was not read already lives.
+ *
+ * NULL WITH NO CEILING, which suppresses the whole caption block: "- of high"
+ * over "- of max" is two sentences about limits nothing declared, and the dash
+ * above them already says the row has no reading.
+ */
+export function memorySubline(
+  row: Pick<
+    ServiceRow,
+    | "memory"
+    | "memoryHigh"
+    | "memoryLimit"
+    | "refault"
+    | "oomKills"
+    | "unitRestarts"
+    | "stallSome"
+    | "stallFull"
+  >,
+): string | null {
+  if (!Number.isFinite(memoryRatio(row))) return null;
+  if (memoryTone(row) === "off") return "stall not read";
+  const limit = memoryLimitRatio(row);
+  return Number.isFinite(limit) ? `${fmt.percent(limit, 0)} of max` : null;
+}
+
+/** The second line: the same working set against the HARD limit. Every unit here
+ *  sits 33-50% lower again against MemoryMax than against the watermark, and
+ *  the page could not say so until 2026-09-08 - so "58% of high" read worse than
+ *  it is. Absent for the pod's infra container, which declares neither. */
+export function memoryLimitRatio(row: Pick<ServiceRow, "memory" | "memoryLimit">): number {
+  return Number.isFinite(row.memoryLimit) && row.memoryLimit > 0 ? row.memory / row.memoryLimit : Number.NaN;
+}
+
+/**
+ * The memory sentence, for a row whose memory is what is wrong with it.
+ *
+ * IT LEADS WITH THE STALL, because that is the number that is actually high.
+ * The old sentence led with the byte count and the watermark, so a container at
+ * 14% of its ceiling was told it was "starved rather than merely holding cache"
+ * directly beside two numbers saying it was doing neither.
+ */
 function memoryIssue(row: ServiceRow): string {
   if (Number.isFinite(row.oomKills) && row.oomKills > 0) {
     return `the kernel has OOM-killed something in this cgroup ${fmt.number(row.oomKills)} time(s) since the container started.`;
   }
-  return `${fmt.bytes(row.memory)} of ${fmt.bytes(row.memoryHigh)} and faulting reclaimed pages back in - this one is starved rather than merely holding cache.`;
+  const at = `${fmt.bytes(row.memory)} of ${fmt.bytes(row.memoryHigh)}`;
+  // "of the time" rather than "in the last five minutes": a rate over a PSI
+  // total is a fraction of wall time whatever RATE in queries.ts is set to, and
+  // a second spelling of that window here would start lying the day it moved.
+  if (Number.isFinite(row.stallFull) && row.stallFull >= STALL_FAIL) {
+    return `${at}, and EVERY runnable task in it was stalled on memory ${fmt.percent(row.stallFull, 1)} of the time - this one is starved rather than merely holding cache.`;
+  }
+  return `${at}, and something in it was delayed on memory ${fmt.percent(row.stallSome, 1)} of the time. Sitting at the watermark is not a finding; waiting on memory is.`;
 }
 
 /**
@@ -396,7 +573,10 @@ export function serviceRows(units: UnitReading[], containers: ContainerReading[]
       cpu: c?.cpu ?? Number.NaN,
       memory: c?.memory ?? Number.NaN,
       memoryHigh: c?.memoryHigh ?? Number.NaN,
+      memoryLimit: c?.memoryLimit ?? Number.NaN,
       refault: c?.refault ?? Number.NaN,
+      stallSome: c?.stallSome ?? Number.NaN,
+      stallFull: c?.stallFull ?? Number.NaN,
       oomKills: c?.oomKills ?? Number.NaN,
       uptime: c?.uptime ?? Number.NaN,
       activity: c?.activity ?? [],
@@ -424,13 +604,29 @@ export function serviceRows(units: UnitReading[], containers: ContainerReading[]
       row.tone = worst(row.tone, row.memoryTone);
       if (!row.issue) {
         row.issue = memoryIssue(row);
-        row.remedy = `systemctl --user show ${unit} -p MemoryHigh -p MemoryMax`;
+        // THE CEILINGS, NOT THE ARBITER, and that is a width decision rather than
+      // a judgement about which is more useful. The pressure file is reached by
+      // `cat /sys/fs/cgroup$(systemctl --user show <unit> -p ControlGroup
+      // --value)/memory.pressure`, which is 101 characters and wraps mid-flag in
+      // .c-remedy - measured, it split `--value` across two lines, which is the
+      // one thing that column's own comment forbids. That command lives on the
+      // memory cell's tooltip instead, where nothing is 380px wide. What a
+      // reader needs next from a starved container is its limits, and the stall
+      // itself is already the first clause of the sentence beside this.
+      row.remedy = `systemctl --user show ${unit} -p MemoryHigh -p MemoryMax`;
       }
       // THE WORD HAS TO AGREE WITH THE LED. Memory escalated the row, so the
       // state cannot still read "healthy" beside a red dot and a sentence about
       // an OOM kill - which is exactly what the first version of this drew.
+      // TWO WORDS, NOT ONE. Memory can now escalate a row to `warn` as well as to
+      // `fail`, and "memory starved" beside an AMBER dot overstates what a `some`
+      // reading says - something in the cgroup was delayed, not that it stopped.
+      // Deliberately not "memory stalled" for the amber: `stalled` is the name of
+      // the OTHER PSI level in the collector's PSI_LEVELS, and borrowing it for a
+      // `waiting`-driven verdict would collide with that vocabulary.
       if (RANK[row.tone] > RANK[before]) {
-        row.state = row.oomKills > 0 ? "oom-killed" : "memory starved";
+        row.state =
+          row.oomKills > 0 ? "oom-killed" : row.memoryTone === "fail" ? "memory starved" : "memory pressure";
       }
     }
 

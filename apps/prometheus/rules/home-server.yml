@@ -279,6 +279,71 @@ groups:
             unit gives up after ~100s and lands in `failed`; if it is still
             looping, something is restarting it from outside.
 
+      - alert: ContainerOOMKilled
+        # THE ONE MEMORY EVENT THAT IS UNAMBIGUOUS, and until 2026-09-08 nothing
+        # here alerted on it. The kernel killed a process inside a container's
+        # cgroup; whether the container then recovered or not, something in it
+        # died for want of memory and no other rule in this file would say so.
+        # ContainerUnhealthy only fires if the survivor also fails its probe, and
+        # AgentSliceOOM/CiSliceOOM watch the two slices rather than the services.
+        #
+        # `increase(...[1h]) > 0` on a counter, which is the same shape those two
+        # use and is correct for an OOM: there is no benign level of it, so a
+        # floor above zero would be a decision that some kills do not matter.
+        # The gauge resets when the container is recreated, so this is about now.
+        expr: increase(home_server_container_memory_events_total{event="oom_kill"}[1h]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "The kernel OOM-killed something in {{ $labels.container }}"
+          description: >-
+            A process inside this container's cgroup was killed for want of
+            memory. The container may still be running and may still be passing
+            its health check, so nothing else here reports it. Read
+            home_server_container_memory_events_total{container="{{ $labels.container }}"}
+            against its MemoryMax, and `systemctl --user show
+            {{ $labels.container }}.service -p MemoryHigh -p MemoryMax`.
+
+      - alert: ContainerMemoryStarved
+        # PSI `full`: EVERY runnable task in the cgroup delayed on memory, a
+        # tenth of the time, for a quarter of an hour. bin/collect-metrics.py
+        # publishes this series under the words "The arbiter: real starvation
+        # shows here, and a cgroup merely holding cache does not", and until
+        # 2026-09-08 it had no consumer anywhere - not here, not on the
+        # dashboard, not in the battery.
+        #
+        # THE SAME EXPRESSION AND THE SAME FLOOR AS /services, deliberately, so
+        # the page and the phone cannot disagree about one number - the failure
+        # docs/dashboard.md records for `note`, where two surfaces read one
+        # measurement and drew it differently. STALL_FAIL in
+        # apps/dashboard/src/services.ts is the other copy and carries the
+        # derivation: the fleet's worst five-minute window in thirty days is
+        # 1.2% of wall time, so 10% is eight times a ceiling it has never
+        # approached.
+        #
+        # `for: 15m` IS WHAT KEEPS A BURST OFF THE PHONE. qbittorrent's 1.2% was
+        # one sample; a real starvation does not clear itself in a quarter of an
+        # hour, and this must not page for a container that had a bad minute.
+        #
+        # NOT A REFAULT RATE, which is what the dashboard rule used to be and
+        # which fires on ordinary file I/O: measured on this host, a mean of nine
+        # of twenty-seven containers at any instant, twenty-five at the peak,
+        # with nothing above 91% of its watermark and no OOM kill anywhere.
+        expr: rate(container_pressure_memory_stalled_seconds_total[5m]) > 0.10
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.container }} is stalled on memory"
+          description: >-
+            Every runnable task in this cgroup has been waiting on memory for
+            more than a tenth of the time, for fifteen minutes. MemoryHigh
+            throttles rather than kills, so this can run indefinitely with the
+            unit active, the container healthy and nothing else reporting a
+            fault. `cat /sys/fs/cgroup$(systemctl --user show
+            {{ $labels.container }}.service -p ControlGroup --value)/memory.pressure`,
+            and read anon against inactive_file before raising a ceiling.
+
       - alert: UpdateRolledBack
         # A THIRD WARN THAT HAS TO NOTIFY, for the reason OsImageStale and
         # ProbeBinaryMissing already give: CheckFailing is `== 3` and this check

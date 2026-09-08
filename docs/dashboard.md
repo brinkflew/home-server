@@ -1663,7 +1663,126 @@ had no way to draw one: `duckdns` is absent from `CONTAINERS` now and present in
 `containers.failed_units` **passes**, which is the finding rather than a contradiction.
 
 `src/services.ts` is the fourth extraction of this kind after `machine.ts`, `lanes.ts` and
-`system.ts`, and `fixtures/smoke.mjs` covers it in 53 assertions.
+`system.ts`, and `fixtures/smoke.mjs` covers it in 81 assertions.
+
+## The memory rule reproduced the cry-wolf it was written to prevent, 2026-09-08
+
+The Services page shipped on the 8th and the question that came back the same day was why almost
+every service on the rack read **memory starved**. Nothing on the host was, and the reason is one
+line.
+
+`memoryTone` ended:
+
+```ts
+const thrashing = Number.isFinite(row.refault) && row.refault > 0;
+if (ratio >= 0.98 && (thrashing || row.unitRestarts > 0)) return "fail";
+if (thrashing) return "warn";
+```
+
+**A floor of zero on a rate.** The test was "did this cgroup fault back one single page in five
+minutes", and `serviceRows` then escalated the row and rewrote its state word, while `memoryIssue`
+printed *"this one is starved rather than merely holding cache"* beside a byte count saying the
+opposite. Measured against the host's own Prometheus: a mean of **9 of 27** containers escalated at
+any instant over six hours, peaking at **25 of 27**, while the worst working set on the host was
+**58%** of its watermark, the worst in six hours **91%**, and there were **zero OOM kills and zero
+`max` events host-wide**. tdarr-node-01 was drawn starved at **0.0037 pages per second**.
+
+**The nineteen lines of docblock directly above that line argue against exactly this** - *"a
+container at its MemoryHigh is not news, and colouring it amber is the single most likely way this
+page would cry wolf"* - and the `ratio >= 0.98` arm they were written for is right. It simply cannot
+fire here: it needs a ratio this host has never reached, so **every amber row came from the one
+clause with no ratio term in it at all.** The argument was made and then discarded one line lower.
+
+### Refault is file I/O, and it is blind to the shape that matters
+
+`workingset_refault_file` counts a file page re-read after eviction **at any time**, global reclaim
+included. On a 15.8 GB host serving a 7.3 TB library that is ordinary work: **eight of the nine
+containers the expression selected in one sample had a pgscan rate of zero**, having reclaimed
+nothing themselves. Jellyfin refaults 1.14 pages/s with lifetime `pgsteal` tracking `pgscan` to 98% -
+the container CLAUDE.md spends a section explaining is fine.
+
+**And no floor on it would have caught the one memory incident this host has had.** A cgroup pinned
+by tmpfs refaults nothing: those pages are charged to it and, with no swap, are never reclaimed, so
+there is no file cache left to evict. `docs/known-state.md` records what that cost - *"`memory.events
+max` and `oom_kill` both stayed 0 for the whole run - `MemoryHigh` throttles, it does not kill - so
+no unit failed, no container went unhealthy, no check fired and no alert reached the phone."*
+
+The docblock on the query said the opposite of all this: *"Real starvation, as opposed to a cgroup
+doing ordinary file I/O."* That sentence is what made a floor of zero look reasonable.
+
+### The arbiter was published, named as such, and read by nothing
+
+`bin/collect-metrics.py` emits `container_pressure_memory_{waiting,stalled}_seconds_total` under its
+own words - *"The arbiter: real starvation shows here, and a cgroup merely holding cache does not"* -
+for all 28 containers, since the collector existed. No page had ever queried either.
+`docs/known-state.md` names four signals for real starvation: a large `anon`, `pgsteal` falling short
+of `pgscan`, a climbing `workingset_refault_file`, **and nonzero pressure**. The rule implemented one
+of the four.
+
+PSI is the gate now. Nothing below it is reached without a stall, `full` carries the fail arm and
+takes no corroboration, and refault survives only inside the watermark arm - where it separates a
+cgroup at its ceiling because of reclaim thrash from one holding anon.
+
+### The floors are the fleet's own thirty days, checked in both directions
+
+Per-container maxima of `rate(container_pressure_memory_waiting_seconds_total[5m])` over 30 days:
+
+| container | 30-day max |
+|---|---|
+| qbittorrent | 0.01225 |
+| bazarr | 0.01031 |
+| flaresolverr | 0.00229 |
+| jellyfin | 0.00153 |
+| tdarr-node-01 | 0.00071 |
+
+So `STALL_WARN` at 0.05 is **four times** the worst reading this host has taken and `STALL_FAIL` at
+0.10 is eight, both an order of magnitude below the tens of percent real thrash produces. **The new
+expression selected nothing at every ten-minute sample across that whole window**, where the one it
+replaces was selecting nine at that moment.
+
+`some` and `full` are two signals rather than one scaled: they diverged in **1,707** of the 30-day
+samples, by up to **2,837x**. They coincide at the 30-day peak only because qbittorrent's runnable
+set is effectively one task - a property of that container, not of the metric, which is exactly why
+both are asked for.
+
+### Three more the same reading turned up
+
+**Absence was being read as health.** `memoryHigh` is a gauge and the PSI series are rates, so a
+container in its first minute has a ceiling and no reading - and an absent refault made `thrashing`
+false and returned `ok`. It answers `off` now. `serviceRows` still refuses to let memory grey a row,
+so the sub-line is the only surface that state has: `memorySubline()` says *"stall not read"*
+there instead of the hard-limit ratio. It is one short line rather than a suffix, because `.c-mem` is
+132px measured for `100% of high` and a fixed column clips rather than wraps.
+
+**`memoryLimit` had been defined in `queries.ts` since the collector existed with no consumer**, so
+the page could not say that every unit here has another 33-50% of headroom above the watermark the
+ratio is taken against. It is the second caption line now: `58% of high` over `39% of max`.
+
+**Nothing paged on real container memory trouble.** `apps/prometheus/rules/home-server.yml` had
+`AgentSliceOOM` and `CiSliceOOM` and nothing per-container, so an OOM kill inside a service reached
+nobody unless the survivor also failed its probe. `ContainerOOMKilled` and `ContainerMemoryStarved`
+are new, and the second shares its expression and its floor with the page deliberately - two surfaces
+reading one measurement and drawing it differently is a failure this file already records for `note`.
+
+### The fixture could not contradict its consumer, twice over
+
+`fixtures/prometheus.ts` hardcoded the refault series to **840 for bazarr and 0 for the other
+twenty-six**, so in dev exactly one row went amber and the rule looked correct at every viewport.
+And `fixtures/smoke.mjs` **restated the identical literal independently** - the two files whose job is
+to check each other agreed by being the same sentence typed twice. Both read the model now.
+
+`MEM_HIGH` had drifted from `stacks/` under a docblock claiming it matched: bazarr 512 MiB against
+1536M, prowlarr 512 MiB against 1G, qbittorrent 1 GiB against 2G, twelve more on a 256 MiB default
+while their units declare 64M to 1G. Harmless only while `ratio >= 0.98` was dead code.
+**Correcting it exposed a second fiction underneath**: every row carried a flat 64 MiB working set,
+which put ntfy-alertmanager at a ratio of exactly **1.000** against its real 64M ceiling, where its
+actual working set is 6.4 MiB. A fixture whose every row sits at its limit cannot exercise a rule
+about limits. Both tables are the host's measured values now, and the rack carries three rows it
+never had: one genuinely starved, one under pressure with a refault rate of **exactly zero** - the
+combination the old rule was structurally incapable of drawing - and one too young to have a rate.
+
+**Eighteen assertions fail when the original rule is pasted back**, which is the step that earns
+them, and the services block is 81 assertions rather than 53.
 
 ## The Network page, and the three things it drew from git alone, 2026-09-08
 

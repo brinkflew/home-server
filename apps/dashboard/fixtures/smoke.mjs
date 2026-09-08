@@ -2286,7 +2286,13 @@ if (battery === null) {
     cpu: c.cpu,
     memory: c.memory,
     memoryHigh: c.memoryHigh,
-    refault: c.name === "bazarr" ? 840 : 0,
+    // STRAIGHT COPIES. This restated fixtures/prometheus.ts' own literal -
+    // `c.name === "bazarr" ? 840 : 0` in both files - so the two halves that are
+    // meant to check each other agreed by being the same sentence typed twice.
+    refault: c.refault,
+    stallSome: c.stallSome,
+    stallFull: c.stallFull,
+    memoryLimit: c.memoryLimit,
     oomKills: c.oomKills,
     uptime: c.startedAgo,
     activity: [],
@@ -2342,18 +2348,114 @@ if (battery === null) {
   check("a pod member carries its pod from topology", by("qbittorrent").pod, "torrent");
   check("...and it is not read off the metric", by("qbittorrent").networks, []);
 
-  // --- memory: the likeliest way this page would cry wolf ---------------------
+  // --- memory: the likeliest way this page would cry wolf, and it did ---------
   //
-  // Jellyfin sits AT its 3G watermark with thousands of `high` events and is
-  // fine: that is what the watermark is for. The signals are the refault rate
-  // and an OOM kill, never the ratio on its own.
-  const mem = (over) => svc.memoryTone({ memory: 3e9, memoryHigh: 3e9, refault: 0, oomKills: 0, unitRestarts: 0, ...over });
+  // THE OLD RULE WARNED ON `refault > 0`, A FLOOR OF ZERO ON A RATE THAT IS
+  // NON-ZERO ALMOST EVERYWHERE. workingset_refault_file counts a file page
+  // re-read after eviction AT ANY TIME, global reclaim included, so on a 15.8 GB
+  // host serving a 7.3 TB library it climbs on cgroups doing no reclaim of their
+  // own - eight of the nine it selected in one sample had a pgscan rate of zero.
+  // Measured 2026-09-08: a mean of 9 of 27 containers escalated over six hours,
+  // 25 of 27 at the peak, while nothing on the host exceeded 0.913 of its
+  // watermark in six hours, nothing exceeded 1% of wall time stalled, and there
+  // had been zero OOM kills host-wide. PSI is the arbiter now, in the
+  // collector's own word for it, and refault only ever corroborates.
+  const mem = (over) =>
+    svc.memoryTone({
+      memory: 3e9, memoryHigh: 3e9, refault: 0, oomKills: 0, unitRestarts: 0,
+      stallSome: 0, stallFull: 0, ...over,
+    });
+
   check("at MemoryHigh and quiet is not news", mem({}), "ok");
-  check("faulting pages back in is", mem({ memory: 1e9, refault: 12 }), "warn");
-  check("...and at the watermark it is a failure", mem({ refault: 12 }), "fail");
+
+  // THESE FAIL IF THE ORIGINAL IS PLANTED BACK, which is why they carry the
+  // host's real numbers rather than round ones. The first is jellyfin's own
+  // reading: 1.14 pages/s at 0.997 of its watermark with its worst stall in
+  // thirty days, on the container CLAUDE.md spends a section explaining is FINE.
+  // Under `ratio >= 0.98 && (thrashing || ...)` it answered "fail".
+  check("refault without a stall is cache, not starvation",
+    mem({ refault: 1.14, stallSome: 0.00153 }), "ok");
+  check("...and 95 pages/s without a stall is still cache",
+    mem({ memory: 1e9, refault: 95.4, stallSome: 5.2e-8 }), "ok");
+  check("...and one page every four and a half minutes certainly is",
+    mem({ memory: 8e7, memoryHigh: 6.4e9, refault: 0.0037, stallSome: 0.00071 }), "ok");
+
+  // THE FLOOR, PINNED BY THE HOST'S OWN THIRTY DAYS. qbittorrent's worst window
+  // in a month is 1.225% waiting and the same 1.225% stalled, `some` collapsing
+  // onto `full` for a cgroup whose runnable set is one task. Lower either floor
+  // below that and a fleet that was never starved goes amber.
+  check("the fleet's 30-day worst window is still healthy",
+    mem({ memory: 1e9, refault: 3.1, stallSome: 0.01225, stallFull: 0.01225 }), "ok");
+  check("the warn floor is four times that ceiling", svc.STALL_WARN, 0.05);
+  check("...and the fail floor is eight, at the stricter level", svc.STALL_FAIL, 0.1);
+
+  // THE STALL IS THE TRIGGER AND THE RATIO IS NOT.
+  check("a real wait is amber", mem({ memory: 1e9, stallSome: 0.06 }), "warn");
+  check("...at 1% of its watermark just the same",
+    mem({ memory: 1e7, memoryHigh: 1e9, stallSome: 0.06 }), "warn");
+  check("...with no refault at all, which the old rule could not express",
+    mem({ memory: 1e7, memoryHigh: 1e9, refault: 0, stallSome: 0.071 }), "warn");
+  check("nothing runnable could run is red",
+    mem({ memory: 1e9, stallSome: 0.41, stallFull: 0.19 }), "fail");
+  check("...whatever the ratio, and it takes no corroboration",
+    mem({ memory: 1e7, memoryHigh: 1e9, refault: 0, stallSome: 0.41, stallFull: 0.19 }), "fail");
+  check("at the watermark, waiting AND faulting is red",
+    mem({ refault: 240, stallSome: 0.06 }), "fail");
+  check("...and the restart half of that arm reads systemd's counter",
+    mem({ stallSome: 0.06, unitRestarts: 3 }), "fail");
   check("an OOM kill is unambiguous", mem({ oomKills: 1 }), "fail");
   check("...even below the watermark", mem({ memory: 1e8, oomKills: 1 }), "fail");
+  check("...and above PSI, so it answers when nothing else can",
+    mem({ memory: 1e8, oomKills: 1, stallSome: Number.NaN, stallFull: Number.NaN }), "fail");
+
+  // --- absence, now on the signal that is the trigger -------------------------
+  //
+  // "Absence read as health in one function and as a failure in the next", which
+  // docs/known-state.md already carries. memoryHigh is a gauge and these two are
+  // rates, so a container in its first minute has a ceiling and no reading.
   check("no ceiling is unmeasured, not healthy", mem({ memoryHigh: Number.NaN }), "off");
+  check("NO STALL SERIES IS UNMEASURED, NOT HEALTHY",
+    mem({ memory: 1e9, refault: 12, stallSome: Number.NaN, stallFull: Number.NaN }), "off");
+  check("...and not a failure either", mem({ stallSome: Number.NaN, stallFull: Number.NaN }), "off");
+  check("one level present is still a measurement",
+    mem({ memory: 1e9, stallSome: 0.06, stallFull: Number.NaN }), "warn");
+  check("...in both directions", mem({ memory: 1e9, stallSome: Number.NaN, stallFull: 0.19 }), "fail");
+
+  // THE ROW THAT CARRIES IT IS FORTY SECONDS OLD, which is honest rather than
+  // contrived, and the caption is the ONLY place it can be seen: serviceRows
+  // ignores memoryTone's `off` on purpose, so the LED and the state word are
+  // both this row's liveness and neither can say the arbiter was silent.
+  check("a container too young to have a rate is unmeasured", by("jellyseerr").memoryTone, "off");
+  check("...and memory neither greys it nor rewords it",
+    [by("jellyseerr").tone, by("jellyseerr").state].join(" "), "warn starting");
+  check("...and the sub-line says which half is unchecked",
+    svc.memorySubline(by("jellyseerr")), "stall not read");
+  // 75, NOT 66. jellyfin's MemoryMax is 4G against a 3G watermark - a ratio of
+  // 1.33 - and both fixture files were deriving the hard limit as 1.5x, in two
+  // independent copies of one arithmetic. It is tabulated from stacks/ now.
+  check("a measured row's sub-line is the hard limit",
+    svc.memorySubline(by("jellyfin")), "75% of max");
+  check("no ceiling is suppressed rather than dashed",
+    svc.memorySubline({ ...by("jellyfin"), memoryHigh: Number.NaN }), null);
+
+  // --- the two rows nothing else on this host would report --------------------
+  //
+  // windmill-db is the tmpfs shape: pages charged to the cgroup that cannot be
+  // reclaimed with no swap, so MemoryHigh throttles and never kills. In the
+  // incident docs/known-state.md records, `memory.events max` and `oom_kill` both
+  // stayed 0, no unit failed, no container went unhealthy, no check fired and no
+  // alert reached the phone - and it refaults NO file pages, because there is no
+  // file cache left to evict. The old rule could not have seen it at any floor.
+  check("a throttled cgroup with no OOM kill is a failure", by("windmill-db").memoryTone, "fail");
+  check("...on a row whose liveness is perfect", by("windmill-db").health, 0);
+  check("...so the word agrees with the light", by("windmill-db").state, "memory starved");
+  check("...and the remedy asks for the ceilings",
+    by("windmill-db").remedy, "systemctl --user show windmill-db.service -p MemoryHigh -p MemoryMax");
+  check("an amber memory row says pressure, not starvation", by("sonarr").state, "memory pressure");
+  check("...and it has no refault to its name", by("sonarr").refault, 0);
+
+  // MEMORY NEVER OVERWRITES A WORSE LIVENESS WORD.
+  check("a failing row keeps its own word", by("bazarr").state, "unhealthy");
   check("the OOM row's word matches its light", by("flaresolverr").state, "oom-killed");
   check("...and its light is red", by("flaresolverr").tone, "fail");
   // MEMORY ONLY EVER MAKES A ROW WORSE. memoryTone answers `off` for anything
@@ -2363,7 +2465,8 @@ if (battery === null) {
     svc.serviceRows(
       [{ unit: "x.service", kind: "container", state: 0, restarts: 0 }],
       [{ name: "x", unit: "x.service", image: "i", running: true, health: 0, podmanRestarts: 0,
-         cpu: 0, memory: 1e8, memoryHigh: Number.NaN, refault: 0, oomKills: 0, uptime: 1, activity: [] }],
+         cpu: 0, memory: 1e8, memoryHigh: Number.NaN, memoryLimit: Number.NaN, refault: 0,
+         stallSome: 0, stallFull: 0, oomKills: 0, uptime: 1, activity: [] }],
     )[0].tone,
     "ok",
   );
@@ -2376,10 +2479,13 @@ if (battery === null) {
 
   // --- the headline ----------------------------------------------------------
   const lead = svc.servicesLead(rows);
-  check("the headline counts what needs doing, not what is fine", lead.text, "5 of 28 need attention");
+  // 7, NOT 5. windmill-db and sonarr joined the findings on 2026-09-08 - the
+  // starved row and the pressured one - and both are memory verdicts no other
+  // signal on this host reports. The fixture had never carried either.
+  check("the headline counts what needs doing, not what is fine", lead.text, "7 of 28 need attention");
   check("...and is red while something is failing", lead.tone, "fail");
   check("nothing measured is not a healthy host", svc.servicesLead([]).tone, "off");
-  check("a clean host says so", svc.servicesLead(rows.filter((r) => r.tone === "ok")).text, "21 services up");
+  check("a clean host says so", svc.servicesLead(rows.filter((r) => r.tone === "ok")).text, "19 services up");
 
   // --- the applications, which are a different question ----------------------
   //

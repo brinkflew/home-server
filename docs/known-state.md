@@ -4943,3 +4943,78 @@ Recorded 2026-09-07, with the board's filter, the step rail and the three render
 - Two more that only appeared once it was on screen: the headline counted five over a table of seven
   because the lead and the list were two derivations of one question, and a segment copied its
   member's sentence so one finding printed twice, a line apart.
+
+### The rule that cried wolf carried the argument against crying wolf in its own docblock
+
+Found 2026-09-08, one day after the Services page was rebuilt, by being asked why almost every
+service on the rack read **memory starved**. Nothing on the host was.
+
+- **`memoryTone` ended `if (thrashing) return "warn"`, where thrashing was `refault > 0`.** A floor
+  of zero on a rate, so the test was *"did this cgroup fault back one single page in five minutes"*.
+  `serviceRows` then escalated the row's tone and rewrote its state word, and `memoryIssue` printed
+  *"this one is starved rather than merely holding cache"* beside a byte count saying the opposite.
+  Measured: a mean of **9 of 27 containers** escalated at any instant over six hours, peaking at
+  **25 of 27**, while the worst working set on the host was **58%** of its watermark, the worst in
+  six hours **91%**, and there had been **zero OOM kills and zero `max` events host-wide**.
+  tdarr-node-01 was drawn starved at **0.0037 pages per second** - one page every four and a half
+  minutes.
+- **The nineteen lines above it argue against exactly this.** *"A container at its MemoryHigh is not
+  news, and colouring it amber is the single most likely way this page would cry wolf."* The
+  docblock is right, the `ratio >= 0.98` arm it was written for is right, and the line underneath
+  both of them threw the argument away. The `fail` arm could not fire at all here - it needs a ratio
+  the host has never reached - so **every amber row came from the one clause with no ratio term in
+  it.**
+- **`workingset_refault_file` is not a starvation signal and the docblock on the query said it was.**
+  It counts a file page re-read after eviction at ANY time, global reclaim included, so on a 15.8 GB
+  host serving a 7.3 TB library it is ordinary file I/O: **eight of the nine containers it selected
+  in one sample had a pgscan rate of zero**, having reclaimed nothing themselves. Jellyfin refaults
+  1.14 pages/s with lifetime `pgsteal` tracking `pgscan` to 98% - the container CLAUDE.md spends a
+  section explaining is fine.
+- **And it is BLIND to the one memory incident this host has actually had**, which is what makes it
+  wrong rather than merely noisy. A cgroup pinned by tmpfs refaults **no** file pages - those pages
+  are charged to it and, with no swap, are never reclaimed, so there is no file cache left to evict.
+  That is the shape recorded three sections above, where *"`memory.events max` and `oom_kill` both
+  stayed 0 for the whole run - `MemoryHigh` throttles, it does not kill - so no unit failed, no
+  container went unhealthy, no check fired and no alert reached the phone."* No floor on refault
+  would have caught it.
+- **The arbiter was already published, named as such, and read by nothing.**
+  `bin/collect-metrics.py` emits `container_pressure_memory_{waiting,stalled}_seconds_total` under
+  the words *"The arbiter: real starvation shows here, and a cgroup merely holding cache does not"*,
+  for all 28 containers, since the collector existed. `docs/known-state.md` names four signals for
+  real starvation - a large `anon`, `pgsteal` falling short of `pgscan`, a climbing
+  `workingset_refault_file`, **and nonzero pressure**. The rule implemented one of the four.
+- **The floors are the fleet's own thirty days, and the check was run in both directions.**
+  Per-container maxima of `rate(...waiting...[5m])` over 30 days: qbittorrent 0.0122, bazarr 0.0103,
+  flaresolverr 0.0023, jellyfin 0.0015, tdarr-node-01 0.0007. So `STALL_WARN` 0.05 is four times the
+  worst reading this host has ever taken and `STALL_FAIL` 0.10 is eight, both far below the tens of
+  percent real thrash produces. **The new expression selected nothing at every ten-minute sample
+  across the whole thirty-day window**, where the one it replaces was selecting nine at that moment.
+- **`some` and `full` are two signals, not one scaled.** They diverged in **1,707** of the 30-day
+  samples, by up to **2,837x** - and they coincide at the 30-day peak only because qbittorrent's
+  runnable set is effectively one task, which is a property of that container and not of the metric.
+  `full` carries the fail arm and needs no corroboration; `some` carries the warn arm.
+- **Absence was being read as health, and would have gone on being.** `memoryHigh` is a gauge and
+  the two PSI series are rates, so a container in its first minute has a ceiling and no reading -
+  and under the old rule an absent refault made `thrashing` false and returned `ok`. It answers
+  `off` now, which `serviceRows` still refuses to let grey the row, so the memory sub-line is the
+  only surface it has: `memorySubline()` says *"stall not read"* there rather than drawing the
+  hard-limit ratio - 98px of the caption's 108, measured, where "stall not measured" is 126 and
+  wrapped, costing that one row 14px of height.
+- **The fixture could not contradict its consumer, twice over.** `fixtures/prometheus.ts` hardcoded
+  the refault series to `840` for bazarr and **`0` for the other twenty-six**, so in dev exactly one
+  row went amber and the rule looked correct - and `fixtures/smoke.mjs` **restated the identical
+  literal independently**, so the two files whose job is to check each other agreed by being the same
+  sentence typed twice. Both read off the model now.
+- **`MEM_HIGH` had drifted from `stacks/` under a docblock claiming it matched**: bazarr 512 MiB
+  against 1536M, prowlarr 512 MiB against 1G, qbittorrent 1 GiB against 2G, and twelve more taking a
+  256 MiB default while their units declare 64M to 1G. Harmless only while `ratio >= 0.98` was dead
+  code. **Correcting it exposed a second fiction**: every fixture row carried a flat 64 MiB working
+  set, which put ntfy-alertmanager at a ratio of exactly **1.000** against its real 64M ceiling. Its
+  actual working set is 6.4 MiB. A fixture whose every row sits at its limit cannot exercise a rule
+  about limits, and both tables are the host's measured values now.
+- **Nothing paged on real container memory trouble either.** `apps/prometheus/rules/home-server.yml`
+  had `AgentSliceOOM` and `CiSliceOOM` and nothing per-container, so an OOM kill inside a service
+  notified nobody unless the survivor also failed its probe. `ContainerOOMKilled` and
+  `ContainerMemoryStarved` are new, and the second shares its expression and its floor with the page
+  deliberately - two surfaces reading one measurement and drawing it differently is a failure this
+  application has already paid for.

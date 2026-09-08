@@ -84,7 +84,10 @@ const rack = usePoll(async (signal) => {
     cpu,
     memory,
     memHigh,
+    memLimit,
     refault,
+    stallSome,
+    stallFull,
     oom,
     unresolved,
     activity,
@@ -101,7 +104,14 @@ const rack = usePoll(async (signal) => {
     instantBy(SERVICES.cpu, "container", signal),
     instantBy(SERVICES.memory, "container", signal),
     instantBy(SERVICES.memoryHigh, "container", signal),
+    instantBy(SERVICES.memoryLimit, "container", signal),
     instantBy(SERVICES.memoryRefault, "container", signal),
+    // THE ARBITER, read here for the first time on 2026-09-08. Until then the
+    // rack decided "memory starved" on the refault rate alone, with a floor of
+    // zero, and drew a mean of nine of twenty-seven rows amber on a host whose
+    // worst container was at 58% of its watermark. See memoryTone().
+    instantBy(SERVICES.memoryStallSome, "container", signal),
+    instantBy(SERVICES.memoryStallFull, "container", signal),
     instantBy(SERVICES.oomKills, "container", signal),
     instant(SERVICES.identityUnresolved, signal),
     range(SERVICES.cpu, { window: step * ACTIVITY_BARS, step, signal }),
@@ -135,7 +145,13 @@ const rack = usePoll(async (signal) => {
     cpu: cpu.get(name) ?? Number.NaN,
     memory: memory.get(name) ?? Number.NaN,
     memoryHigh: memHigh.get(name) ?? Number.NaN,
+    memoryLimit: memLimit.get(name) ?? Number.NaN,
     refault: refault.get(name) ?? Number.NaN,
+    // NaN RATHER THAN 0, for the reason stated above `health`: memoryTone reads
+    // a missing pressure series as unmeasured and answers `off`. `?? 0` here
+    // would say every container is verified not to be stalling, on no evidence.
+    stallSome: stallSome.get(name) ?? Number.NaN,
+    stallFull: stallFull.get(name) ?? Number.NaN,
     oomKills: oom.get(name) ?? Number.NaN,
     uptime: end - (startTime.get(name) ?? Number.NaN),
     activity: bars.get(name) ?? [],
@@ -240,6 +256,39 @@ const activityTip = computed(() => ({
   ],
   caveat: "A grey bar is a missing sample, not an idle one.",
 }));
+
+/**
+ * WHICH GREY IT IS. `off` on the memory tone has two causes and the caption
+ * cannot show both: no MemoryHigh declared at all - the pod's infra container -
+ * or a ceiling with no pressure series behind it. The second is the one worth
+ * saying out loud, because it means the reading that decides this row is
+ * missing rather than reassuring.
+ */
+function memoryTip(row: svc.ServiceRow) {
+  const lines = [
+    `${fmt.bytes(row.memory)} working set, MemoryHigh ${fmt.bytes(row.memoryHigh)}, MemoryMax ${fmt.bytes(row.memoryLimit)}`,
+    "working set is memory.current minus cold page cache - not usage_bytes",
+    // THE COMMAND THE REMEDY COLUMN CANNOT HOLD. 101 characters, which wraps
+    // mid-flag at .c-remedy's 380px; nothing here is that narrow.
+    `cat /sys/fs/cgroup$(systemctl --user show ${row.unit} -p ControlGroup --value)/memory.pressure`,
+  ];
+  if (!Number.isFinite(row.stallSome)) {
+    return {
+      title: "pressure not measured",
+      lines,
+      caveat:
+        "No memory PSI series for this container, so nothing here can say whether it is stalling. Grey is not green.",
+    };
+  }
+  return {
+    title: `stalled ${fmt.percent(row.stallSome, 2)} of the time`,
+    lines: [
+      ...lines,
+      `PSI full ${fmt.percent(row.stallFull, 2)} - every runnable task delayed`,
+      "sitting at MemoryHigh is not news; stalling on it is",
+    ],
+  };
+}
 
 function restartTip(row: svc.ServiceRow) {
   return {
@@ -444,19 +493,33 @@ function open(row: svc.ServiceRow): string | null {
               <td class="c-mem r p2">
                 <div class="mono num">{{ fmt.bytes(row.memory) }}</div>
                 <!-- A CONTAINER AT ITS MemoryHigh IS NOT NEWS, and colouring one
-                     amber is the likeliest way this page would cry wolf. The tone
-                     is the refault rate and the OOM counter; see memoryTone().
+                     amber is the likeliest way this page would cry wolf. The
+                     tone is the memory PSI and the OOM counter; see
+                     memoryTone(). It was the refault rate with a floor of zero
+                     until 2026-09-08, which drew a mean of nine of these
+                     twenty-seven rows amber on a quiet host.
 
                      SUPPRESSED RATHER THAN DASHED. With no container there is no
                      ratio, and "- of high" is a sentence about a ceiling that is
                      not being approached by anything. One dash above it already
-                     says the row has no reading. -->
+                     says the row has no reading.
+
+                     A SECOND CAPTION LINE, NEVER A SUFFIX ON THE FIRST - see
+                     memorySubline(), which owns the choice between the hard
+                     limit and "stall not measured". Drawing MemoryMax at all is
+                     the point: every unit here has another 33-50% of headroom
+                     above the watermark the first ratio is taken against, so
+                     "58% of high" on its own reads worse than it is. -->
                 <div
                   v-if="Number.isFinite(svc.memoryRatio(row))"
                   class="mono cap"
                   :class="toneClass(row.memoryTone)"
+                  v-bind="tip.hover(`mem-${row.name}`, memoryTip(row))"
                 >
                   {{ fmt.percent(svc.memoryRatio(row), 0) }} of high
+                </div>
+                <div v-if="svc.memorySubline(row)" class="mono cap dull">
+                  {{ svc.memorySubline(row) }}
                 </div>
               </td>
 
@@ -621,7 +684,12 @@ function open(row: svc.ServiceRow): string | null {
   width: 76px;
 }
 
-/* Two lines: "2.99 GB" over "100% of high". */
+/* THREE lines now: "2.99 GB" over "100% of high" over "67% of max". The third
+   arrived on 2026-09-08 and needed no width - "100% of high" is the longest
+   string this cell can produce and 132px was already measured for it, so the
+   max line fits inside a bound that was set for the line above it. It is a
+   third ROW rather than a suffix on the second deliberately: `58% of high -
+   39% of max` is ~150px, and a fixed table column clips rather than wraps. */
 .c-mem {
   width: 132px;
 }

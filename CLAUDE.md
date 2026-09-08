@@ -1666,6 +1666,24 @@ signal read green.
   never was, and the only `.flow` rule in the app was the one turning it off. Unfindable by
   screenshot by construction.
 
+### The rule that cried wolf carried the argument against crying wolf in its own docblock
+- `memoryTone` ended `if (thrashing) return "warn"` on `refault > 0` - a floor of ZERO on a rate - so
+  a mean of 9 of 27 containers read "memory starved" at any instant and 25 of 27 at the peak, on a
+  host whose worst working set was 58% of its watermark with no OOM kill anywhere. The nineteen
+  lines of docblock above it argue against exactly that, and the `ratio >= 0.98` arm they were
+  written for cannot fire here at all.
+- **Refault is ordinary file I/O and is BLIND to the shape that matters**: eight of the nine
+  containers it selected had reclaimed nothing themselves, and a tmpfs-pinned cgroup - the one
+  incident this host has had - refaults no file pages at all, because there is no cache left to
+  evict. PSI was published as "the arbiter", for all 28 containers, and read by nothing.
+- Floors are the fleet's own 30 days: worst window 1.2%, so warn at 4x and fail at 8x, and the new
+  expression selects nothing at every sample across that window. `some` and `full` are two signals -
+  they diverged 1,707 times, by up to 2,837x.
+- **Absence read as health** (a gauge resolves before its own rate does), the fixture hardcoded
+  refault to 0 for 26 of 27 rows AND smoke restated the same literal, `MEM_HIGH` had drifted from
+  `stacks/` under a docblock claiming it matched, and correcting it exposed a flat 64 MiB working set
+  putting one row at a ratio of exactly 1.000. Nothing paged on a container OOM kill either.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless
