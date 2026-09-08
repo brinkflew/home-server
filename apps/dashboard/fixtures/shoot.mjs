@@ -58,14 +58,18 @@ if (!deep) problems.push("agents: no round on the board carries a link to its ow
 const routes = [
   "home",
   "library",
-  // Every /system view, the way /agents/fleet is listed beside /agents. The
-  // bare path only proves the redirect, and the two it redirects past are
-  // where every table and every chart on this section now lives.
+  // EVERY VIEW OF EVERY SECTION, not every section. The bare path only proves
+  // the redirect; the children it redirects past are where every table, every
+  // chart and every drawing in this application now lives. Four of the seven
+  // tabs are sections as of 2026-09-08, so this list is twice the nav.
   "system",
   "system/load",
   "system/storage",
   "services",
+  "services/list",
+  "services/apps",
   "network",
+  "network/map",
   "ci",
   "agents",
   "agents/fleet",

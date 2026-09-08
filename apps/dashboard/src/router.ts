@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory } from "vue-router";
 
 /**
- * Seven nav entries, and two of them are several views each.
+ * Seven nav entries, and four of them are several views each.
  *
  * `/` lands on Home now. It used to land on System, because Home was the stub and
  * sending someone to a page that says "not built" would have been a strange front
@@ -48,15 +48,58 @@ export const router = createRouter({
         },
       ],
     },
+    // SERVICES IS NESTED, AND IT WAS THE RACK THAT FORCED IT. ServicesPage.vue
+    // was 957 lines, and the band in the middle - nineteen units by eight
+    // columns, each row carrying a 24-bar CPU strip, a three-line memory cell
+    // and a restart caption - was taller than the other three put together. So
+    // the sentence that says what to type and the panel that says what the
+    // battery found sat above and below an inventory nobody opens this page to
+    // read. See pages/services/ServicesLayout.vue.
     {
       path: "/services",
-      name: "services",
-      component: () => import("@/pages/ServicesPage.vue"),
+      component: () => import("@/pages/services/ServicesLayout.vue"),
+      children: [
+        { path: "", redirect: "/services/health" },
+        {
+          path: "health",
+          name: "services",
+          component: () => import("@/pages/services/HealthPage.vue"),
+        },
+        {
+          path: "list",
+          name: "services-list",
+          component: () => import("@/pages/services/ListPage.vue"),
+        },
+        {
+          path: "apps",
+          name: "services-apps",
+          component: () => import("@/pages/services/ApplicationsPage.vue"),
+        },
+      ],
     },
+    // NETWORK IS NESTED BECAUSE THE DRAWING WAS THE PAGE. NetworkGraph is the
+    // tallest thing this application draws, and it was band four of five on a
+    // page whose first question is "is the segmentation intact" - so the two
+    // tables carrying the readings sat below it at every width. It is a view of
+    // its own now, and clicking a node navigates to /network/overview with
+    // ?focus= and #segments rather than filtering anything in place. See
+    // pages/network/NetworkLayout.vue.
     {
       path: "/network",
-      name: "network",
-      component: () => import("@/pages/NetworkPage.vue"),
+      component: () => import("@/pages/network/NetworkLayout.vue"),
+      children: [
+        { path: "", redirect: "/network/overview" },
+        {
+          path: "overview",
+          name: "network",
+          component: () => import("@/pages/network/OverviewPage.vue"),
+        },
+        {
+          path: "map",
+          name: "network-map",
+          component: () => import("@/pages/network/MapPage.vue"),
+        },
+      ],
     },
     {
       path: "/home",
@@ -82,7 +125,9 @@ export const router = createRouter({
     // working, what did this round do, and what is the machinery costing. The
     // parent carries the sub-navigation and the toolbar note; the children are
     // the three answers. See pages/agents/AgentsLayout.vue. /system followed it
-    // for the same reason, so this is no longer the only one.
+    // on 2026-09-07, /services and /network on 2026-09-08, all for the same
+    // reason - so four of the seven tabs are sections now, and a flat page is
+    // the exception rather than the rule.
     //
     // A ROUND'S KEY IS THE COLLECTOR'S OWN FILENAME KEY, built by roundKey() in
     // src/api/round.ts from the worktree id and the round's start. It is
@@ -112,4 +157,16 @@ export const router = createRouter({
     },
     { path: "/:pathMatch(.*)*", redirect: "/home" },
   ],
+
+  /**
+   * A HASH SCROLLS, AND NOTHING ELSE CHANGES. /network/map hands its click to
+   * /network/overview as ?focus= plus #segments, and without this vue-router
+   * would land the reader at the top of a page whose filtered table is two
+   * bands down. Returning undefined for every hash-less navigation is what
+   * keeps that from being a behaviour change everywhere else: the default is
+   * "leave the scroll position alone", and the six pages that had it keep it.
+   */
+  scrollBehavior(to) {
+    return to.hash ? { el: to.hash } : undefined;
+  },
 });

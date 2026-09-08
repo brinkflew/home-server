@@ -1684,6 +1684,23 @@ signal read green.
   `stacks/` under a docblock claiming it matched, and correcting it exposed a flat 64 MiB working set
   putting one row at a ratio of exactly 1.000. Nothing paged on a container OOM kill either.
 
+### The band that was the page, and the click that had nowhere left to land
+- Height forced these two splits, not length: 803 and 957 lines, both under the 1,476-1,553 that
+  forced the others, but the drawing was taller than /network's other four bands together and the
+  rack than /services' other three. Five views, and four of the seven tabs are sections now.
+- **`/network` and `/services` must be REDIRECTS**: `SubNav` matches `router-link-active` and not
+  the exact class, so a segment pointing at `/network` stays lit on `/network/map`.
+- **Splitting a drawing from the tables it filtered changes what a click MEANS** - it navigates now,
+  and the map holds no focus of its own. **A hash scrolls nothing until a router is asked**, and
+  this one had no `scrollBehavior` at all.
+- **A split is the pressure that mints a second reading of one series**, which /services' own
+  docblock had already named - so the rack poll is a composable, and `activity: false` is what keeps
+  the health view at no range query and the `WindowPicker` on the rack view alone.
+- A band may not repeat its own tab: `Every service` and `What they report`, third and fourth
+  instances of the Fleet-under-Fleet correction. Three of the five views have no lead deliberately,
+  so `network.ts` and `services.ts` did not change and every `smoke.mjs` assertion is the regression
+  test for the move.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

@@ -5018,3 +5018,37 @@ service on the rack read **memory starved**. Nothing on the host was.
   `ContainerMemoryStarved` are new, and the second shares its expression and its floor with the page
   deliberately - two surfaces reading one measurement and drawing it differently is a failure this
   application has already paid for.
+
+### The band that was the page, and the click that had nowhere left to land
+- **Height forced these two splits, not length.** `NetworkPage` 803 lines and `ServicesPage` 957,
+  both well under the 1,476-1,553 that forced Agents and System - but `NetworkGraph` was taller than
+  the other four bands together and the rack taller than the other three, so each page's own subject
+  pushed its readings below the fold. Five views now, and four of the seven tabs are sections.
+- **`/network` and `/services` must be REDIRECTS**, because `SubNav` matches `router-link-active`
+  and not the exact class - deliberately, so `/agents/rounds/<key>` keeps Rounds lit. A segment
+  pointing at `/network` is a prefix of `/network/map` and would stay lit on it.
+- **Splitting the drawing from its tables changes what a click MEANS.** It filtered them in place;
+  it navigates now, to `/network/overview?focus=<node>#segments`. The map holds no focus of its own
+  - a filter with nothing on screen to filter is a control that does nothing.
+- **A hash scrolls nothing until a router is asked.** vue-router had no `scrollBehavior` here, so
+  the handoff would have landed at the top of a page whose filtered table is two bands down, at
+  every width and with no error. It returns `undefined` for a hash-less navigation, which is the
+  default the other six pages already had.
+- **A split is the pressure that mints a second reading of one series.** `ServicesPage`'s docblock
+  already named that defect - "Needs attention" is a FILTER over the array the rack draws - so
+  putting the two on different views made the poll a composable rather than two copies.
+  `activity: false` is what keeps /services/health at sixteen instants and no range, and is why the
+  `WindowPicker` teleports from the rack view alone.
+- `/network` went the other way on purpose: the map and the Segments table are `segmentRows(...)`
+  drawn two ways, so both views share the whole poll.
+- **A band may not repeat its own tab**, and the split created two at once - `Services` under a
+  Services segment and `Applications` under an Applications one. `Every service` and `What they
+  report`. Third and fourth instances of the Fleet-under-Fleet correction.
+- **Three of the five views have no lead and that is the decision.** The drawing, the rack and the
+  applications table each ARE the reading; a headline would be a second one. `/agents/rounds/:key`
+  had already established a sibling view may have none, so no new lead function was written and
+  `network.ts` and `services.ts` did not change at all - which is what makes every existing
+  `smoke.mjs` assertion the regression test for the move.
+- `fixtures/shoot.mjs`'s `routes` array is the only enumeration of routes in this repository, and
+  its comment named `/system` alone. Baseline 43 problems, all the one expected poster 404; after,
+  52 - three new routes times three viewports of the same 404, and nothing else.

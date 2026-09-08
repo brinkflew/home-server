@@ -169,7 +169,7 @@ export interface ServiceRow {
  * IT IS NOT IN THE `pod` LABEL, WHICH IS EMPTY FOR EVERY CONTAINER ON THIS
  * HOST. The collector reads podman's `PodName` field and this podman fills
  * `Pod` (an id) instead, so `home_server_container_info{pod}` has always been
- * "" in production - which made ServicesPage's `pod {{ row.pod }}` branch dead
+ * "" in production - which made the rack's `pod {{ row.pod }}` branch dead
  * code for as long as it existed, perfect in the fixtures and absent on the
  * server. Every consumer here takes the pod from topology instead.
  */
@@ -416,7 +416,7 @@ export function memoryTone(
   // ABSENCE IS NOT HEALTH, and the reachable case is not exotic: memoryHigh is a
   // gauge and these two are rates, so a container in its first minute - or the
   // window after a collector gap - has a ceiling and no pressure reading at all.
-  // Answering `ok` there is the same mistake ServicesPage.vue already refuses
+  // Answering `ok` there is the same mistake useServiceRack.ts already refuses
   // for `health`, where `?? 0` would report three containers as verified healthy
   // on the strength of no evidence. docs/known-state.md files it under "Absence
   // read as health in one function and as a failure in the next".

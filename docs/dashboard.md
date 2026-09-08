@@ -1933,3 +1933,108 @@ centre between boxes, which across a grouped layout is a thicket, and it silentl
 touching a terminal - so `wan -> caddy`, the most important edge on the page, could never be drawn.
 `wan` and `internet` are boxes on the spine now, and `paths.ts`'s `why` - forty-eight hand-written
 one-line explanations, rendered nowhere in this application until today - is in the node tooltip.
+
+## Network and Services became five views, and the drawing became a control, 2026-09-08
+
+**Two pages were left flat, and both had the same shape: one band that was the page.** `NetworkPage`
+was 803 lines and `NetworkGraph` - ten segment boxes, a spine of the five multi-homed containers and
+an elbow per attachment - was taller than the other four bands together, so a page whose first
+question is *"is the segmentation intact"* put its two tables of readings below the fold at every
+width. `ServicesPage` was 957 lines with the rack in the middle of it: nineteen units by eight
+columns, each row carrying a 24-bar CPU strip, a three-line memory cell and a restart caption, sat
+between the sentence that says what to type and the panel that says what the battery found.
+
+Neither was near the 1,476-1,553 lines that forced the two earlier splits. **Height is the measure
+here, not lines** - the same complaint the Agents and System splits were about, arriving from a
+single band rather than from seven.
+
+| Route | Answers |
+|---|---|
+| `/network/overview` | is the segmentation intact, and what is open to the host? |
+| `/network/map` | how is it wired? |
+| `/services/health` | is anything wrong with the stack, and what do I type? |
+| `/services/list` | what is each service doing? |
+| `/services/apps` | what do the applications report about themselves? |
+
+Four of the seven tabs are sections now, so a flat page is the exception. `router.ts`'s opening
+sentence and the Agents comment saying System was the only one to follow it were both rewritten
+rather than left to rot, which is what the System split did to the Agents comment one day earlier.
+
+**`/network` and `/services` are redirects rather than destinations, and `SubNav` is why.** It
+matches on `router-link-active` and not the exact class, deliberately, so that
+`/agents/rounds/<key>` keeps the Rounds segment lit - which means a segment pointing at `/network`
+would also stay lit on `/network/map`, because one path is a prefix of the other. The name stays on
+the default child for the reason already recorded: a record that only redirects is not a
+destination.
+
+### The drawing lost the tables it filtered, so a click had to mean something else
+
+Clicking a segment or a service used to filter the two tables under it. Those are one view over now,
+so a click **navigates**: `/network/overview` with `?focus=` set and `#segments` on the hash. The
+selection was already in the URL - it was put there so a filtered view is a thing somebody can send
+to somebody else - and that is what made this a two-line change rather than a new mechanism.
+
+**The map holds no focus of its own**, and passes `:focus="null"`. Lighting one box on a drawing
+where the filter has no visible effect is a control that does nothing, which is the rule the
+`WindowPicker`'s absence from this section has always been about. `NetworkGraph` still emits `null`
+for its two clear paths - clicking the lit node, and Escape - and both are ignored here.
+
+**The hash needed `scrollBehavior`, which this router had never had.** vue-router does nothing with
+a hash unless asked, so the handoff would have landed the reader at the top of a page whose filtered
+table is two bands down, silently and at every width. It returns `undefined` for a hash-less
+navigation, which is the default behaviour the other six pages already had, so nothing else moved.
+
+The focus chip moved with the filter. *"showing X / clear"* used to sit on the drawing's band; it is
+on the Segments band now, beside the first table it filters, and Published ports says *"filtered to
+X"* rather than silently shortening.
+
+### One derivation, two views, and now two pages
+
+`ServicesPage`'s own docblock carried the argument before there was anywhere else to put it:
+*"'Needs attention' is a FILTER over the same array the rack draws - never a second reading of the
+same series, which is how the System page came to draw one finding two ways and disagree with itself
+about what `note` meant."* Putting the filter on `/services/health` and the rack on `/services/list`
+is exactly the pressure that produces that second reading, so the poll and its shaping became
+`composables/useServiceRack.ts` - one function, two callers - rather than ninety lines copied.
+
+**`activity` is the one thing the two do not share.** The 24-bar CPU strip is the only range query
+on the section and only the rack draws it, so health passes `activity: false`, fires sixteen
+instants and no range, and does not depend on the time window at all. That is what lets the
+`WindowPicker` teleport from `/services/list` alone - verified in a browser, both directions.
+
+`/network` went the other way and both views share `useNetworkReadings.ts` whole. The drawing is
+`graphModel(segmentRows(...))` and the Segments table is `segmentRows(...)`: the same array drawn
+two ways, so nine of the eleven queries are wanted by both, and trimming `ports` and `unmapped` off
+the map would buy two instant queries at the price of a second return shape. Only one child is
+mounted at a time, so nothing is fetched twice.
+
+### Three views cannot open on the same word, and neither can a band and its own tab
+
+The five opening bands are `Right now` and `The segmentation` for network, and `Right now`, `Every
+service` and `What they report` for services. **Two of those are renames the split forced**: the
+rack's band was `Services` under a segment now called Services, and the applications band was
+`Applications` under a segment called Applications - the correction this document already records
+for the Fleet band, twice more.
+
+### Three views without a lead, deliberately
+
+`networkLead` stays on `/network/overview` and `servicesLead` on `/services/health`, and no new lead
+function was written - `src/network.ts` and `src/services.ts` did not change at all, which is why
+`fixtures/smoke.mjs` needed no new assertion and every existing one is the regression test for the
+move. The three views without a headline each **are** the reading: the graph's box colour is the
+measured liveness verdict, its group edge is whether the segmentation holds and its elbows are
+measured bytes; the rack is sorted worst-first with a tone per row; every applications row carries
+its own tone and its own sentence. A headline over any of them would be a second reading of the same
+array. `/agents/rounds/:key` had already established that a sibling view may have no lead.
+
+### What proved it
+
+`fixtures/shoot.mjs`'s `routes` array is the only thing in this repository that enumerates them, and
+its comment spoke only of `/system`; it lists every view of every section now, which is sixteen
+entries against a nav of seven. Baseline before the split was **43 problems, all of them the one
+expected missing-poster 404**; after it, **52 - exactly three new routes times three viewports of
+the same 404**, with no console error, no page error and no horizontal overflow at 1360, 834 or 390.
+The handoff itself was checked in a browser rather than reasoned about: both redirects, the click
+landing on `/network/overview?focus=net-solver#segments` with the table filtered to one row and the
+page scrolled 313px to it, `clear` restoring all fifteen, a hand-typed `?focus=nonsense` still
+self-clearing, and the range query fired by the rack view and by no other.
