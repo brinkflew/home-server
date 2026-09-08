@@ -1626,6 +1626,21 @@ signal read green.
 - The fixture was RIGHT and that is why nothing caught it: the three readers were tested against
   `fixtures/fleet.ts` and the producer never was. `bin/lint-repo.sh` leg 10 is the comparison.
 
+### The counter was drawn against a ceiling from a different universe
+- `FLEET_MAX_ATTEMPTS` bounds a CHAIN and the collector counted a TASK's whole history, so task 1264
+  - picked three separate times - read **"attempt 5 of 3"** on the round that shipped.
+- conduct's own count was already on `dispatch.payload` for `conduct_plan`, keyed per flow job so the
+  next round cannot overwrite it. Two joins: the plan phase's `log` path is exact, and the timestamp
+  fallback is safe by CONSTRUCTION - the dispatch row is committed before the run row is opened.
+- `skipped` excludes a repair or a resume; the floor is the previous RUN on the lane, not the
+  previous round. The oldest group on a lane is a known open edge and the docstring says so.
+- A GAP is now information: a repair costs an attempt and is no row, so 1254 reads 1 then 3.
+  `_round_events`' "nothing records that an attempt was a repair" is no longer true.
+- The fixture stated the contract again, including an `attempts: 0` no derivation can produce - but
+  the 1601 pair's `[1, 2]` is RIGHT, because the open round reads the live counter that counts
+  repairs. `FLEET_MAX_ATTEMPTS` finally has the check its own comment asked for, and five prose
+  copies of "of 2" had drifted the same way the constant did.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

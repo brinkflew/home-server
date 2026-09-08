@@ -279,7 +279,7 @@ export interface RoundSteps {
   /** conduct's declared phases, then the merge. Never empty. */
   phases: string[];
   /** Which of them are behind it. `done` is per ATTEMPT for conduct's five -
-   *  the row prints "attempt N of 2" beside this for exactly that reason - and
+   *  the row prints "attempt N of 3" beside this for exactly that reason - and
    *  the merge is not, because a change merges once however many rounds it took. */
   done: string[];
 }

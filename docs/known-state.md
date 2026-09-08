@@ -3356,7 +3356,7 @@ three of them are the same mistake in different clothes.
 - **PROGRESS IS PER ATTEMPT AND ONLY THE ATTEMPT COUNTER SAYS SO.** `chain.done` is append-only
   within a round and `chain_restart` clears it wholesale, because a re-plan is the entire point of
   another round. So 2/5 on attempt 2 is work being redone, not work that was lost, and a bar without
-  "attempt N of 2" beside it asserts the second thing.
+  "attempt N of 3" beside it asserts the second thing.
 
 ### An ETA is a prediction, and this one says a dash more often than a number
 - **conduct records no expectation anywhere.** `flows/ship.py` carries prose in its module summaries
@@ -4787,3 +4787,79 @@ Recorded 2026-09-07, with the board's filter, the step rail and the three render
   half greps for `chain["phase"]` by name, because reaching that line needs `source_fleet` and eight
   tables of fixture. All three halves were made to FAIL before they were trusted. Measured against
   the live database: 24 rounds derived, one row changed, and the 23 closed ones byte-identical.
+
+### The counter was drawn against a ceiling from a different universe
+- **`FLEET_MAX_ATTEMPTS` bounds a CHAIN and the collector was counting a TASK's whole history.**
+  `chain_open` selects on `closed_at IS NULL`, so a task re-picked after its chain closed - a stopped
+  round, a failed flow, a publication - starts again at 1. `_fleet_derive_rounds` numbered a task's
+  rounds 1, 2, 3... in the order they appear in its 400-row window. Task 1264 was picked three
+  separate times - two chains on 2026-08-30 that died on a killed gate, one on 2026-09-07 that ran
+  three rounds - so conduct numbered them `1 | 1 | 1,2,3` and the board drew **"attempt 5 of 3"** on
+  the round that shipped. Neither number was wrong on its own; they were answers to different
+  questions printed either side of the word "of".
+- **The number was already in the database and nothing had to be added to conduct.** `_plan_step`
+  takes it from `chain_open` and returns it in the plan step's payload; `dispatch_answer` writes that
+  onto the `conduct_plan` row of `dispatch`. It is keyed per FLOW JOB, so unlike `chain.attempts` the
+  next round does not overwrite it - the same property that makes `_round_card` prefer the dispatch
+  copy of the approval card over `report.body`.
+- **TWO JOINS, AND THE FIRST IS EXACT.** That same payload carries the plan phase's `log` path and
+  `run.log` is the same string, so where both exist the round and its dispatch match by identity with
+  no arithmetic at all. `run.log` is a MIGRATION rather than an original column - 14 of the 24 rounds
+  on the live host have it - and the rest fall through to the timestamp join.
+- **The timestamp join is safe by CONSTRUCTION, not by the measured second.** `poll._conduct_steps`
+  commits the dispatch row before it calls the handler that reaches `state.start_run`, so a dispatch
+  can never be later than its run whatever `prepare_worktree` costs that day. The measured 0-1s gap
+  is a consequence, not the guarantee - and writing it down as the reason would have invited the next
+  reader to think a slow `git fetch` breaks the fix. Handlers also run INLINE, one at a time, so no
+  second lane can interleave a dispatch into a lane's window.
+- **`skipped` IS THE DISCRIMINATOR, NOT THE ORDERING.** A repair and a resume both write a
+  `conduct_plan` dispatch carrying a synthesised attempt and neither runs a planning phase, so
+  neither starts a round and either is a plausible wrong answer for the round after it. Measured over
+  the whole history: 30 `conduct_plan` rows, 6 skipped, and the remaining 24 pairing one-to-one AND
+  IN ORDER with the 24 `plan` run rows - though 3 of those 24 predate the key and still read None, so
+  the PAIRING is one-to-one and the NUMBERING is not.
+- **The floor is the previous RUN on the lane and not the previous ROUND.** A round can be preceded
+  on its own lane by phases belonging to the one before it, and three ordinary things leave a plan
+  run with no dispatch of its own: a hand `conduct run --phase plan`, a payload older than the key,
+  and `reconcile` calling `dispatch_forget` on a row nobody answered - which is what the reboot
+  window does to a phase deliberately. Without the tighter floor each of those silently inherits a
+  stranger's number, which is the class of lie the whole change removes.
+- **ONE EDGE IS LEFT OPEN AND THE DOCSTRING SAYS SO.** The oldest group on a lane has no previous run
+  inside the window to be floored by, so a missing dispatch there can still reach a round that aged
+  out. It is one round per lane per window, the exact join closes it for everything since `run.log`
+  shipped, and no honest bound exists for the rest - a time window would be the magic constant this
+  derivation exists to avoid.
+- **A GAP IN THE NUMBERS IS NOW INFORMATION.** A repair costs an attempt and is no row on this board,
+  so task 1254 reads attempt 1 then attempt 3. Kept deliberately: conduct's own count can never
+  disagree with the ceiling it is drawn against, and labelling the repair would be a second claim.
+  `_round_events`' docstring says *"nothing in conduct's schema records that an attempt was a repair"*
+  and that is **no longer true** - the skipped dispatch rows are exactly that record, for anyone who
+  wants the label later. The open round is the exception and needs nothing: `source_fleet` still
+  takes the live `chain.attempts`, which counts repairs.
+- **The fixture stated the contract the producer violated, for the second time in two days.**
+  `fixtures/fleet.ts` gives four single-round tasks `attempts: 2`, which counting can never produce
+  and conduct's numbering produces routinely - and one round `attempts: 0`, which no derivation can
+  produce at all and which survived because the line renders only above one. The docstring of
+  `_fleet_derive_rounds` had also said the number was "conduct's own definition" the whole time.
+- **The 1601 pair is NOT the illegal shape it looks like.** Two rounds of one task on two lanes are
+  two chains, so a bare count gives each of them 1 - and the fixture asserts `[1, 2]`. It is right,
+  because the OPEN one reads the live `chain.attempts` rather than a plan dispatch, and that counter
+  includes a repair. Talked myself out of "fixing" it; the comments now say which half comes from
+  where.
+- **`FLEET_MAX_ATTEMPTS`' own comment asked for the check that would have caught its half**: it
+  stayed at 2 after conduct moved to 3, nothing failed, and the comment says *"a second copy of a
+  fact is a thing to check when the first one moves"*. `bin/lint-repo.sh` now greps conduct's
+  `config.py` and compares. A grep that finds neither name is a FAIL and not a pass, because either
+  name having moved is the drift it exists to catch; it skips only when the agents checkout is
+  absent. Five prose copies of "attempt N of 2" had drifted the same way and are now "of 3".
+- **`_fleet_derive_rounds` is the first thing to make the board depend on a second table**, so a
+  missing `dispatch` guards with `_fleet_has` - which answers empty for an absent TABLE as well as an
+  absent column. Without it a raise reaches `source_fleet`, which turns any sqlite error into "the
+  database is unreadable" and blanks every row: the 2026-08-28 failure the optional-column list
+  already exists to stop.
+- Six mutated copies of the collector prove the six guards independently, each made to FAIL before it
+  was trusted: the old counting loop returns `[1,2,3,4,5]`; dropping the log join takes a decoy
+  dispatch; dropping the table guard raises; dropping the worktree fold stops matching; ignoring
+  `skipped` reads a repair's number for a hand run; and dropping the floor reads the previous round's.
+  Measured against the live database: 25 rounds, 11 rows changed, and `attempts` the only key
+  that moved.

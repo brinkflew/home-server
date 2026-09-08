@@ -17,7 +17,7 @@
  *
  * THE SEQUENCE TRAVELS WITH THE ROUND. `phases` is what conduct declared for
  * that flow and `done` is what it finished THIS ATTEMPT - cleared wholesale when
- * a round starts again, which is why the row prints "attempt N of 2" beside
+ * a round starts again, which is why the row prints "attempt N of 3" beside
  * this. A round carrying no sequence draws nothing rather than inventing five.
  *
  * THE NAMES ARE DROPPED BEFORE THE NODES ARE. Below the 900 rung the phase cell

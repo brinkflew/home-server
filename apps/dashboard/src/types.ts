@@ -369,16 +369,30 @@ export interface FleetRound {
   started_at: string;
   ended_at: string | null;
   /**
-   * Which attempt at this task this round is, or null.
+   * Which attempt at this change conduct counted this round as, or null.
    *
-   * NULL IS NOT ZERO AND NOT ONE. It is counted among rounds sharing an
-   * `odoo_task`, so a round whose runs predate `run.odoo_task` cannot have one
-   * - and "attempt 1 of 2" about a round whose task is unknown is a claim
-   * rather than a count. The row hides the line instead.
+   * CONDUCT'S NUMBER, NOT A COUNT OF THE ROWS ABOVE IT. It used to be counted
+   * among rounds sharing an `odoo_task`, and that is a different quantity from
+   * the ceiling it is drawn against: `max_attempts` bounds a CHAIN, and
+   * conduct starts a chain again at 1 whenever a task is re-picked after the
+   * last one closed. Task 1264 was picked three times and read "attempt 5 of
+   * 3" on the round that shipped. The collector reads chain_open's own count
+   * off the plan step's payload now.
+   *
+   * SO A GAP IS INFORMATION AND NOT AN ERROR. A repair - a red gate re-running
+   * dev and the gate on the tree as it stands - costs an attempt and runs no
+   * planning phase, so it is no row of its own here. 1 followed by 3 means one
+   * happened.
+   *
+   * NULL IS NOT ZERO AND NOT ONE. It means the number could not be
+   * established: a round from before conduct recorded it, or a phase somebody
+   * ran by hand. Claiming "attempt 1" there would be a claim rather than a
+   * count, so the row hides the line instead.
    */
   attempts: number | null;
-  /** conduct's MAX_ATTEMPTS, carried so the board can say "2 of 2" - the number
-   *  that says whether the fleet is about to give up. */
+  /** conduct's MAX_ATTEMPTS, carried so the board can say "3 of 3" - the number
+   *  that says whether the fleet is about to give up. `bin/lint-repo.sh` is
+   *  what keeps this copy in step with conduct's. */
   max_attempts: number;
   flow_job_id: string | null;
   head: string | null;
@@ -412,7 +426,7 @@ export interface FleetRound {
   closed_why: string | null;
   /** The phases this round has finished. Cleared wholesale when a round starts
    *  again, so it is progress through the CURRENT attempt - which is why the
-   *  row must keep printing "attempt N of 2" beside it. */
+   *  row must keep printing "attempt N of 3" beside it. */
   done: string[];
   /** The full sequence, so the denominator travels with the numerator. */
   phases: string[];

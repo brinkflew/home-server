@@ -659,8 +659,13 @@ console.log("\n-- a round whose task is unknown claims nothing --");
 // EVERY ROUND THIS FLEET RAN BEFORE run.odoo_task IS IN THIS POSITION. The
 // collector cannot know which task it was for: run.task holds the phase's whole
 // prompt, and reading an id out of a paragraph is the parse this codebase
-// refuses. So the chip must be disabled and the attempt line hidden - never a
-// guessed link, and never "attempt 1 of 2" about something unknown.
+// refuses. So the chip must be disabled - never a guessed link.
+//
+// ITS ATTEMPT IS NULL FOR A SEPARATE REASON, and the two used to be one. The
+// number is conduct's own count off the plan step's dispatch payload, so it
+// does not depend on the task id at all; a round this old is null because its
+// plan predates the key, and a task-less round conduct DID number would show
+// one.
 check("a round with no task id has no tracker link", by("wt-hist01").odoo_url, null);
 check("...and no attempt number", by("wt-hist01").attempts, null);
 check("...and still renders a state", roundState(by("wt-hist01")).state, "stopped");
@@ -668,7 +673,18 @@ check("...whose action falls back to nothing clickable",
   roundAction(by("wt-hist01")).href, null);
 
 // ONE ROW PER ATTEMPT is the whole point: a failed first attempt keeps its own
-// cost and its own failure instead of collapsing into "attempt 2 of 2".
+// cost and its own failure instead of collapsing into one row.
+//
+// AND 1 AND 2 COME FROM TWO DIFFERENT PLACES, which is the shape worth having
+// here. The number is conduct's count within a CHAIN, and a chain is keyed on
+// the worktree - so these two rounds, on two lanes, are two chains and a bare
+// count of rounds would give each of them 1. The closed one does read 1, off
+// its own plan dispatch. The OPEN one reads 2 because source_fleet takes the
+// live chain.attempts for the round in flight, and that counter also counts a
+// REPAIR - dev and the gate re-run on the tree as it stands, which opens no
+// round and leaves no plan run to read a number off. So the second attempt is
+// visible here and has no row, which is exactly the gap a closed round shows
+// as 1 then 3.
 const attempts1601 = fleet.rounds
   .filter((r) => r.odoo_task === 1601)
   .map((r) => r.attempts)

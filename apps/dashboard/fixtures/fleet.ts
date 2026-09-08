@@ -142,7 +142,10 @@ export function fleetDocument(): FleetDocument {
         opened_at: iso(9 * 60),
         started_at: iso(9 * 60),
         ended_at: null,
-        attempts: 0,
+        // 1 AND NOT 0. conduct counts attempts from one, so zero is a number
+        // this field cannot hold; it survived only because the row renders the
+        // line above one and never drew it.
+        attempts: 1,
         max_attempts: 3,
         flow_job_id: "job-ccc",
         head: null,
@@ -712,9 +715,18 @@ export function fleetDocument(): FleetDocument {
         tokens_in: 64000,
         tokens_out: 3000,
       },
-      // THE SECOND ATTEMPT AT A TASK ALREADY ON THE BOARD. One row per attempt
-      // is the whole point: the first attempt's cost and its failure stay
-      // visible instead of collapsing into "attempt 2 of 2" on one row.
+      // THE SAME TASK, ON A SECOND LANE. One row per attempt is the whole
+      // point: the first attempt's cost and its failure stay visible instead
+      // of collapsing into one row.
+      //
+      // THIS ONE READS 1 AND ITS SIBLING READS 2, FROM TWO DIFFERENT PLACES.
+      // The number is conduct's per-CHAIN count and a chain is keyed on the
+      // worktree, so two lanes are two chains and counting rounds would give
+      // both of them 1. This one is 1 off its own plan dispatch; the open one
+      // is 2 off the live chain.attempts, which also counts a repair - and a
+      // repair opens no round, so its attempt has no row anywhere. Two rounds
+      // of ONE chain numbering 1 then 2 is a claim about the producer, and
+      // bin/lint-repo.sh leg 10 asserts it there with real dispatch rows.
       {
         worktree_id: "wt-4ab810-r1",
         project: "upskald",

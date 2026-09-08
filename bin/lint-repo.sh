@@ -589,6 +589,7 @@ cm=bin/collect-metrics.py
 if [ -f "$cm" ] && command -v python3 >/dev/null 2>&1; then
 	drift=$(python3 - "$cm" <<-'PY'
 		import importlib.util
+		import json
 		import sqlite3
 		import sys
 
@@ -604,7 +605,16 @@ if [ -f "$cm" ] && command -v python3 >/dev/null 2>&1; then
 		        worktree_id TEXT, started_at TEXT, ended_at TEXT, result TEXT,
 		        exit_code INTEGER, cost_usd REAL, tokens_in INTEGER,
 		        tokens_out INTEGER, task TEXT, odoo_task INTEGER, error TEXT,
-		        branch TEXT)
+		        branch TEXT, log TEXT)
+		""")
+		# THE ROUND'S ATTEMPT NUMBER COMES OFF THIS TABLE, not off counting the
+		# groups - see _fleet_number_rounds. conduct puts chain_open's own count
+		# in the plan step's payload, which is the only copy a later round does
+		# not overwrite.
+		conn.execute("""
+		    CREATE TABLE dispatch (
+		        flow_job_id TEXT, module_id TEXT, project TEXT, phase TEXT,
+		        worktree_id TEXT, started_at TEXT, payload TEXT)
 		""")
 
 		def run(phase, worktree, result, started, ended=None):
@@ -636,8 +646,10 @@ if [ -f "$cm" ] && command -v python3 >/dev/null 2>&1; then
 		    if got["worktree_id"] != "wt":
 		        bad.append("the verification's worktree did not fold back: %r"
 		                   % got["worktree_id"])
-		    if "seen" in got:
-		        bad.append("`seen` is the filter's and must not reach the browser")
+		    for key in ("seen", "after", "plan_log"):
+		        if key in got:
+		            bad.append("`%s` is working state and must not reach the"
+		                       " browser" % key)
 
 		# The gate's elapsed time is what the ETA subtracts, and the worktree it
 		# is asked for is the folded one.
@@ -660,6 +672,127 @@ if [ -f "$cm" ] && command -v python3 >/dev/null 2>&1; then
 		    bad.append("a round whose plan is still running reads %r"
 		               % ([(r["phase"], r["done"]) for r in fresh],))
 
+
+		# THE ATTEMPT NUMBER, AND THE FOUR SHAPES THAT DECIDE IT. Counting a task's
+		# rounds here is what drew "attempt 5 of 3" on the round that shipped task
+		# 1264: MAX_ATTEMPTS bounds a CHAIN, and chain_open restarts at 1 whenever a
+		# task is re-picked after its chain closed. None of this was assertable
+		# before - the leg built one round, and one round is the shape every wrong
+		# derivation gets right.
+		third = sqlite3.connect(":memory:")
+		third.row_factory = sqlite3.Row
+		conn.backup(third)
+		third.execute("DELETE FROM run")
+		third.execute("DELETE FROM dispatch")
+
+		def round_at(db, worktree, started, task, ended):
+		    db.execute(
+		        "INSERT INTO run (project, phase, worktree_id, started_at,"
+		        " ended_at, result, cost_usd, tokens_in, tokens_out, task,"
+		        " odoo_task) VALUES ('p', 'plan', ?, ?, ?, 'ok', 0.0, 0, 0,"
+		        " 'do it', ?)", (worktree, started, ended, task))
+
+		def planned(db, worktree, started, payload):
+		    db.execute(
+		        "INSERT INTO dispatch (flow_job_id, module_id, project, phase,"
+		        " worktree_id, started_at, payload)"
+		        " VALUES (?, 'conduct_plan', 'p', 'ship', ?, ?, ?)",
+		        (started, worktree, started, json.dumps(payload)))
+
+		# Two rounds of one chain, then a REPAIR - which conduct counts but which
+		# runs no planning phase, so it starts no round here - then the round after
+		# it, then the same task re-picked, which conduct starts again at 1.
+		planned(third, "wt", "2026-02-01T00:00:00Z", {"attempt": 1})
+		round_at(third, "wt", "2026-02-01T00:00:01Z", 7, "2026-02-01T00:05:00Z")
+		planned(third, "wt", "2026-02-01T01:00:00Z", {"attempt": 2})
+		round_at(third, "wt", "2026-02-01T01:00:01Z", 7, "2026-02-01T01:05:00Z")
+		planned(third, "wt", "2026-02-01T02:00:00Z",
+		        {"attempt": 3, "skipped": "the plan for this round is already"})
+		planned(third, "wt", "2026-02-01T03:00:00Z", {"attempt": 4})
+		round_at(third, "wt", "2026-02-01T03:00:01Z", 7, "2026-02-01T03:05:00Z")
+		# The re-pick. Same task, same lane, and conduct's counter back at 1.
+		planned(third, "wt", "2026-02-02T00:00:00Z", {"attempt": 1})
+		round_at(third, "wt", "2026-02-02T00:00:01Z", 7, "2026-02-02T00:05:00Z")
+		# A repair on the re-picked chain, and then a plan run conduct never
+		# dispatched - a hand `conduct run --phase plan`. The worktree is
+		# reused, so the danger is answering with the repair's number rather
+		# than None, and this is the pair that tells the `skipped` guard from
+		# merely taking the latest row: without it, the hand run reads 2.
+		planned(third, "wt", "2026-02-02T12:00:00Z",
+		        {"attempt": 2, "skipped": "the plan for this round is already"})
+		round_at(third, "wt", "2026-02-03T00:00:00Z", 7, "2026-02-03T00:05:00Z")
+		third.commit()
+
+		numbered = [(r["started_at"], r["attempts"])
+		            for r in cm._fleet_derive_rounds(third)]
+		numbered.reverse()
+		want = [("2026-02-01T00:00:01Z", 1), ("2026-02-01T01:00:01Z", 2),
+		        ("2026-02-01T03:00:01Z", 4), ("2026-02-02T00:00:01Z", 1),
+		        ("2026-02-03T00:00:00Z", None)]
+		if numbered != want:
+		    bad.append("the attempt numbers read %r, not %r" % (numbered, want))
+
+
+		# THE EXACT JOIN WINS OVER THE TIMESTAMP ONE, and the three shapes that
+		# answer None. conduct puts the plan phase's log path in the same payload as
+		# the attempt, and `run.log` is the same string - so where both exist the
+		# round and its dispatch are matched by identity. The decoy here is what the
+		# timestamp join would have taken: a later, non-skipped, log-less row.
+		fourth = sqlite3.connect(":memory:")
+		fourth.row_factory = sqlite3.Row
+		conn.backup(fourth)
+		fourth.execute("DELETE FROM run")
+		fourth.execute("DELETE FROM dispatch")
+		planned(fourth, "wt", "2026-03-01T00:00:00Z",
+		        {"attempt": 4, "log": "/logs/plan-a.log"})
+		planned(fourth, "wt", "2026-03-01T00:30:00Z", {"attempt": 9})
+		fourth.execute(
+		    "INSERT INTO run (project, phase, worktree_id, started_at, ended_at,"
+		    " result, cost_usd, tokens_in, tokens_out, task, odoo_task, log)"
+		    " VALUES ('p','plan','wt','2026-03-01T01:00:00Z','2026-03-01T01:05:00Z',"
+		    " 'ok',0.0,0,0,'do it',7,'/logs/plan-a.log')")
+		# A payload with no attempt at all - a plan phase conduct could not record a
+		# number for - and one that is NULL, which is the row of a plan step still
+		# running. Both answer None rather than raising or inventing.
+		planned(fourth, "wt", "2026-03-02T00:00:00Z", {"log": "/logs/plan-b.log"})
+		round_at(fourth, "wt", "2026-03-02T00:00:01Z", 7, "2026-03-02T00:05:00Z")
+		fourth.execute(
+		    "INSERT INTO dispatch (flow_job_id, module_id, project, phase,"
+		    " worktree_id, started_at, payload)"
+		    " VALUES ('j', 'conduct_plan', 'p', 'ship', 'wt',"
+		    " '2026-03-03T00:00:00Z', NULL)")
+		round_at(fourth, "wt", "2026-03-03T00:00:01Z", 7, "2026-03-03T00:05:00Z")
+		# A dispatch under the VERIFICATION's own lane id. Latent today -
+		# conduct dispatches every module under the round's worktree - but the
+		# group id is folded by _fleet_parent, so an unfolded comparison would
+		# stop matching the day that changed, with nothing saying why.
+		planned(fourth, "wt-verify", "2026-03-04T00:00:00Z", {"attempt": 2})
+		round_at(fourth, "wt", "2026-03-04T00:00:01Z", 7, "2026-03-04T00:05:00Z")
+		fourth.commit()
+		exact = [(r["started_at"], r["attempts"])
+		         for r in cm._fleet_derive_rounds(fourth)]
+		exact.reverse()
+		want_exact = [("2026-03-01T01:00:00Z", 4), ("2026-03-02T00:00:01Z", None),
+		              ("2026-03-03T00:00:01Z", None), ("2026-03-04T00:00:01Z", 2)]
+		if exact != want_exact:
+		    bad.append("the log join reads %r, not %r" % (exact, want_exact))
+
+		# AND A DATABASE WITH NO `dispatch` TABLE MUST NOT RAISE. source_fleet turns
+		# any sqlite error into "unreadable" and blanks every row, which is the
+		# 2026-08-28 failure the optional-column guard exists to stop. This function
+		# is the first thing to make the board depend on a second table.
+		bare = sqlite3.connect(":memory:")
+		bare.row_factory = sqlite3.Row
+		fourth.backup(bare)
+		bare.execute("DROP TABLE dispatch")
+		bare.commit()
+		try:
+		    numbers = [r["attempts"] for r in cm._fleet_derive_rounds(bare)]
+		    if any(n is not None for n in numbers):
+		        bad.append("no dispatch table, yet the rounds claim %r" % numbers)
+		except Exception as exc:  # noqa: BLE001 - any raise here blanks the board
+		    bad.append("a database with no dispatch table raises %r" % (exc,))
+
 		print("\n".join(bad))
 	PY
 	)
@@ -669,6 +802,8 @@ if [ -f "$cm" ] && command -v python3 >/dev/null 2>&1; then
 		printf '%s\n' "$drift" | sed 's/^/    /'
 	else
 		ok "a round mid-gate names its phase, folds its verification and counts neither as done"
+		ok "an attempt number is conduct's own count, and a re-picked task starts again at 1"
+		ok "the log path outranks the timestamp, and three absences answer null rather than raise"
 	fi
 	# AND THE ONE SOURCE THAT MAY NEVER SUPPLY THAT PHASE, asserted by name
 	# because reaching it needs source_fleet and eight tables of fixture.
@@ -683,6 +818,44 @@ if [ -f "$cm" ] && command -v python3 >/dev/null 2>&1; then
 	fi
 else
 	skip "no $cm, or python3 is not installed"
+fi
+
+# ------------------------------------------------------------------------------
+say "Attempt ceiling"
+# ------------------------------------------------------------------------------
+# THE CHECK FLEET_MAX_ATTEMPTS' OWN COMMENT ASKS FOR AND NOBODY WROTE.
+#
+# The collector is stdlib-only and must run on a host where the agents checkout
+# is absent, so conduct's MAX_ATTEMPTS is copied rather than imported - and the
+# copy stayed at 2 when conduct moved to 3 on 2026-08-28. Nothing failed, no test
+# noticed, and the board would have drawn "attempt 3 of 2" the first time a
+# change used its third. The comment says it out loud: "A second copy of a fact
+# is a thing to check when the first one moves."
+#
+# It is the DENOMINATOR of the number the leg above fixes, so a correct attempt
+# drawn against a stale ceiling is still a wrong sentence.
+conf=""
+for candidate in "${AGENTS_REPO:-}" ../agents /var/agents; do
+	if [ -n "$candidate" ] && [ -f "$candidate/conduct/config.py" ]; then
+		conf="$candidate/conduct/config.py"
+		break
+	fi
+done
+if [ -n "$conf" ] && [ -f "$cm" ]; then
+	theirs=$(sed -n 's/^MAX_ATTEMPTS *= *\([0-9][0-9]*\).*/\1/p' "$conf" | head -1)
+	ours=$(sed -n 's/^FLEET_MAX_ATTEMPTS *= *\([0-9][0-9]*\).*/\1/p' "$cm" | head -1)
+	if [ -z "$theirs" ] || [ -z "$ours" ]; then
+		# NOT A PASS. Either name having moved is exactly the drift this exists
+		# to catch, and a grep that finds nothing must not read as agreement.
+		bad "could not read MAX_ATTEMPTS ($conf) or FLEET_MAX_ATTEMPTS ($cm)"
+	elif [ "$theirs" != "$ours" ]; then
+		bad "FLEET_MAX_ATTEMPTS is $ours and conduct's MAX_ATTEMPTS is $theirs - the"
+		printf '        board would draw every attempt against the wrong ceiling\n'
+	else
+		ok "FLEET_MAX_ATTEMPTS $ours matches conduct MAX_ATTEMPTS $theirs"
+	fi
+else
+	skip "the agents checkout is not beside this one (set AGENTS_REPO to point at it)"
 fi
 
 echo

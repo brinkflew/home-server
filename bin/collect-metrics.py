@@ -3009,7 +3009,7 @@ FLEET_ROUNDS = 40
 #
 # chain.done is APPEND-ONLY WITHIN A ROUND and chain_restart clears it wholesale,
 # so progress is progress through the CURRENT attempt. The board prints
-# "attempt N of 2" beside it; without that a second attempt reads as lost work.
+# "attempt N of 3" beside it; without that a second attempt reads as lost work.
 FLEET_PHASES = ("plan", "dev", "verify", "review", "ship")
 
 # The window and the floor for the ETA. A median needs enough runs behind it to
@@ -3206,6 +3206,142 @@ def _fleet_parent(worktree_id):
     return text
 
 
+def _fleet_number_rounds(conn, rounds):
+    """Stamp each round with the attempt number conduct itself counted.
+
+    IT USED TO BE COUNTED HERE AND THAT WAS THE BUG. This function's predecessor
+    numbered a task's rounds 1, 2, 3... in order of appearance inside the 400-row
+    window, and the board drew that number against `FLEET_MAX_ATTEMPTS`. The two
+    are not the same quantity. `MAX_ATTEMPTS` bounds a CHAIN: `chain_open`
+    selects on `closed_at IS NULL`, so a task re-picked after its chain closed -
+    a stopped round, a failed flow, a publication - starts again at 1. Counting
+    every round the task ever had against a per-chain ceiling gave task 1264
+    **"attempt 5 of 3"** on 2026-09-08, on the round that shipped: three separate
+    chains, numbered by conduct 1 | 1 | 1,2,3.
+
+    THE NUMBER IS ALREADY IN THIS DATABASE, and nothing had to be added to
+    conduct to read it. `poll._plan_step` takes it from `chain_open` and returns
+    it in the plan step's payload, and `state.dispatch_answer` writes that
+    payload as JSON onto the `conduct_plan` row of `dispatch`. So it is durable,
+    it is per FLOW JOB rather than per worktree, and unlike `chain.attempts` the
+    next round does not overwrite it - which is the same reason `_round_card`
+    prefers the dispatch copy of the approval card.
+
+    TWO JOINS, AND THE FIRST ONE IS EXACT. The plan step's payload carries the
+    `log` path of the phase it ran, and `run.log` is the same string - conduct
+    added that column so a reader holding a run row would not have to rebuild the
+    filename. So where both exist the round and its dispatch are matched by
+    identity and no arithmetic is involved at all. `run.log` is a MIGRATION
+    rather than an original column, so it is absent on older rounds - 14 of the
+    24 on the live host have it - and those fall through to the second join.
+
+    THE SECOND JOIN IS THE LAST DISPATCH BEFORE THE PLAN RUN, and its ordering is
+    safe by CONSTRUCTION rather than by measurement. `poll._conduct_steps` writes
+    the dispatch row and commits it before it calls the handler that reaches
+    `state.start_run`, so the dispatch can never be later than the run whatever
+    `prepare_worktree` costs that day. The measured gap is 0-1 seconds across
+    every round in the history; nothing here depends on that number.
+
+    `skipped` IS THE DISCRIMINATOR, NOT THE ORDERING. A repair and a resume both
+    write a `conduct_plan` dispatch carrying an attempt synthesised off the chain
+    row, and neither runs a planning phase - so neither starts a round group
+    here, and either would be a plausible wrong answer for the round that
+    follows it. Excluding them by the key they carry is what makes the pairing
+    exact: 30 `conduct_plan` rows on the live host, 6 of them skipped, and the
+    remaining 24 pairing one-to-one AND IN ORDER with the 24 `plan` run rows.
+    Three of those 24 predate the `attempt` key and still read None - the pairing
+    is one-to-one, the numbering is not. Taking merely the latest row happens to
+    agree on that data and stops doing so the moment a round's own dispatch is
+    missing.
+
+    THE FLOOR IS THE PREVIOUS RUN ON THE LANE, not the previous round, and the
+    difference is a whole class of wrong answer. A worktree is reused between
+    changes, which is the trap this repository has paid for in four other
+    readers, so a plan run with no dispatch of its own must read None rather than
+    inherit somebody else's finished work. Three ways that happens and none is
+    exotic: a hand `conduct run --phase plan`, a payload written before the key
+    existed, and `reconcile` calling `state.dispatch_forget` on a row nobody
+    answered - which is what being killed mid-phase looks like, and the reboot
+    window does that deliberately.
+
+    ONE EDGE IS LEFT OPEN AND SAYING SO IS THE POINT. The oldest group on a lane
+    has no previous run inside the window to be floored by, so if its own
+    dispatch is missing it can still reach a dispatch from a round that aged out.
+    It is bounded to one round per lane per window, the exact join above closes
+    it for every round since `run.log` shipped, and there is no honest bound
+    available for the rest - a time window would be the magic constant this
+    derivation exists to avoid.
+
+    A REPAIR IS NOT VISIBLE HERE, deliberately. `chain_repair` increments
+    conduct's counter and runs dev and the gate without a planning phase, so it
+    opens no round and leaves no plan run to read. The round it happened inside
+    keeps the number its own plan saw, which is why task 1254 reads 1 and then 3.
+    `source_fleet` overrides the round in flight from `chain.attempts`, which
+    does count them; a closed round's gap is the only record, and it is one.
+
+    None RATHER THAN A GUESS in every way this can fail: no matching dispatch, a
+    payload that does not parse or carries no number, and a group with no plan
+    run. The browser renders the line only above 1, so a null costs nothing; a
+    wrong number is a claim about whether the fleet is close to giving up.
+    """
+    for group in rounds:
+        group["attempts"] = None
+
+    # THE TABLE ITSELF IS OPTIONAL, and this guard is not the same one the run
+    # columns get. `dispatch` is in conduct's base SCHEMA rather than in its
+    # MIGRATIONS, so it cannot be missing from a database that has `run` - but
+    # this function is the first thing to make the round board depend on a second
+    # table, and `source_fleet` turns any sqlite error into "the database is
+    # unreadable" and blanks every row. `pragma_table_info` answers empty for an
+    # absent table as well as an absent column, so one helper covers both.
+    if not _fleet_has(conn, "dispatch", "payload"):
+        return
+
+    # ONE QUERY FOR THE WHOLE BOARD. This runs every 30 seconds, so a per-round
+    # lookup would be twenty-five statements a tick to answer twenty-five
+    # questions off a table that holds barely a hundred rows.
+    plans = []
+    by_log = {}
+    for row in _fleet_rows(conn, """
+        SELECT worktree_id, started_at, payload FROM dispatch
+         WHERE module_id = 'conduct_plan' ORDER BY started_at
+    """):
+        try:
+            payload = json.loads(row.get("payload") or "{}")
+        except ValueError:
+            continue
+        if not isinstance(payload, dict) or payload.get("skipped"):
+            continue
+        attempt = payload.get("attempt")
+        # FOLDED, BECAUSE THE GROUP'S ID IS. `_fleet_parent` has already turned
+        # `<id>-verify` into `<id>` on every round, so comparing a raw dispatch
+        # worktree against it would silently stop matching the day conduct
+        # dispatches a phase under a verification's own lane.
+        plans.append((_fleet_parent(row.get("worktree_id")),
+                      str(row.get("started_at") or ""), attempt))
+        if payload.get("log"):
+            by_log[payload["log"]] = attempt
+
+    # OLDEST FIRST PER WORKTREE, which is the order `rounds` is already in when
+    # this is called - before the filter and before the reverse - so the floor
+    # walks forward with it.
+    for group in rounds:
+        # A GROUP THAT NEVER RAN A PLAN IS NOT A ROUND conduct NUMBERED. It is
+        # the leading group of hand-driven phases the filter below drops, or a
+        # lone verify on a scratch worktree.
+        if "plan" not in group["seen"]:
+            continue
+        attempt = by_log.get(group.get("plan_log"))
+        if attempt is None:
+            worktree = group["worktree_id"]
+            start = str(group.get("started_at") or "")
+            floor = str(group.get("after") or "")
+            for tree, at, value in plans:
+                if tree == worktree and floor < at <= start:
+                    attempt = value
+        group["attempts"] = attempt if isinstance(attempt, int) else None
+
+
 def _fleet_derive_rounds(conn):
     """Reconstruct rounds from the run log, newest first.
 
@@ -3220,15 +3356,25 @@ def _fleet_derive_rounds(conn):
     - chain.attempts counts plan phases. Runs on a worktree before any plan form
     one leading group: that is hand-driven work from before the fleet chose its
     own, it carries no task, and it ages out of the cap.
+
+    WHICH ATTEMPT each round is comes from conduct rather than from counting the
+    groups this builds - see _fleet_number_rounds, and the "attempt 5 of 3" it
+    exists to stop.
     """
     rounds = []
     open_group = {}
+    # THE PREVIOUS RUN ON EACH LANE, which is what floors the attempt
+    # join in _fleet_number_rounds. Not the previous ROUND: a round can
+    # be preceded on its own lane by phases belonging to the one before
+    # it, and the tighter floor is what stops a plan run with no dispatch
+    # of its own inheriting a stranger's number.
+    last_at = {}
     # EVERY COLUMN conduct HAS ADDED SINCE THIS SHIPPED IS OPTIONAL HERE. The
     # two halves deploy separately - the collector arrives with `git pull` and
     # the column with a conduct restart - so a SELECT naming one before the
     # other side has migrated reads as an unreadable database and BLANKS THE
     # WHOLE BOARD. That is not hypothetical; it happened on 2026-08-28.
-    optional = [name for name in ("odoo_task", "error", "branch")
+    optional = [name for name in ("odoo_task", "error", "branch", "log")
                 if _fleet_has(conn, "run", name)]
     rows = _fleet_rows(conn, """
         SELECT id, project, phase, worktree_id, started_at, ended_at, result,
@@ -3277,12 +3423,22 @@ def _fleet_derive_rounds(conn):
                 "tokens_out": 0,
                 "running": False,
                 "failed": False,
+                # BOTH ARE THE ATTEMPT JOIN'S AND NOT THE BROWSER'S,
+                # and both are popped before these rows are emitted.
+                # `after` floors the search; `plan_log` is the exact
+                # match, because conduct puts the plan phase's log path
+                # in the same payload it puts the attempt number in.
+                "after": last_at.get(worktree),
+                "plan_log": None,
             }
             rounds.append(group)
             open_group[worktree] = group
 
         group["phase"] = row["phase"]
         group["seen"].add(row["phase"])
+        if row["phase"] == "plan" and row.get("log"):
+            group["plan_log"] = row["log"]
+        last_at[worktree] = str(row["started_at"] or "")
         # THE PHASE IN FLIGHT IS NOT ONE OF THE PHASES BEHIND IT, and `done` is
         # read as "what is no longer remaining" by three consumers at once: the
         # rail fills a node, phaseLabel counts the numerator, and _fleet_eta
@@ -3328,18 +3484,7 @@ def _fleet_derive_rounds(conn):
         group["running"] = row["result"] is None
         group["failed"] = row["result"] not in (None, "ok")
 
-    # ATTEMPT N OF THE SAME TASK, which is the number chain.attempts used to
-    # carry. Null without a task id, because "attempt 1" about a round whose
-    # task is unknown is a claim rather than a count - every row that predates
-    # run.odoo_task is in that position.
-    seen = {}
-    for group in rounds:
-        task_id = group["odoo_task"]
-        if task_id is None:
-            group["attempts"] = None
-            continue
-        seen[task_id] = seen.get(task_id, 0) + 1
-        group["attempts"] = seen[task_id]
+    _fleet_number_rounds(conn, rounds)
 
     # A GROUP WITH NEITHER A PLAN NOR A TASK IS NOT A TASK'S JOURNEY. It is a
     # phase somebody ran by hand against a scratch worktree - `upskald-probe`
@@ -3374,6 +3519,8 @@ def _fleet_derive_rounds(conn):
         # json.dumps anyway - so dropping it here is both the contract and the
         # thing that would have failed loudly had it been forgotten.
         group.pop("seen", None)
+        group.pop("after", None)
+        group.pop("plan_log", None)
     return rounds
 
 
@@ -3904,6 +4051,15 @@ def source_fleet(m, doc):
                 # the ETA priced the ship phase while the review was running.
                 # The run log is the only thing that knows which phase is in
                 # flight, and _fleet_derive_rounds has already read it.
+                # THE CHAIN STILL WINS FOR THE ROUND IN FLIGHT, and since
+                # _fleet_number_rounds started reading conduct's own number the
+                # two agree rather than compete - both are chain_open's counter,
+                # one live and one as it stood when the plan ran. It is kept
+                # because the live copy knows one thing the derived one cannot:
+                # chain_repair increments it, and a repair re-runs dev and the
+                # gate WITHOUT a planning phase, so it starts no round group and
+                # leaves no plan run to read a number off. A round on its second
+                # attempt after a red gate says so here and nowhere else.
                 row["attempts"] = chain["attempts"] or row["attempts"]
                 row["closed_at"] = None
             else:

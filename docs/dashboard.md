@@ -586,6 +586,36 @@ lease and is folded back, or every round loses its gate and reads 3/5 for ever. 
 fleet choosing work and `check`/`probe`/`hello` are hand-run diagnostics; none is a step in a task's
 journey, and a group with neither a plan nor a task is dropped outright.
 
+**WHICH ATTEMPT A ROUND IS COMES FROM conduct, AND COUNTING THE GROUPS IS THE WRONG QUANTITY.** The
+first version numbered a task's rounds 1, 2, 3... in the order they appear in the window, and the
+board drew that against `FLEET_MAX_ATTEMPTS`. The ceiling bounds a CHAIN: `chain_open` selects on
+`closed_at IS NULL`, so a task re-picked after its chain closed - a stopped round, a failed flow, a
+publication - starts again at 1. Task 1264 was picked three separate times and the round that
+shipped it read **"attempt 5 of 3"**. `_fleet_number_rounds` reads `chain_open`'s own count instead,
+off `dispatch.payload` for the `conduct_plan` module - durable, keyed per flow job, and unlike
+`chain.attempts` not overwritten by the next round, which is the same reason `_round_card` prefers
+the dispatch copy of the approval card. Measured over the whole live history: 30 `conduct_plan`
+rows, 6 of them a repair or a resume marked `skipped`, and the remaining 24 pairing one-to-one and
+in order with the 24 `plan` run rows - though three of those predate the key, so the pairing is
+one-to-one and the numbering is not.
+
+**TWO JOINS, AND THE FIRST IS EXACT.** The same payload carries the plan phase's `log` path and
+`run.log` is the same string, so where both exist the two are matched by identity. `run.log` is a
+migration rather than an original column, so older rounds fall through to the timestamp join - whose
+ordering is guaranteed by CONSTRUCTION and not by the measured second: `poll._conduct_steps` commits
+the dispatch row before it calls the handler that opens the run row. The floor is the previous RUN
+on the lane rather than the previous round, because a plan run with no dispatch of its own - a hand
+run, a payload older than the key, a row `reconcile` forgot - would otherwise inherit a stranger's
+number off a reused worktree.
+
+**SO A GAP IN THE NUMBERS IS INFORMATION.** A repair re-runs dev and the gate on the tree as it
+stands, costs an attempt and runs no planning phase - so it is no row on this board, and task 1254
+reads attempt 1 then attempt 3. Excluding those dispatches by the `skipped` key they carry, rather
+than by taking the latest row, is what makes the pairing exact: on today's data the two agree, and
+they stop agreeing the moment a round's own dispatch is missing. `bin/lint-repo.sh` leg 10 asserts
+all four shapes, and the leg beside it is what keeps `FLEET_MAX_ATTEMPTS` in step with conduct's
+`MAX_ATTEMPTS` - a copy that stayed at 2 for as long as nothing compared them.
+
 **`chain` IS STILL READ, FOR THE ONE THING IT DESCRIBES ACCURATELY**: the round in flight. It
 supplies the approval link and the tracker id, and only to the latest round on its worktree -
 letting an earlier one inherit a live chain row would draw a finished round as though somebody were
@@ -626,7 +656,9 @@ that had already started when it opened - the verification push is what opens th
 **AND A ROUND'S TASK ID CANNOT BE PARSED OUT OF `run.task`.** That column holds the phase's whole
 prompt, which happens to contain the words "(task 1251)". `run.odoo_task` is a column on the conduct
 side for exactly that reason. It fills in **going forward only**: every round run before it stays
-null, renders a disabled chip and hides its attempt line rather than guessing "attempt 1 of 2".
+null and renders a disabled chip. The ATTEMPT line is independent of it: the number is
+conduct's own count, read off the plan step's payload, so a round with no task id can still
+carry one.
 
 **THE RUN BOARD SHOWS FINISHED ROUNDS, AND EVERY OUTCOME ON IT IS STRUCTURAL.** The first cut read
 `chain WHERE closed_at IS NULL`, so a round vanished the moment it closed and `published` and
@@ -643,7 +675,7 @@ neighbour loses a real distinction: the flow ended without opening one, which is
 approval and a seven-day timeout both look like. It is not a round still waiting to publish, and it
 is not a fleet that gave up before the publish path.
 
-**PROGRESS IS `chain.done`, WHICH IS PER ATTEMPT**, so the row keeps printing "attempt N of 2"
+**PROGRESS IS `chain.done`, WHICH IS PER ATTEMPT**, so the row keeps printing "attempt N of 3"
 beside it. `chain_restart` clears that list wholesale when a round starts again - a re-plan is the
 whole point of another round - so 2/5 on attempt 2 is work being redone rather than work that was
 lost, and only the attempt counter says which.
