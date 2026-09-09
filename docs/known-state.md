@@ -5337,3 +5337,54 @@ service on the rack read **memory starved**. Nothing on the host was.
   dies, so `restore_verified_offsite_at` still means the workstation drill and can still go stale
   while the monthly automated run is green. Sharing one key would have held the drill's marker green
   for ever - the two-keys argument, one level up.
+
+### Sourcing .env aborts under set -u, and the unit path structurally cannot see it
+- `set -a; . "$ROOT/.env"; set +a` is the obvious spelling and it DIES.
+  `NTFY_USER_HASH` and two other values are bcrypt hashes - `$2b$10$...` - so the shell expands
+  `$2`, `$1` and `$3` as POSITIONAL PARAMETERS. Under `set -u` that is
+  `/var/home-server/.env: line 251: $2: unbound variable`: a line number in a GENERATED file and no
+  variable name. Without `set -u` it is worse, because it succeeds - the sigils expand to empty and
+  the value is silently truncated at the first one.
+- **The unit path cannot reach it, by construction.** `EnvironmentFile=` sets the sentinel variable
+  the block keys on, so the file is never read: every nightly run fine, the documented by-hand
+  invocation broken. `bin/backup-server.sh` has said "runnable by hand as well as from the unit"
+  since it was written and had not been since the hash entered `.env`. It surfaced only when the
+  idiom was copied into `bin/verify-restore.sh`, where by hand is the FIRST thing anybody runs.
+- The fix is to read the literal - `sed -n "s/^$1=//p"` - for only the keys the script uses, because
+  command substitution does not re-expand its output. Named one by one rather than looped: assigning
+  through a variable name needs `eval`, which is a second expansion pass over the very values this
+  exists to protect. None of the nine values either script needs contains a sigil today, so the
+  by-hand path was abort-prone rather than silently wrong - which is luck, not design.
+
+### A pipeline's last stage writes nothing to the journal if it buffers
+- A FAIL that named none of the files it had just found, and only when run from a timer.
+  `echo "$strays" | sed ... | head -10` prints correctly to a terminal and to a file, and reaches the
+  JOURNAL as nothing at all - so the check emitted `excluded files present in the snapshot:` and then
+  listed none. A finding that sounds specific and identifies nothing, in a job whose only reader is
+  the journal.
+- **Measured in a transient unit, one stage at a time**, rather than reasoned about. With the unit's
+  stdout going to the journal, `printf X | cat` and `printf X | head -10` both arrive EMPTY, while
+  `printf X | sed ...`, `printf X | stdbuf -o0 head -10` and a bare builtin `printf` all arrive. The
+  discriminator is not which program it is, it is WHEN it writes: a child that block-buffers and
+  flushes at exit loses the flush; one that writes as it goes does not.
+- **So the fix is NO CHILD at the end of the pipeline**, not `stdbuf` sprinkled on the ones somebody
+  noticed. A herestring and a builtin `printf` cannot be buffered away.
+- **`bin/backup-server.sh` had it too**, one function over and for longer: its closing
+  `restic snapshots --compact | tail -4` had never once appeared in a nightly journal, every run
+  reading `==> snapshots` followed directly by `Finished`. Nobody had missed it, which is the point -
+  this class of defect removes information without producing a symptom.
+
+### The verification's first real run found a file the backup's own policy forbids
+- `bin/backup-server.sh` step 4 declares `--exclude='lockfile'`, `'*.lock'` and `'*.pid'` because a
+  restored lock file breaks a service quietly - qBittorrent's Qt lockfile records a pid, a hostname
+  and a machine id, and restored onto a host where the hostname differs it makes qBittorrent exit one
+  second after starting. But `ci-artifact-state` is staged at step 3c by `podman unshare cp -r`, which
+  takes NO excludes, so upskald's coverage-ratchet write lock `baselines.json.lock` was in every
+  snapshot. That store holds exactly two files and one of them was the lock.
+- Deleted from the staging copy after the copy rather than filtered during it, because `cp` cannot
+  filter and the staging tree is ours and rebuilt every run; under `podman unshare`, so it does not
+  depend on the `chown` that follows having worked.
+- **The point is not the file, which was harmless.** It is that a policy the backup declares in one
+  place was applied to one staging path and to none of the three beside it, and in the year this
+  repository has had backups nothing had ever looked. The check that found it had been running for
+  eleven minutes.

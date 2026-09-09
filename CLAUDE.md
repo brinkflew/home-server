@@ -1799,6 +1799,20 @@ signal read green.
   not block an OS security update. Two server kinds, two new markers, four ceilings; the workstation
   drill keeps its own key so an automated run cannot hold it green.
 
+### Three things that only break where no unit ever looks
+- **Sourcing `.env` under `set -u` ABORTS**: three values are bcrypt hashes, so the shell expands
+  `$2`/`$1`/`$3` as positional parameters - `line 251: $2: unbound variable`, a line number in a
+  generated file and no variable name. `EnvironmentFile=` sets the sentinel the block keys on, so the
+  unit path never reads the file and cannot see it; `bin/backup-server.sh` claimed to be runnable by
+  hand and had not been for months. Read the literal with `sed`, for only the keys used.
+- **A pipeline's last stage writes NOTHING to the journal if it block-buffers.** Measured a stage at
+  a time in a transient unit: `| cat` and `| head -10` arrive empty, `| sed`, `| stdbuf -o0 head` and
+  a builtin `printf` arrive. So a FAIL named none of the files it had found, and the nightly backup's
+  closing snapshot table had never once appeared. The fix is no child at the end, not `stdbuf`.
+- **The backup declares `--exclude='*.lock'` and applied it to one staging path of four**, so
+  upskald's coverage-ratchet write lock was in every snapshot. Found by the restore verification
+  eleven minutes after it first ran, which is what that check is for.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

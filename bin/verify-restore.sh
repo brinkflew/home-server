@@ -474,10 +474,15 @@ say "Databases"
 #
 # python3's sqlite3 module rather than the sqlite3 CLI, which is not installed
 # on this workstation.
-if ! python3 - "$CONFIG" <<'PY'
+if ! python3 - "$CONFIG" "$C_GRN" "$C_RED" "$C_OFF" <<'PY'
 import os, sqlite3, sys
 
 config = sys.argv[1]
+# The palette is handed in rather than rebuilt, so this leg is dark exactly when
+# the shell half is - i.e. whenever stdout is not a terminal, which is every run
+# from a timer. Left to itself it printed raw escapes into the journal in front of
+# the twenty-odd lines that matter most.
+GRN, RED, OFF = sys.argv[2], sys.argv[3], sys.argv[4]
 MAGIC = b"SQLite format 3\x00"
 ok = bad = 0
 names = []
@@ -504,19 +509,19 @@ for root, dirs, files in os.walk(config):
             result = con.execute("PRAGMA integrity_check").fetchone()[0]
             con.close()
         except Exception as exc:
-            print("  \033[31mFAIL\033[0m  %s does not open: %s" % (rel, exc))
+            print("  %sFAIL%s  %s does not open: %s" % (RED, OFF, rel, exc))
             bad += 1
             continue
         if result == "ok":
             ok += 1
         else:
-            print("  \033[31mFAIL\033[0m  %s: %s" % (rel, result))
+            print("  %sFAIL%s  %s: %s" % (RED, OFF, rel, result))
             bad += 1
 
 if ok:
-    print("  \033[32mPASS\033[0m  %d databases pass integrity_check" % ok)
+    print("  %sPASS%s  %d databases pass integrity_check" % (GRN, OFF, ok))
 if not names:
-    print("  \033[31mFAIL\033[0m  no SQLite databases in the restored tree at all")
+    print("  %sFAIL%s  no SQLite databases in the restored tree at all" % (RED, OFF))
     bad += 1
 
 # By name, because "some databases restored" is not the claim worth making.
@@ -542,9 +547,9 @@ WANTED = {
 }
 for rel, what in WANTED.items():
     if any(n == rel or n.endswith("/" + rel) for n in names):
-        print("  \033[32mPASS\033[0m  %s" % rel)
+        print("  %sPASS%s  %s" % (GRN, OFF, rel))
     else:
-        print("  \033[31mFAIL\033[0m  %s is MISSING - %s" % (rel, what))
+        print("  %sFAIL%s  %s is MISSING - %s" % (RED, OFF, rel, what))
         bad += 1
 
 sys.exit(1 if bad else 0)
@@ -558,10 +563,10 @@ if [ -n "$KEEP" ]; then
 	printf 'restored tree left at %s\n' "$TARGET"
 fi
 if [ "$fails" -gt 0 ]; then
-	printf '\033[31m%d check(s) FAILED - this backup would not fully restore\033[0m\n' "$fails"
+	printf '%s%d check(s) FAILED - this backup would not fully restore%s\n' "$C_RED" "$fails" "$C_OFF"
 	exit 1
 fi
-printf '\033[32mthis snapshot restores\033[0m\n'
+printf '%sthis snapshot restores%s\n' "$C_GRN" "$C_OFF"
 
 # THE MARKER THIS SCRIPT SPENT ITS WHOLE LIFE WITHOUT. Every other backup leg
 # writes one - local_at, offsite_at, offsite_pruned_at, offsite_policy_ok_at,
