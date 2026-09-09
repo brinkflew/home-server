@@ -224,6 +224,27 @@ which is the opposite of what its help text promises and which the Services page
 banner. `source_container_network` skips them because it has no unit check at all and would
 otherwise mint two counter series per runner under an unbounded label - against a store that keeps
 400 days, while `metrics.series_count` grades only live head series and so cannot see it.
+
+**That ceiling is DERIVED as of 2026-09-09, after being picked twice.** It was 4,484 of 4,500 -
+sixteen series, a third of one container - having spent 90% of the remaining room in a single day's
+commit while the check still passed. It is now `SERIES_BASE + 45 per service`, plus ten services of
+chosen slack, **counted from `stacks/` and never from `podman ps`**: ephemeral CI lanes and conduct
+phase containers come and go, so a budget keyed on running containers would breathe by several
+hundred series and grade a different question every hour. A quadlet appears when somebody adds a
+service, which is exactly when the budget should move; a label carrying a path arrives in the
+hundreds and still breaches ten services of slack at once. Note that per-SERVICE is not
+per-container - only 617 of 1,272 `home_server_` series carry a `container` label at all.
+
+**91 series were retired to pay for it, out of 363 that no rule and no page reads.** Unread is not
+unused: most of the rest are diagnostics documented here as load-bearing - `inactive_file` against
+`anon` for the Jellyfin-at-`MemoryHigh` question, `pgsteal` tracking `pgscan`, `nice_usec` for the
+trickplay finding - and they are exactly what a person greps during an incident. Retired only what
+has a native equivalent or no documented use: `home_server_hwmon_temp_celsius` (12; node-exporter
+publishes `node_hwmon_temp_celsius` for the same chips), `home_server_collector_source_duration_seconds`
+(23, self-telemetry), `home_server_container_pids` and `_pids_max` (56, and the limit they carried is
+read straight from the cgroup by `agents.slice_limits`). **The first audit was wrong and only
+measuring caught it**: it reported the whole `home_server_github_runner_*` family as dead when
+`queries.ts` reads nine by name, which would have blanked `/ci`.
 `home_server_containers_ephemeral` is what stops that skip becoming the next silent one, and it is
 what `agents.runners_leaked` reads. **The discriminator is the label's presence, never its value.**
 
@@ -403,6 +424,28 @@ belongs in the MOTD and the dashboard, not on a phone. Where it is not - `deploy
 which is WARN so that a stalled updater cannot block the OS updates it is complaining about not
 getting - **the check needs a targeted rule of its own** (`OsImageStale`, `== 2`, `for: 6h`).
 Adding a WARN check and expecting the generic rule to carry it is the silent half of this.
+
+**Three more targeted rules landed on 2026-09-09, and the section-wide alternative was rejected.**
+Only `capacity`, `agents` and `ci` carry a `home_server_check_status{section=...} == 2` matcher, so
+**nineteen of the twenty-two sections can WARN and page nobody** - `deploy`, `update` and `metrics`
+among them. `OsImageLagging`, `RebootWindowLost` and `MetricsSeriesBudget` are targeted for the same
+reason `OsImageStale` is. A `deploy` section matcher was considered and refused: unlike capacity,
+agents and ci, that section legitimately carries FAILs which `CheckFailing` already delivers, so a
+`== 2` catch-all would newly page for `deploy.pinned` and `deploy.image_tag` as well.
+
+**`OsImageLagging` is NOT a widened `OsImageStale`**, which was the obvious economy. That rule's
+summary says "nothing has STAGED it" and its description recommends `rpm-ostree upgrade`; both are
+false for the lagging case, which fires when staging worked perfectly and nothing APPLIED it - where
+the remedy is `/boot` space or the reboot window and never the updater. An alert whose annotation
+names the wrong remedy costs more than the duplicated threshold it saves.
+
+**`deploy.image_age` measures the booted commit's `base-timestamp`, and that choice is the whole
+check.** Every other age signal on this host keys on `/run/ostree/staged-deployment`'s mtime, which
+rpm-ostreed re-stamps nightly for an unchanged digest - measured. It is graded only while a newer
+deployment exists, so a host correctly running the newest image cannot age into a warn, and the
+deadline is 14 days or **3 when a critical advisory is staged**. A separate advisory check was
+rejected: Fedora ships important advisories on nearly every image, so it would be amber every week
+of the year. See `docs/known-state.md`.
 
 **The bridge is the only image here with no rolling major tag**, which is the objection that ruled
 out VictoriaMetrics for the store. It is accepted on a distinction that holds: VictoriaMetrics would

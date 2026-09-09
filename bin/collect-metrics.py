@@ -1143,10 +1143,12 @@ def _container_cgroup(m, labels, base):
                 ("wios", "container_fs_writes_total", "Write operations.")):
             m.add(metric, counters.get(key), il, help_text, "counter")
 
-    m.add("home_server_container_pids", read_int(os.path.join(base,
-          "pids.current")), labels, "Processes in the cgroup.")
-    m.add("home_server_container_pids_max", read_int(os.path.join(base,
-          "pids.max")), labels, "Process limit, absent when unlimited.")
+    # home_server_container_pids and _pids_max WERE HERE, and were retired on
+    # 2026-09-09: 56 series, no consumer in any rule or page, and - unlike the
+    # cache split and nice_usec above - no documented diagnostic use either.
+    # The limit they carried is asserted directly by agents.slice_limits and
+    # ci.slice_limits, which read the cgroup rather than a scraped copy of it.
+    # Retired to buy headroom under metrics.series_count; see docs/observability.md.
 
 
 def read_kv_io(path):
@@ -1293,39 +1295,30 @@ def source_gpu(m):
 
 
 # ------------------------------------------------------------------------------
-# Temperatures
+# Temperatures - RETIRED, and node-exporter has them
 # ------------------------------------------------------------------------------
-# Read straight out of sysfs rather than by shelling out to `sensors -j`: no
-# fork, and no dependence on lm_sensors' JSON schema staying put.
+# It read straight out of sysfs rather than shelling out to `sensors -j`: no
+# fork, and no dependence on lm_sensors' JSON schema staying put. It was minted
+# rather than taken from node_exporter because that one uses a SLUGIFIED SYSFS
+# PATH as its chip label rather than the chip name, and we would not reproduce
+# that faithfully - a name that is almost the upstream one being the failure the
+# naming rule exists to avoid.
 #
-# Minted rather than taking node_exporter's node_hwmon_temp_celsius, because
-# that one uses a SLUGIFIED SYSFS PATH as its chip label rather than the chip
-# name, and we would not reproduce that faithfully. A name that is almost the
-# upstream one is the failure this whole naming rule exists to avoid.
-
-def source_sensors(m):
-    found = 0
-    for hwmon in sorted(glob.glob("/sys/class/hwmon/hwmon*")):
-        try:
-            chip = read_text(os.path.join(hwmon, "name")).strip()
-        except OSError:
-            continue
-        for path in sorted(glob.glob(os.path.join(hwmon, "temp*_input"))):
-            sensor = os.path.basename(path)[:-len("_input")]
-            millidegrees = read_int(path)
-            if millidegrees is None:
-                continue
-            labels = {"chip": chip, "sensor": sensor}
-            try:
-                labels["label"] = read_text(
-                    os.path.join(hwmon, sensor + "_label")).strip()
-            except OSError:
-                labels["label"] = sensor
-            m.add("home_server_hwmon_temp_celsius", millidegrees / 1000.0,
-                  labels, "Temperature from /sys/class/hwmon.")
-            found += 1
-    if not found:
-        raise RuntimeError("no hwmon temperatures found")
+# RETIRED 2026-09-09, AND THE REASON IS NOT THAT TEMPERATURES DO NOT MATTER.
+# source_sensors minted home_server_hwmon_temp_celsius, 12 series, read by no
+# rule and no page in the four hundred days it was kept - while node-exporter
+# publishes node_hwmon_temp_celsius for the same chips, 14 series, on this host
+# right now. So the choice was never "temperatures or no temperatures"; it was
+# whether to keep a SECOND copy with nicer labels that nothing consulted.
+#
+# The label argument above was, and remains, correct - node-exporter slugifies
+# the sysfs path where this used the chip name. It is an argument for how to
+# mint them WHEN SOMETHING READS THEM. Whoever adds that reader should restore
+# this function from git rather than write it again; the awkward part was the
+# _label fallback, and it was right.
+#
+# Retired to buy headroom under metrics.series_count, alongside container_pids
+# and collector_source_duration_seconds. See docs/observability.md.
 
 
 # ------------------------------------------------------------------------------
@@ -5518,7 +5511,6 @@ SOURCES = (
     ("containers", source_containers, False, None),
     ("container_network", source_container_network, False, None),
     ("gpu", source_gpu, False, None),
-    ("sensors", source_sensors, False, None),
     ("status", source_status, False, None),
     ("agents", source_agents, False, None),
     ("ci", source_ci, False, None),
@@ -5755,7 +5747,6 @@ def main():
             continue
         ran.add(name)
         target = slow if is_slow else m
-        t0 = now()
         try:
             if doc_key:
                 fn(target, docs[doc_key])
@@ -5778,9 +5769,13 @@ def main():
                 wrote_doc.add(doc_key)
         target.add("home_server_collector_source_up", up, {"source": name},
                    "1 when this source produced its series on the last run.")
-        target.add("home_server_collector_source_duration_seconds",
-                   "%.4f" % (now() - t0), {"source": name},
-                   "Wall time for this source.")
+        # home_server_collector_source_duration_seconds WAS HERE, and was
+        # retired on 2026-09-09: 23 series, one per source, read by no rule and
+        # no page. It is pure self-telemetry, and the question it answers - is a
+        # source slow - is answered by metrics.collector_fresh failing and by
+        # `bin/collect-metrics.py --print`, neither of which needs a series per
+        # source kept for four hundred days. collector_source_up stays: that one
+        # has a rule.
 
     # THE SLOW TIER AND THE DOCUMENTS ARE WRITTEN FIRST, and the fast textfile
     # last. The order is load-bearing rather than tidy: a write failure is

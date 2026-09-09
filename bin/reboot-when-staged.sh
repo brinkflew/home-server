@@ -62,7 +62,41 @@ esac
 
 if [ "$(id -u)" = 0 ]; then priv() { "$@"; }; else priv() { sudo -n "$@"; }; fi
 
-refuse() { printf 'reboot-when-staged: NOT rebooting - %s\n' "$1"; exit 0; }
+# EVERY REFUSAL NOW LEAVES A RECORD, because the five that fired on 2026-09-06
+# left none. All five refused for /boot space, the whole window was spent, the
+# host stayed three weeks behind a CRITICAL advisory - and the only trace was in
+# the journal, which nothing grades and which rotates. `reboot.window_run` said
+# the unit ran and exited 0, which was true and told nobody anything: this
+# script exits 0 on every refusal by design, so success and refusal are the same
+# exit code by construction.
+#
+# THE TAG IS A BARE WORD AND NOT THE MESSAGE, for the reason a check id is: the
+# prose is written for a person reading the journal and gets reworded freely,
+# and a reader keying on it is a check that stops firing the first time somebody
+# improves a sentence.
+#
+# NOT under --dry-run, which must change nothing - and NOT for nothing_staged,
+# which is the absence of work rather than a refusal to do it. Recording that
+# would overwrite the last real refusal on every quiet night of the week, which
+# is most of them, and the record would always say "nothing was staged".
+refuse() {  # <tag> <message>
+	local tag="$1"
+	if [ -z "$DRY" ] && [ "$tag" != nothing_staged ]; then
+		# The whole-file rewrite that keeps every key it does not own - the
+		# shape the phase, CI and playback counters below already use, and the
+		# one record() got wrong once by rewriting the file and destroying
+		# twelve keys that belonged to other writers.
+		priv mkdir -p "$(dirname "$STATE")" 2>/dev/null
+		{
+			grep -vE '^window_refused_(at|tag)=' "$STATE" 2>/dev/null
+			echo "window_refused_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+			echo "window_refused_tag=$tag"
+		} | priv tee "$STATE.tmp" >/dev/null
+		priv mv "$STATE.tmp" "$STATE"
+	fi
+	printf 'reboot-when-staged: NOT rebooting - %s\n' "$2"
+	exit 0
+}
 note()   { printf 'reboot-when-staged: %s\n' "$1"; }
 
 # ------------------------------------------------------------------------------
@@ -80,7 +114,7 @@ if [ -n "${HOME_SERVER_STATUS_JSON:-}" ]; then
 else
 	status_json=$(rpm-ostree status --json 2>/dev/null)
 fi
-[ -n "$status_json" ] || refuse "rpm-ostree status returned nothing"
+[ -n "$status_json" ] || refuse status_unreadable "rpm-ostree status returned nothing"
 
 # INDEX 0 IS WHAT BOOTS NEXT, AND `select(.staged)` IS NOT - see the long note at
 # next_dep in bin/verify-host.sh. Written the obvious way this gate was blind to
@@ -90,7 +124,7 @@ fi
 # it, so the deployment stays unbooted and its /boot slot stays spent, every
 # Sunday, for ever, with no human in the loop. Found on 2026-08-18.
 staged=$(jq -r '.deployments[0] | select(.booted | not) | .version // empty' <<<"$status_json")
-[ -n "$staged" ] || refuse "nothing is waiting to boot"
+[ -n "$staged" ] || refuse nothing_staged "nothing is waiting to boot"
 
 # WOULD THIS REBOOT APPLY IT, OR ROLL BACK? custom.cfg selects the PREVIOUS
 # deployment whenever boot_counter is set and boot_success is 0, and boot_success
@@ -104,7 +138,7 @@ staged=$(jq -r '.deployments[0] | select(.booted | not) | .version // empty' <<<
 # This does NOT deadlock, which is the trap this repo has hit three times: the
 # marker is clearable without a reboot, and the refusal names how.
 grub_counter=$(priv grub2-editenv "$GRUBENV" list 2>/dev/null | sed -n 's/^boot_counter=//p' | tail -1)
-[ -z "$grub_counter" ] || refuse "GRUB is armed to boot the FALLBACK (boot_counter=$grub_counter);
+[ -z "$grub_counter" ] || refuse grub_fallback_armed "GRUB is armed to boot the FALLBACK (boot_counter=$grub_counter);
   this reboot would roll back rather than apply $staged.
   Understand why, then:  sudo $REPO/bin/clear-red-boot.sh"
 
@@ -143,7 +177,35 @@ else
 	fi
 fi
 uptime_d=$(( $(cut -d. -f1 /proc/uptime) / 86400 ))
-note "staged $staged (${staged_age_d}d ago), $depl_count deployment(s) on disk, up ${uptime_d}d"
+
+# HOW LONG THE HOST HAS BEEN BEHIND, which is the only one of the three clocks
+# below that nothing local can reset - and the one that was missing.
+#
+# The comment at the escalation predicted staged_age_d resetting "when a new
+# image supersedes it" and called that right. It is worse than that: MEASURED on
+# 2026-09-09, rpm-ostreed re-stamped /run/ostree/staged-deployment at 08:21 for
+# an UNCHANGED digest, the same 44.20260817.3.2 that had been staged for days.
+# So the clock resets nightly whether or not anything moved, staged_age_d is
+# pinned near zero for ever, and ESCALATE_STAGED_D=14 was unreachable rather
+# than merely slow. Only the uptime backstop could ever fire.
+#
+# base-timestamp is the commit's own build time. It moves when the CONTENT
+# moves, so nothing on this host can touch it. Same derivation as
+# deploy.image_age in bin/verify-host.sh, deliberately - two readers, one
+# definition of "behind".
+booted_base_ts=$(jq -r '(.deployments[] | select(.booted)
+	| .["base-timestamp"]) // empty' <<<"$status_json" 2>/dev/null)
+if [ -n "${HOME_SERVER_IMAGE_LAG_DAYS:-}" ]; then
+	image_lag_d="$HOME_SERVER_IMAGE_LAG_DAYS"
+elif [ -n "${booted_base_ts:-}" ]; then
+	image_lag_d=$(( ( $(date +%s) - booted_base_ts ) / 86400 ))
+else
+	# Unknown is not "fresh". Zero disables only the escalation, never a
+	# refusal, so the safe direction here is the one that keeps refusing.
+	image_lag_d=0
+fi
+
+note "staged $staged (${staged_age_d}d ago), booted image ${image_lag_d}d old, $depl_count deployment(s) on disk, up ${uptime_d}d"
 
 # ------------------------------------------------------------------------------
 # Would greenboot be able to undo this?
@@ -151,10 +213,10 @@ note "staged $staged (${staged_age_d}d ago), $depl_count deployment(s) on disk, 
 # Rebooting into a new deployment with no safety net is exactly the attended
 # procedure, and this is not attended. Both halves have to be there: the check in
 # required.d, and the GRUB counter - either alone is inert, silently.
-[ -x /usr/libexec/greenboot/greenboot ] || refuse "greenboot is not installed - a bad deployment could not roll itself back"
-[ -e /etc/greenboot/check/required.d/40-home-server.sh ] || refuse "the health check is not in required.d - greenboot would only log"
-[ -f /boot/grub2/custom.cfg ] || refuse "no GRUB boot counter - greenboot could not roll back"
-[ "$depl_count" -ge 2 ] || refuse "only $depl_count deployment - there would be nothing to roll back to"
+[ -x /usr/libexec/greenboot/greenboot ] || refuse greenboot_missing "greenboot is not installed - a bad deployment could not roll itself back"
+[ -e /etc/greenboot/check/required.d/40-home-server.sh ] || refuse greenboot_not_required "the health check is not in required.d - greenboot would only log"
+[ -f /boot/grub2/custom.cfg ] || refuse greenboot_no_counter "no GRUB boot counter - greenboot could not roll back"
+[ "$depl_count" -ge 2 ] || refuse no_rollback "only $depl_count deployment - there would be nothing to roll back to"
 
 # ------------------------------------------------------------------------------
 # Did the last attempt end badly?
@@ -176,10 +238,10 @@ red_csum=$(sed -n 's/^red_boot_csum=//p' "$STATE" 2>/dev/null | tail -1)
 if [ -n "$red" ]; then
 	next_csum=$(jq -r '.deployments[0].checksum // empty' <<<"$status_json")
 	if [ -z "$red_csum" ]; then
-		refuse "a deployment was rejected at $red and nobody has cleared it.
+		refuse red_boot_uncleared "a deployment was rejected at $red and nobody has cleared it.
   Understand why, then:  sudo $REPO/bin/clear-red-boot.sh"
 	elif [ "$red_csum" = "$next_csum" ]; then
-		refuse "this is the SAME deployment greenboot rejected at $red (${red_csum:0:12}).
+		refuse red_boot_same_deployment "this is the SAME deployment greenboot rejected at $red (${red_csum:0:12}).
   Rebooting would repeat it. Understand why, then:  sudo $REPO/bin/clear-red-boot.sh"
 	else
 		note "a deployment was rejected at $red (${red_csum:0:12}), but ${next_csum:0:12} is a different one - proceeding"
@@ -194,7 +256,7 @@ fi
 # host-level battery, for the same reason greenboot uses it - a slow Tdarr start
 # is not a reason to postpone an OS update for ever.
 "$REPO/bin/verify-host.sh" --greenboot >/dev/null 2>&1 \
-	|| refuse "verify-host.sh --greenboot fails now - fix that before applying a new deployment"
+	|| refuse battery_unhealthy "verify-host.sh --greenboot fails now - fix that before applying a new deployment"
 
 # THE SLOT IS ONLY NEEDED IF A KERNEL HAS TO BE WRITTEN, and only a STAGED
 # deployment writes one - ostree-finalize-staged does it at shutdown. A PENDING
@@ -223,18 +285,18 @@ boot_free=$(df -Pm /boot 2>/dev/null | awk 'NR==2 {print $4}')
 # were room. bin/verify-host.sh carries the same guard on the same number and
 # says the same thing; this copy did not have it.
 case "${boot_free:-}" in
-	''|*[!0-9]*) refuse "/boot free space could not be read ('${boot_free:-}') - and unknown is not room" ;;
+	''|*[!0-9]*) refuse boot_space_unknown "/boot free space could not be read ('${boot_free:-}') - and unknown is not room" ;;
 esac
 next_staged=$(jq -r '.deployments[0] | select(.booted | not) | select(.staged) | .version // empty' <<<"$status_json")
 if [ "$boot_free" -lt "$BOOT_MIN_MB" ] && [ -n "$next_staged" ]; then
-	refuse "/boot has only ${boot_free}M free (want ${BOOT_MIN_MB}M) and $next_staged is STAGED - finalizing it needs a slot.
+	refuse boot_space "/boot has only ${boot_free}M free (want ${BOOT_MIN_MB}M) and $next_staged is STAGED - finalizing it needs a slot.
   home-server-boot-reclaim.timer exists to stop this happening; check it:
     systemctl --user status home-server-boot-reclaim.service
     $REPO/bin/reclaim-boot-slot.sh --dry-run"
 fi
 
 pinned=$(jq '[.deployments[] | select(.pinned)] | length' <<<"$status_json")
-[ "$pinned" -eq 0 ] || refuse "$pinned deployment(s) pinned - unpin and 'rpm-ostree cleanup -r' first"
+[ "$pinned" -eq 0 ] || refuse pinned "$pinned deployment(s) pinned - unpin and 'rpm-ostree cleanup -r' first"
 
 # THE BACKUP GATE BELONGS HERE, NOT IN THE UNIT. home-server-reboot.service
 # carries After=home-server-backup.service and that does NOT do what it looks
@@ -260,7 +322,7 @@ pinned=$(jq '[.deployments[] | select(.pinned)] | length' <<<"$status_json")
 backup_state=$(systemctl --user show home-server-backup.service -p ActiveState --value 2>/dev/null)
 case "$backup_state" in
 	inactive|failed|"") ;;
-	*) refuse "the backup is $backup_state - rebooting through restic leaves a partial snapshot and a lock in the off-site repository" ;;
+	*) refuse backup_running "the backup is $backup_state - rebooting through restic leaves a partial snapshot and a lock in the off-site repository" ;;
 esac
 
 # AND THE RECLAIM, RECIPROCALLY. bin/reclaim-boot-slot.sh refuses while this
@@ -272,7 +334,7 @@ esac
 reclaim_state=$(systemctl --user show home-server-boot-reclaim.service -p ActiveState --value 2>/dev/null)
 case "$reclaim_state" in
 	inactive|failed|"") ;;
-	*) refuse "the /boot slot reclaim is $reclaim_state - it may be inside 'rpm-ostree cleanup -r'" ;;
+	*) refuse reclaim_running "the /boot slot reclaim is $reclaim_state - it may be inside 'rpm-ostree cleanup -r'" ;;
 esac
 
 # A PHASE IS MID-FLIGHT, AND ONLY A MARKER CAN SAY SO. conduct is a long-running
@@ -331,7 +393,7 @@ if [ "${phase_flag:-0}" = 1 ] && [ -n "$phase_hb_age" ] && [ "$phase_hb_age" -le
 			} | priv tee "$STATE.tmp" >/dev/null
 			priv mv "$STATE.tmp" "$STATE"
 		fi
-		refuse "conduct has a phase in flight (heartbeat ${phase_hb_age}s ago) - a reboot would kill it mid-run.
+		refuse phase_in_flight "conduct has a phase in flight (heartbeat ${phase_hb_age}s ago) - a reboot would kill it mid-run.
   Refusal $((prev_n + 1)) of 2 this morning; the next attempt applies anyway."
 	fi
 fi
@@ -412,7 +474,7 @@ if [ -n "$ci_busy_lane" ]; then
 			} | priv tee "$STATE.tmp" >/dev/null
 			priv mv "$STATE.tmp" "$STATE"
 		fi
-		refuse "CI lane $ci_busy_lane has a job in flight (heartbeat ${ci_busy_age}s ago) - a reboot would kill it, and GitHub does not re-queue a job whose runner disappeared.
+		refuse ci_in_flight "CI lane $ci_busy_lane has a job in flight (heartbeat ${ci_busy_age}s ago) - a reboot would kill it, and GitHub does not re-queue a job whose runner disappeared.
   Refusal $((ci_prev_n + 1)) of 2 this morning; the next attempt applies anyway."
 	fi
 fi
@@ -436,7 +498,7 @@ fi
 # STOPPED Jellyfin as 0 rather than unknown, so this cannot refuse merely
 # because the media server is down.
 watching=$("$REPO/bin/jellyfin-watching.sh") ||
-	refuse "jellyfin is running and could not be asked whether anyone is watching - unknown is not idle"
+	refuse playback_unknown "jellyfin is running and could not be asked whether anyone is watching - unknown is not idle"
 if [ "${watching:-0}" -gt 0 ]; then
 	# THE COUNT IDIOM, NOT THE ENCODER'S AGE IDIOM, and for the reason the phase
 	# gate above gives: this costs what a killed phase costs, not what a killed
@@ -464,7 +526,7 @@ if [ "${watching:-0}" -gt 0 ]; then
 			} | priv tee "$STATE.tmp" >/dev/null
 			priv mv "$STATE.tmp" "$STATE"
 		fi
-		refuse "$watching Jellyfin session(s) are playing - a reboot would cut the stream.
+		refuse playback_active "$watching Jellyfin session(s) are playing - a reboot would cut the stream.
   Refusal $((prev_n + 1)) of 2 this morning; the next attempt applies anyway."
 	fi
 fi
@@ -488,7 +550,7 @@ fi
 enc_raw="${HOME_SERVER_ENCODER_PCT:-}"
 if [ -z "$enc_raw" ]; then
 	enc_raw=$(nvidia-smi --query-gpu=utilization.encoder --format=csv,noheader,nounits 2>/dev/null)
-	[ -n "$enc_raw" ] || refuse "nvidia-smi answered nothing - cannot tell whether a transcode is running, and unknown is not idle"
+	[ -n "$enc_raw" ] || refuse encoder_unknown "nvidia-smi answered nothing - cannot tell whether a transcode is running, and unknown is not idle"
 fi
 enc=$(awk '{s+=$1} END {print s+0}' <<<"$enc_raw")
 
@@ -503,21 +565,32 @@ enc=$(awk '{s+=$1} END {print s+0}' <<<"$enc_raw")
 # unapplied security update for a month is a RISK. Past the thresholds the cost
 # is the cheaper of the two and the encoder stops being a veto.
 #
-# Two clauses, because they fail differently:
+# THREE clauses, because they fail differently - and the third was added on
+# 2026-09-09 when the first turned out to be inert rather than slow:
 #
-#   staged_age_d  how long THIS deployment has waited. Resets when a new image
-#                 supersedes it, which is right - the new one gets its own
-#                 chances - but on a stream that publishes weekly it would then
-#                 never reach 14 and could never fire.
-#   uptime_d      the backstop for exactly that. Nothing resets it except the
-#                 reboot this script exists to perform, so it cannot be starved.
+#   staged_age_d  how long THIS deployment has waited. Kept, because it is still
+#                 the right thing to say to a person reading the journal - but
+#                 it is NOT load-bearing any more. rpm-ostreed re-stages
+#                 nightly, measurably for an unchanged digest, so it is pinned
+#                 near zero and this clause has never once fired.
+#   image_lag_d   how long the host has been BEHIND, from the booted commit's
+#                 own base-timestamp. Nothing local resets it, so it is what
+#                 the first clause was always meant to be.
+#   uptime_d      the backstop for both. Nothing resets it except the reboot
+#                 this script exists to perform, so it cannot be starved.
+#
+# The threshold is shared between the first two on purpose: 14 days is the point
+# this file already judged a killed transcode cheaper than more delay, and that
+# judgement was never about which clock measured it.
 ESCALATE_STAGED_D=14
 ESCALATE_UPTIME_D=30
 if [ "$enc" -ne 0 ]; then
-	if [ "$staged_age_d" -ge "$ESCALATE_STAGED_D" ] || [ "$uptime_d" -ge "$ESCALATE_UPTIME_D" ]; then
-		note "the encoder is busy (${enc}%) but this deployment has waited ${staged_age_d}d and the host has been up ${uptime_d}d - applying anyway. A transcode will be killed; Tdarr re-queues it and the source is hardlinked."
+	if [ "$staged_age_d" -ge "$ESCALATE_STAGED_D" ] \
+		|| [ "$image_lag_d" -ge "$ESCALATE_STAGED_D" ] \
+		|| [ "$uptime_d" -ge "$ESCALATE_UPTIME_D" ]; then
+		note "the encoder is busy (${enc}%) but this deployment has waited ${staged_age_d}d, the booted image is ${image_lag_d}d old and the host has been up ${uptime_d}d - applying anyway. A transcode will be killed; Tdarr re-queues it and the source is hardlinked."
 	else
-		refuse "the encoder is busy (${enc}%) - a transcode would be killed (waited ${staged_age_d}d of ${ESCALATE_STAGED_D}, up ${uptime_d}d of ${ESCALATE_UPTIME_D}; past either it applies anyway)"
+		refuse encoder_busy "the encoder is busy (${enc}%) - a transcode would be killed (waited ${staged_age_d}d of ${ESCALATE_STAGED_D}, image ${image_lag_d}d of ${ESCALATE_STAGED_D}, up ${uptime_d}d of ${ESCALATE_UPTIME_D}; past any of the three it applies anyway)"
 	fi
 fi
 

@@ -5546,3 +5546,76 @@ service on the rack read **memory starved**. Nothing on the host was.
 - **`commitmentRow` in `src/system.ts` has no consumer anywhere** - written for a commitment TABLE
   that was never built, and there are no per-consumer ceilings published to build one from:
   `bin/verify-host.sh` sums four of them and publishes only the total.
+
+## The clock the updater resets, and the ceiling that was picked twice
+
+- **THE HOST RAN 21 DAYS BEHIND A CRITICAL ADVISORY AND ALL 141 CHECKS WERE GREEN.** Booted
+  `44.20260802.3.1`, staged `44.20260817.3.2` carrying 4 moderate, 2 important and **1 critical**
+  security advisory. `deploy.image_digest` returns `ok` whenever the published image is merely
+  STAGED - which is correct, and is the ordinary shape six days a week - so it never leaves `pass`,
+  and `OsImageStale` keys on `== 2`. The one alert written for a host that stops taking OS updates
+  could not fire in the one state the host actually gets stuck in.
+- **EVERY AGE SIGNAL KEYED ON A CLOCK THE UPDATER RESETS NIGHTLY.** `staged_age_d` reads
+  `/run/ostree/staged-deployment`'s mtime, and rpm-ostreed re-stages on its own timer whether or not
+  anything moved: MEASURED 2026-09-09, the file was re-stamped at 08:21 for the SAME digest
+  `fc15fc0d5277` that had been staged for days, so the age read 0. `ESCALATE_STAGED_D=14` in
+  `bin/reboot-when-staged.sh` and the MOTD's 7-day escalation were therefore **unreachable rather
+  than slow**, and only the uptime backstop could ever fire. The file's own comment predicted the
+  reset would happen "when a new image supersedes it" and called that acceptable; it happens when
+  nothing supersedes it.
+- **`base-timestamp` IS THE ONE THAT SURVIVES.** Two timestamps sit on every deployment and they
+  answer different questions: `timestamp` is when the deployment was WRITTEN, reset by every
+  re-stage; `base-timestamp` is when the image COMMIT was built, and nothing local can touch it.
+  `deploy.image_age` is now `now - booted.base-timestamp`, graded ONLY while a newer deployment
+  exists so a host correctly running the newest image can never age into a warn. Not the version
+  string: `next_dig` already exists twenty lines above because uCore's version is the FCOS build
+  date and does not move on every image change.
+- **A SEPARATE `deploy.sec_advisories` WAS DESIGNED AND REJECTED.** Fedora ships important and
+  moderate advisories on very nearly every image, so a check grading their presence would be amber
+  every week of the year and would page on a schedule rather than on an event - the rule that cried
+  wolf, again. What is actionable is never "a security update exists", because one always does; it
+  is "one has waited longer than its severity justifies". So there is ONE finding and upstream's
+  own scale picks which deadline applies: 14 days, or **3 when a critical is staged**. No second
+  severity scale is invented. The counts are text-only - there is no advisory key anywhere in
+  `rpm-ostree status --json` - and free to read, because `:444` already ran the text form once.
+- **THE WINDOW THAT WAS LOST LEFT NO RECORD AT ALL.** On 2026-09-06 all five attempts refused with
+  "/boot has only 26M free (want 160M)", spending the whole week. `reboot.window_run` said the unit
+  ran and exited 0, which was true and useless: this script exits 0 on every refusal by design, so
+  success and refusal are the same exit code by construction. `refuse()` now takes a bare-word TAG
+  and records it - a tag rather than the message, for the reason a check id is one - and
+  `reboot.window_refused` grades it AGAINST THE APPLY, never the clock, because a window that
+  refused at 05:06 and applied at 09:04 is a window that worked. `nothing_staged` is deliberately
+  not recorded: it is the absence of work rather than a refusal to do it, and recording it would
+  overwrite the last real refusal on every quiet night of the week.
+- **THE CARDINALITY CEILING HAD BEEN PICKED TWICE AND WAS 16 SERIES FROM ITS LIMIT.** 4,484 of
+  4,500 - a third of one container - after a single day's commit took it from 4,315. No alert could
+  see it: `metrics.series_count` is a WARN and the `metrics` section has no section-wide warn
+  matcher, only `capacity`, `agents` and `ci` do, so `CheckFailing` at `== 3` was the only rule that
+  could ever have carried it. And the message it would eventually print named the wrong cause -
+  "look for a label carrying a path, a title, an id or an address" is the right advice for an
+  explosion and the wrong advice for the ordinary growth that was actually about to happen.
+- **THE AUDIT OF WHAT WAS DEAD WAS WRONG, AND ONLY MEASURING CAUGHT IT.** A first pass reported the
+  whole 18-strong `home_server_github_runner_*` family as unconsumed; `apps/dashboard/src/queries.ts`
+  reads nine of them by name, so retiring them would have blanked `/ci`. Computed properly - every
+  live metric name against every rule and every page - it is **363 unread series of 1,273**, and the
+  total was right while the attribution was not. Nothing here is built by concatenation, checked,
+  so an exact match was safe; that is the trap leg 9 and `uncovered()` have each hit once.
+- **UNREAD IS NOT UNUSED, AND ONLY 91 WERE RETIRED.** Most of the 363 are diagnostics this
+  repository documents as load-bearing - `inactive_file` against `anon` for the Jellyfin-at-
+  `MemoryHigh` question, `pgsteal` tracking `pgscan`, `nice_usec` for the trickplay CPU finding -
+  unread by a consumer and precisely what a person greps during an incident. Retired only what has
+  a native equivalent or no documented use: `hwmon_temp_celsius` (12, node-exporter publishes
+  `node_hwmon_temp_celsius` for the same chips on this host), `collector_source_duration_seconds`
+  (23, pure self-telemetry), `container_pids` and `_pids_max` (56, and the limit they carried is
+  asserted directly from the cgroup by `agents.slice_limits`). The label argument that justified
+  minting temperatures rather than taking node-exporter's is still correct - it is an argument for
+  how to mint them WHEN SOMETHING READS THEM, and the function is in git.
+- **SO THE CEILING IS DERIVED NOW, and every term has a name**: `SERIES_BASE` (what the store costs
+  with no services, measured), `+ 45 per service` (the marginal, unchanged - note only 617 of 1,272
+  `home_server_` series carry a `container` label at all, so per-service is not per-container), and
+  ten services of chosen slack. **Counted from `stacks/`, never from `podman ps`** - the authority
+  `update.policy_count` already uses - because ephemeral CI lanes and conduct phase containers come
+  and go, and a budget keyed on running containers would breathe by several hundred series and grade
+  a different question every hour. A quadlet appears when somebody adds a service, which is exactly
+  when the budget should move. The label-explosion property survives: hundreds of series arrive at
+  once and still breach ten services of slack.

@@ -1864,6 +1864,29 @@ signal read green.
   collector's first version meant no column had every series finite. The legend still listed them.
 - `commitmentRow` has no consumer, and no per-consumer ceiling is published to build one from.
 
+### The clock the updater resets, and the ceiling that was picked twice
+- **The host ran 21 days behind a CRITICAL advisory with all 141 checks green.** `deploy.image_digest`
+  returns `ok` while an image is merely STAGED - correct, and the ordinary shape six days a week - so
+  it never reaches the `== 2` that `OsImageStale` fires on. The alert written for a host that stops
+  taking OS updates could not fire in the state it actually gets stuck in.
+- **Every age signal keyed on a clock the updater resets nightly**: rpm-ostreed re-stamped
+  `/run/ostree/staged-deployment` for an UNCHANGED digest, so `ESCALATE_STAGED_D=14` and the MOTD's
+  7-day escalation were unreachable rather than slow. `base-timestamp` is the one nothing local can
+  touch, and `deploy.image_age` grades it only while something newer exists.
+- A separate advisory check was designed and REJECTED - Fedora ships important advisories on nearly
+  every image, so it would be amber every week. One finding, and upstream's scale picks the deadline:
+  14 days, or 3 when a critical is staged.
+- **A lost window left no record**: five refusals spent the 2026-09-06 window and this script exits 0
+  on every refusal by design, so success and refusal are the same exit code. `refuse()` records a
+  bare-word TAG now, and `reboot.window_refused` grades it against the APPLY, never the clock.
+- **The series ceiling had been picked twice and was 16 from its limit**, with no rule able to see it:
+  the `metrics` section has no warn matcher, so `CheckFailing` at `== 3` was its only reader.
+- **The first audit of what was dead was wrong** - it called the `github_runner_*` family unconsumed
+  while the dashboard reads nine by name, which would have blanked `/ci`. Measured properly it is 363
+  of 1,273, and **only 91 were retired**: unread is not unused, and most of the rest are diagnostics
+  this repo documents as load-bearing. The ceiling is derived now, counted from `stacks/` and never
+  from `podman ps`, or ephemeral CI lanes make it breathe.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless
@@ -1914,8 +1937,15 @@ Remaining, in order:
    re-derived to 4,500 on 2026-08-19. A container is 41-45 series, measured, which is what makes
    "one more service" a number rather than a shrug.
 
+   **Re-picking that number a third time was refused on 2026-09-09, and the ceiling is DERIVED
+   now.** It had reached 4,484 of 4,500 - sixteen series, a third of one container - having spent
+   90% of the remaining room in a single day's commit, with the check still passing and no alert
+   able to fire. `SERIES_BASE + 45 per service + ten services of slack`, counted from `stacks/`
+   rather than from `podman ps` so ephemeral CI lanes cannot make it breathe. Ordinary growth now
+   moves the ceiling with itself and a label carrying a path still breaches at once.
+
    **The notification path is done too, 2026-08-15**, which closes this item. Prometheus rules ->
-   Alertmanager -> ntfy-alertmanager -> ntfy -> phone, 37 rules in seven groups, at
+   Alertmanager -> ntfy-alertmanager -> ntfy -> phone, in seven groups, at
    `ntfy.avanserv.com`. See `docs/observability.md`. Prometheus having alerting rules built in is part of why it
    was chosen over a store needing a second container for them, and that paid off exactly as
    expected.

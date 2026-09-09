@@ -243,7 +243,17 @@ fi
 # unattended; the reboot is a separate, human act.
 # ------------------------------------------------------------------------------
 say deploy "Deployment"
-status_json=$(rpm-ostree status --json 2>/dev/null)
+# THE SAME OVERRIDE bin/reboot-when-staged.sh CARRIES, for the same reason it
+# gives: most of the interesting deployment states - staged, pending, lagging,
+# advisory-bearing - cannot be produced on demand on a healthy host, and an
+# untestable branch is the same shape as a check that cannot fail. This
+# repository has found enough of those. Both are read only from the environment,
+# so nothing in the unit path can reach them.
+if [ -n "${HOME_SERVER_STATUS_JSON:-}" ]; then
+	status_json=$(cat "$HOME_SERVER_STATUS_JSON" 2>/dev/null)
+else
+	status_json=$(rpm-ostree status --json 2>/dev/null)
+fi
 if [ -z "$status_json" ]; then
 	bad deploy.booted "rpm-ostree status returned nothing"
 	booted_ver="?" next_ver="" next_finalized="" pinned_count=0
@@ -439,9 +449,20 @@ fact next_finalized  "${next_finalized:-}"
 fact deployments     "${depl_count:-}"   num
 fact pinned          "${pinned_count:-}" num
 
+# READ ONCE, PARSED TWICE. The text form carries two things the JSON does not:
+# the effective policy, and SecAdvisories. There is no advisory key anywhere in
+# `rpm-ostree status --json` - checked - so the severities that decide whether a
+# lagging host is a Sunday problem or a tonight problem are only available here.
+# Asking rpm-ostree a question starts the daemon, so this must stay ONE call.
+if [ -n "${HOME_SERVER_RPM_OSTREE_TEXT:-}" ]; then
+	status_text=$(cat "$HOME_SERVER_RPM_OSTREE_TEXT" 2>/dev/null)
+else
+	status_text=$(rpm-ostree status 2>/dev/null)
+fi
+
 # The effective policy, from rpm-ostree rather than from the file, so a config
 # that failed to parse shows up as the default rather than as what we wrote.
-policy=$(rpm-ostree status 2>/dev/null | sed -n 's/^AutomaticUpdates: *\([a-z]*\).*/\1/p')
+policy=$(sed -n 's/^AutomaticUpdates: *\([a-z]*\).*/\1/p' <<<"$status_text")
 if [ "$policy" = "stage" ]; then
 	ok deploy.update_policy "automatic updates: stage (never reboots on its own)"
 else
@@ -539,6 +560,96 @@ else
 fi
 fact image_digest_local  "$image_digest_local"
 fact image_digest_remote "$image_digest_remote"
+
+# ------------------------------------------------------------------------------
+# HOW LONG WE HAVE BEEN BEHIND, which is the one thing nothing here measured.
+# ------------------------------------------------------------------------------
+# deploy.image_digest above answers "is the newest image applied". It cannot
+# answer "for how long has it not been", because the staged state is a PASS -
+# correctly, that is the ordinary shape six days a week - and a check that never
+# leaves pass cannot feed OsImageStale, which keys on == 2. So on 2026-09-09 the
+# host had been running a 21-day-old image carrying a CRITICAL advisory, the
+# whole 2026-09-06 window had been lost to /boot space, and every signal in this
+# battery read green.
+#
+# EVERY OTHER AGE SIGNAL KEYS ON A CLOCK THE UPDATER RESETS. rpm-ostreed
+# re-stages nightly whether or not the image moved: on 2026-09-09 at 08:21 it
+# re-stamped /run/ostree/staged-deployment for an UNCHANGED digest, so
+# staged_age_d read 0 for a deployment that had been waiting four days. That is
+# what makes bin/reboot-when-staged.sh's ESCALATE_STAGED_D=14 and the MOTD's
+# 7-day escalation unreachable rather than merely slow.
+#
+# base-timestamp IS THE ONE THAT SURVIVES. Two timestamps sit on every
+# deployment and they answer different questions:
+#
+#   timestamp       when this deployment was WRITTEN. Reset by the nightly
+#                   re-stage; on the staged row it is always ~today.
+#   base-timestamp  when the image COMMIT was built. Moves only when the
+#                   content moves, so nothing local can reset it.
+#
+# NOT the version string, for the reason next_dig exists twenty lines up:
+# uCore's version is the FCOS build date and does not move on every image
+# change, so parsing 44.YYYYMMDD would inherit exactly the defect that comment
+# was written about.
+booted_base_ts=$(jq -r '(.deployments[] | select(.booted)
+	| .["base-timestamp"]) // empty' <<<"${status_json:-{\}}" 2>/dev/null)
+image_base_age_d=""
+[ -z "$booted_base_ts" ] || \
+	image_base_age_d=$(( ( $(date -u +%s) - booted_base_ts ) / 86400 ))
+
+# Text-only, so this is a sed over output already in hand rather than a second
+# call. Absent when nothing is staged, and absent is NOT zero.
+adv_critical=$(sed -n 's/.*SecAdvisories:.*[^0-9]\([0-9]\+\) critical.*/\1/p' <<<"${status_text:-}" | head -1)
+adv_important=$(sed -n 's/.*SecAdvisories:.*[^0-9]\([0-9]\+\) important.*/\1/p' <<<"${status_text:-}" | head -1)
+
+# TWO MISSED WINDOWS, DERIVED. The window is Sundays 05:00-09:00, so an image
+# published just after one waits a week for the next; with the staging lead that
+# is comfortably under 14. Fourteen days therefore means a whole window went by
+# without applying, which has a cause worth reading - and 21, the state that
+# prompted this check, means two did.
+IMAGE_AGE_WARN_D=14
+# THREE DAYS WHEN A CRITICAL ADVISORY IS WAITING, and the severity picks the
+# threshold rather than getting a check of its own. A separate
+# deploy.sec_advisories was designed and REJECTED here: Fedora ships important
+# and moderate advisories on very nearly every image, so a check grading their
+# presence would be amber every week of the year and would page on a schedule
+# rather than on an event. That is the rule that cried wolf, and this file
+# carries the argument against it already.
+#
+# What is actionable is never "a security update exists" - one always does - it
+# is "one has been waiting longer than its severity justifies". So there is one
+# finding, and upstream's own scale chooses which deadline applies to it. No
+# second severity scale is invented; `critical` is read, nothing is re-graded.
+IMAGE_AGE_WARN_CRITICAL_D=3
+image_age_limit=$IMAGE_AGE_WARN_D
+adv_note=""
+if [ -n "${adv_critical:-}" ] && [ "${adv_critical:-0}" -gt 0 ]; then
+	image_age_limit=$IMAGE_AGE_WARN_CRITICAL_D
+	adv_note=", carrying $adv_critical CRITICAL advisory(s)"
+elif [ -n "${adv_important:-}" ] && [ "${adv_important:-0}" -gt 0 ]; then
+	adv_note=", carrying $adv_important important advisory(s)"
+fi
+
+if [ -z "${image_base_age_d:-}" ]; then
+	note deploy.image_age "the booted image's build date could not be read - not measured"
+elif [ -z "${next_ver:-}" ]; then
+	# NOTHING NEWER EXISTS, so age is not a finding. A host correctly running
+	# the most recent image must never age into a warn - that is the direction
+	# this check has to be silent in, and the one a threshold alone gets wrong.
+	ok deploy.image_age "running a ${image_base_age_d}-day-old image, and nothing newer has been published"
+elif [ "$image_base_age_d" -lt "$image_age_limit" ]; then
+	ok deploy.image_age "the booted image is ${image_base_age_d}d old and a newer one is waiting${adv_note} - inside the ${image_age_limit}d window"
+else
+	# WARN, NEVER FAIL, for the reason deploy.image_digest gives at length:
+	# bin/reboot-host.sh and bin/reboot-when-staged.sh both refuse on an
+	# unhealthy battery, so failing here would block the OS security updates
+	# this check exists to complain about not getting. The escalation belongs in
+	# the alert rule, which is OsImageLagging.
+	warn deploy.image_age "the booted image is ${image_base_age_d}d old and a newer one has been waiting${adv_note} - past ${image_age_limit}d a reboot window has been missed; check deploy.boot_free and reboot.window_refused for why"
+fi
+fact image_base_age_days   "${image_base_age_d:-}" num
+fact image_advisories_critical  "${adv_critical:-}"  num
+fact image_advisories_important "${adv_important:-}" num
 
 # Only ONE updater may be armed. Two would both write deployments into a /boot
 # that holds two kernels, and the loser fails overnight with nobody watching.
@@ -1147,6 +1258,40 @@ if [ -z "$GREENBOOT" ]; then
 			ok reboot.last_applied "the reboot window last applied a deployment at $unatt"
 		fi
 	fi
+
+	# WHY THE LAST WINDOW WAS LOST, which nothing recorded until 2026-09-09.
+	# bin/reboot-when-staged.sh exits 0 on every refusal by design - a timer
+	# that goes red on a quiet week is a timer people stop reading - so
+	# reboot.window_run above can only say the group RAN. On 2026-09-06 it ran
+	# five times, refused all five for /boot space, spent the whole week's
+	# window, and left the host three weeks behind a critical advisory with
+	# every check on this host green. The journal had it; nothing graded the
+	# journal, and it rotates.
+	#
+	# GRADED AGAINST THE APPLY, NOT THE CLOCK. A refusal is only a finding while
+	# it is still the most recent thing that happened: a window that refused at
+	# 05:06 and applied at 09:04 is a window that worked, and reading the
+	# refusal alone would call that a fault for a week.
+	wref_at=$(sed -n 's/^window_refused_at=//p' "$boot_state" 2>/dev/null | tail -1)
+	wref_tag=$(sed -n 's/^window_refused_tag=//p' "$boot_state" 2>/dev/null | tail -1)
+	if [ -z "$wref_at" ]; then
+		ok reboot.window_refused "no reboot window has refused a staged deployment"
+	else
+		wref_epoch=$(date -d "$wref_at" +%s 2>/dev/null || echo 0)
+		wref_age_d=$(( ( $(date +%s) - wref_epoch ) / 86400 ))
+		if [ "${unatt_epoch:-0}" -ge "$wref_epoch" ]; then
+			ok reboot.window_refused "the last refusal ($wref_tag, $wref_at) was followed by an apply"
+		elif [ "$wref_age_d" -lt 7 ]; then
+			# INSIDE ONE WINDOW IS NOT YET A FINDING. Refusing is what this
+			# gate is for, and the next Sunday is the ordinary remedy - so the
+			# reason is worth saying and is not worth waking anybody for.
+			note reboot.window_refused "the last reboot window refused: $wref_tag, ${wref_age_d}d ago - the next Sunday is the ordinary remedy"
+		else
+			warn reboot.window_refused "the reboot window has refused since $wref_at (${wref_age_d}d, $wref_tag) and nothing has applied since - a whole window has been lost; deploy.image_age says how far behind that has left the host"
+		fi
+	fi
+	fact window_refused_at  "${wref_at:-}"
+	fact window_refused_tag "${wref_tag:-}"
 
 	say update "Container updates"
 
@@ -4390,16 +4535,67 @@ if [ -z "$GREENBOOT" ]; then
 	# that stops receiving samples stays in the head block until it is compacted
 	# out, roughly two hours, so during that window both names are counted: the
 	# rename to upstream container_* names read 3378 against a live 2896.
+	# THE CEILING IS NOW DERIVED, because picking it is what put the store 16
+	# series from its own limit on 2026-09-09 with every signal green. 4500 was
+	# re-picked once already, from 4000, under exactly the pressure that had
+	# just recurred - and re-picking a third time would have been the pattern
+	# rather than the fix. Every term below is a measured or a chosen quantity
+	# with a name, so the next person can see which one moved:
+	#
+	#   SERIES_BASE       what the store costs with NO services: node-exporter's
+	#                     own, Prometheus' self-scrape, and the collector's
+	#                     host-level series. MEASURED 2026-09-09 as head 4393
+	#                     (4484 less the 91 retired that day) minus 45 x 27.
+	#   SERIES_PER_SERVICE the marginal cost of one more service, unchanged and
+	#                     still the measured maximum - windmill-db 41,
+	#                     windmill-server 45. Note this is the cost of a
+	#                     SERVICE, not of a container label: only 617 of the
+	#                     1272 home_server_ series carry `container` at all.
+	#   HEADROOM_SERVICES the slack, chosen rather than measured. Ten, which is
+	#                     what 4500 bought in 2026-08 before the fleet spent it.
+	#
+	# COUNTED FROM stacks/, NOT FROM podman - the same authority
+	# update.policy_count and containers.units_active use, and for a sharper
+	# reason here: ephemeral CI lanes and conduct phase containers come and go,
+	# so a budget keyed on RUNNING containers would breathe by several hundred
+	# series and grade a different question every hour. A quadlet appears when
+	# somebody adds a service, which is exactly when the budget should move.
+	#
+	# The label-explosion property survives the change: a path or an id arrives
+	# in the hundreds, so it still breaches at once against ten services of
+	# slack - while ordinary growth now moves the ceiling with itself.
+	SERIES_BASE=3178
+	SERIES_PER_SERVICE=45
+	HEADROOM_SERVICES=10
+	svc_count=$(find "$repo"/stacks -maxdepth 2 -name '*.container' 2>/dev/null | wc -l)
+	series_expected=$(( SERIES_BASE + SERIES_PER_SERVICE * ${svc_count:-0} ))
+	series_budget=$(( series_expected + SERIES_PER_SERVICE * HEADROOM_SERVICES ))
+
 	series=$(promq prometheus_tsdb_head_series)
 	series=${series%%.*}
 	if [ -z "$series" ]; then
 		warn metrics.series_count "the active series count could not be read"
-	elif [ "$series" -le 4500 ]; then
-		ok metrics.series_count "$series active series"
+	elif [ "${svc_count:-0}" -eq 0 ]; then
+		# The glob failed, so the budget would be BASE alone and every host
+		# would breach. Only an explicit answer counts.
+		note metrics.series_count "$series active series - no quadlets found to size the budget against, so it was not measured"
+	elif [ "$series" -le "$series_expected" ]; then
+		ok metrics.series_count "$series active series, ${series_budget} budgeted for ${svc_count} services"
+	elif [ "$series" -le "$series_budget" ]; then
+		# INSIDE THE SLACK, AND WORTH SAYING SO. The old check went silent right
+		# up to the breach, which is how a single commit could take 90% of the
+		# remaining room without anything mentioning it.
+		note metrics.series_count "$series active series of ${series_budget} - $(( (series_budget - series) / SERIES_PER_SERVICE )) more services' worth of room"
 	else
-		warn metrics.series_count "$series active series, over the 4500 budget - look for a label carrying a path, a title, an id or an address"
+		# NAME THE LIKELY CAUSE FROM THE ARITHMETIC. The old message said only
+		# "look for a label carrying a path, a title, an id or an address",
+		# which is the right advice for an explosion and the wrong advice for
+		# ordinary growth - and growth is what was actually about to happen.
+		over=$(( series - series_expected ))
+		warn metrics.series_count "$series active series, over the ${series_budget} budget for ${svc_count} services - ${over} beyond what those services explain, so at $(( over / SERIES_PER_SERVICE )) services' worth this is $([ "$over" -gt $(( SERIES_PER_SERVICE * HEADROOM_SERVICES * 2 )) ] && echo 'far too much for growth: look for a label carrying a path, a title, an id or an address' || echo 'ordinary growth: re-derive SERIES_BASE, or retire what nothing reads')"
 	fi
 	fact metrics_series "${series:-}" num
+	fact metrics_series_budget "${series_budget:-}" num
 
 	# Retention is two limits, whichever is reached first, and this is the
 	# tripwire for neither being enforced. It shares nvme0n1p4 with config/ and

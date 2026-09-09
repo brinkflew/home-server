@@ -267,6 +267,39 @@ groups:
             that does not exist. The container name is on stderr:
             `journalctl --user -u home-server-metrics -n 50`.
 
+      - alert: MetricsSeriesBudget
+        # metrics.series_count is a WARN and the `metrics` section has no
+        # section-wide warn matcher - only capacity, agents and ci do - so
+        # CheckFailing (== 3) was the only rule that could ever have carried it
+        # and it never could. On 2026-09-09 the store sat 16 series under its
+        # own ceiling, having spent 90% of the remaining room in a single day's
+        # commit, and nothing anywhere was going to say so.
+        #
+        # IT BELONGS IN THIS GROUP for CollectorClientUnavailable's reason: the
+        # first symptom of an unbounded label is the collector's unit being
+        # killed at MemoryMax, which takes every series on the host with it. It
+        # is a failure of the apparatus, not of the thing measured.
+        #
+        # 2h RATHER THAN THE USUAL 30m, and the check's own comment is why: a
+        # series that stops receiving samples stays in the head block until it
+        # is compacted out, roughly two hours, so every rename counts both names
+        # for that long. The rename to upstream container_* names read 3378
+        # against a live 2896 - a transient breach that must not page.
+        expr: home_server_check_status{id="metrics.series_count"} == 2
+        for: 2h
+        labels:
+          severity: warning
+        annotations:
+          summary: "The metrics store is over its derived series budget"
+          description: >-
+            The budget is SERIES_BASE + 45 per service in bin/verify-host.sh,
+            with ten services of slack, so ordinary growth moves the ceiling
+            with itself and only something unexplained breaches it. The check's
+            own message says which: a few services' worth is growth, and
+            hundreds is a label carrying a path, a title, an id or an address.
+            Wait out a rename before acting - both names are counted for about
+            two hours.
+
   # ===========================================================================
   # The battery
   # ===========================================================================
@@ -314,6 +347,64 @@ groups:
             deployment. `sudo rpm-ostree upgrade` is the first thing to try;
             failing that, re-resolve the ref with `rpm-ostree rebase` to the
             same image. The digests are in status.json under facts.
+
+      - alert: OsImageLagging
+        # THE SIBLING OF OsImageStale, AND DELIBERATELY NOT THE SAME RULE.
+        # Widening that expression to match both ids was the obvious economy
+        # and it is wrong: its summary says "nothing has STAGED it" and its
+        # description recommends `rpm-ostree upgrade`, and both are false here.
+        # This fires when staging worked perfectly and nothing APPLIED it - the
+        # remedy is /boot space or the reboot window, never the updater. An
+        # alert whose annotation names the wrong remedy costs more than the
+        # duplicated threshold it saves.
+        #
+        # The must-not-be-a-FAIL argument above applies unchanged: both reboot
+        # paths refuse on an unhealthy battery, so grading this a FAIL would
+        # block the update it exists to complain about. It stays a WARN, and
+        # this rule is how a WARN reaches a phone.
+        #
+        # 6h to match its sibling: the check already carries the deadline (14
+        # days, or 3 when a critical advisory is staged), so the `for:` here is
+        # only guarding against a scrape blip, not re-stating the policy.
+        expr: home_server_check_status{id="deploy.image_age"} == 2
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: "The host has been running a superseded OS image for too long"
+          description: >-
+            The newest image IS staged; nothing has applied it. Observed
+            2026-09-09 at 21 days with one CRITICAL advisory waiting, after all
+            five attempts of the 2026-09-06 window refused for /boot space -
+            every check on the host green throughout, because the staged state
+            passes and nothing measured how long it had been passing.
+            `reboot.window_refused` says why the last window was lost and
+            `deploy.boot_free` whether there is room; `bin/reboot-host.sh` is
+            the attended route. Age and advisory counts are in status.json under
+            facts as image_base_age_days and image_advisories_critical.
+
+      - alert: RebootWindowLost
+        # bin/reboot-when-staged.sh exits 0 on every refusal by design - a timer
+        # that goes red on a quiet week is a timer people stop reading - so the
+        # unit's own status can never carry this. Before 2026-09-09 nothing
+        # else did either: five refusals spent a whole week's window and left
+        # only journal lines, which nothing grades and which rotate.
+        #
+        # 6h because a window is a Sunday morning: anything shorter would fire
+        # between the five attempts of the same morning, which is the system
+        # working. The check itself already waits seven days before warning.
+        expr: home_server_check_status{id="reboot.window_refused"} == 2
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: "The unattended reboot window has been refusing for over a week"
+          description: >-
+            A staged deployment was ready and every attempt declined, with
+            nothing applied since. The tag naming which gate refused is in
+            status.json under facts as window_refused_tag - boot_space,
+            encoder_busy, phase_in_flight and ci_in_flight are the ones that
+            recur. deploy.image_age says how far behind this has left the host.
 
   # ===========================================================================
   # Units and containers
