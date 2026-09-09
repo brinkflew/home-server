@@ -151,7 +151,7 @@ gandi_cleanup() {
 trap gandi_cleanup EXIT
 
 probe_gandi() {
-	local token domain code url body
+	local token domain code url body_file
 	token=$(env_get GANDI_BEARER_TOKEN)
 	domain=$(env_get DOMAIN)
 	if [ -z "$token" ]; then
@@ -162,8 +162,29 @@ probe_gandi() {
 	fi
 	url="$GANDI_API/livedns/domains/$domain/records/$GANDI_PROBE_NAME/TXT"
 
+	# THE BODY GOES IN A FILE AND THE CONFIG SAYS `data = @path`, WHICH IS NOT
+	# FASTIDIOUSNESS - IT IS THE FIRST DEPLOYED RUN. Written inline as
+	# `data = "{\"rrset_values\":...}"` this leg answered **HTTP 400** on
+	# 2026-09-09, because curl's -K configuration does NOT unescape `\"` inside
+	# a quoted value: the JSON was sent truncated at its first inner quote and
+	# Gandi refused a body that was not a body. That is the identical trap this
+	# repository already recorded for Jellyfin's Authorization header, whose
+	# lesson - "unquoted is the only spelling with no quote character in it" -
+	# is quoted twelve lines below and was still walked into.
+	#
+	# `@` SIDESTEPS THE QUESTION rather than answering it. The config line then
+	# carries a path and no quotes at all, so nothing about the JSON's contents
+	# can change how curl parses the line. The alternative was to leave it
+	# unquoted, which happens to work only because this particular body contains
+	# no whitespace - true today and one edit away from being false.
+	#
 	# 300 is Gandi's floor for a TTL and the record lives for about a second.
-	body="{\"rrset_values\":[\"home-server-probe-$(date -u +%s)\"],\"rrset_ttl\":300}"
+	# The file holds a nonce and no credential, and goes with the run either way.
+	body_file=$(mktemp "${TMPDIR:-/tmp}/gandi-probe.XXXXXX") || {
+		det_gandi="could not create a temporary file for the request body"; return
+	}
+	printf '{"rrset_values":["home-server-probe-%s"],"rrset_ttl":300}' \
+		"$(date -u +%s)" > "$body_file"
 
 	if [ -n "$DRY" ]; then
 		det_gandi="would PUT and DELETE $GANDI_PROBE_NAME.$domain TXT"
@@ -182,13 +203,14 @@ probe_gandi() {
 		header = "Authorization: Bearer $token"
 		header = "Content-Type: application/json"
 		request = "PUT"
-		data = "$body"
+		data = @$body_file
 		silent
 		output = /dev/null
 		write-out = "%{http_code}"
 		max-time = 20
 	EOF
 	)
+	rm -f "$body_file"
 
 	case "${code:-000}" in
 		2*)
