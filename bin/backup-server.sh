@@ -63,11 +63,43 @@ say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 
 # Runnable by hand as well as from the unit, which passes the same file through
 # EnvironmentFile=. .env is mode 600 and holds the passwords.
+#
+# AND IT WAS NOT, FOR AS LONG AS NTFY_USER_HASH HAS BEEN IN .env. This block used
+# to be `set -a; . "$ROOT/.env"; set +a`, which is the obvious spelling and aborts:
+# three values are bcrypt hashes - `$2b$10$...` - and the shell expands `$2`, `$1`
+# and `$3` as POSITIONAL PARAMETERS, so under the `set -u` above the whole script
+# dies on the first one with `/var/home-server/.env: line 251: $2: unbound
+# variable`. A line number in a generated file and no variable name.
+#
+# THE UNIT PATH COULD NEVER SEE IT, which is why it survived: EnvironmentFile=
+# sets BACKUP_LOCAL_REPOSITORY, so the sentinel is false and the file is never
+# read. Every nightly run was fine and the documented by-hand invocation had
+# stopped working. Found on 2026-09-09 by copying this idiom into
+# bin/verify-restore.sh, where the by-hand path is the FIRST thing anybody runs.
+#
+# Reading the literal also removes a second hazard that never fired here: `set -a`
+# with `set +u` would not abort, it would truncate a password at its first `$`.
+# Nine variables named explicitly rather than a loop, because assigning through a
+# variable name needs `eval` - a second expansion pass over values this exists to
+# keep unexpanded.
+env_get() {  # <name> -> the value exactly as written, no expansion
+	[ -f "$ROOT/.env" ] || return 0
+	sed -n "s/^$1=//p" "$ROOT/.env" | tail -1
+}
 if [ -z "${BACKUP_LOCAL_REPOSITORY:-}" ] && [ -f "$ROOT/.env" ]; then
-	set -a
-	# shellcheck disable=SC1091
-	. "$ROOT/.env"
-	set +a
+	BACKUP_LOCAL_REPOSITORY="${BACKUP_LOCAL_REPOSITORY:-$(env_get BACKUP_LOCAL_REPOSITORY)}"
+	BACKUP_LOCAL_PASSWORD="${BACKUP_LOCAL_PASSWORD:-$(env_get BACKUP_LOCAL_PASSWORD)}"
+	BACKUP_OFFSITE_REPOSITORY="${BACKUP_OFFSITE_REPOSITORY:-$(env_get BACKUP_OFFSITE_REPOSITORY)}"
+	BACKUP_OFFSITE_PASSWORD="${BACKUP_OFFSITE_PASSWORD:-$(env_get BACKUP_OFFSITE_PASSWORD)}"
+	BACKUP_OFFSITE_ACCESS_KEY="${BACKUP_OFFSITE_ACCESS_KEY:-$(env_get BACKUP_OFFSITE_ACCESS_KEY)}"
+	BACKUP_OFFSITE_SECRET_KEY="${BACKUP_OFFSITE_SECRET_KEY:-$(env_get BACKUP_OFFSITE_SECRET_KEY)}"
+	DOCKER_VOLUME_CONFIG="${DOCKER_VOLUME_CONFIG:-$(env_get DOCKER_VOLUME_CONFIG)}"
+	DOCKER_VOLUME_CACHE="${DOCKER_VOLUME_CACHE:-$(env_get DOCKER_VOLUME_CACHE)}"
+	GITHUB_RUNNER_ARTIFACTS="${GITHUB_RUNNER_ARTIFACTS:-$(env_get GITHUB_RUNNER_ARTIFACTS)}"
+	# CONFIG is derived from DOCKER_VOLUME_CONFIG above, which was resolved before
+	# this block could set it. Re-derive rather than move the assignment, so the
+	# variable keeps its one definition and its documented override.
+	CONFIG="${DOCKER_VOLUME_CONFIG:-$ROOT/config}"
 fi
 
 command -v restic >/dev/null || die "restic is not on PATH - see host/RUNBOOK.md step 12"
@@ -245,6 +277,20 @@ else
 	fi
 	# The copy lands owned by the namespace's ids; restic records ownership and
 	# `core` has to be able to read it back to make the snapshot at all.
+	# THE EXCLUDE LIST ABOVE DOES NOT REACH THIS SUBTREE, and that was a real gap
+	# rather than a theoretical one. The rsync at step 4 declares
+	# --exclude='*.lock' --exclude='*.pid' --exclude='lockfile' because a restored
+	# lock file breaks a service quietly - qBittorrent's Qt lockfile is the worst of
+	# them - but this directory is staged by `cp -r`, which takes no excludes at
+	# all. So `baselines.json.lock`, the coverage ratchet's write lock, was in every
+	# snapshot: found on 2026-09-09 by the FIRST run of the restore verification
+	# against this repository, which is the whole reason that check now exists.
+	#
+	# Deleted from the staging copy rather than filtered during it, because `cp`
+	# cannot filter and the staging tree is ours and rebuilt every run. Under
+	# `podman unshare` so it does not depend on the chown below having worked.
+	podman unshare find "$STAGING/config/ci-artifact-state" \
+		\( -name 'lockfile' -o -name '*.lock' -o -name '*.pid' \) -delete 2>/dev/null || true
 	podman unshare chown -R 0:0 "$STAGING/config/ci-artifact-state" 2>/dev/null || true
 	ci_files=$(find "$STAGING/config/ci-artifact-state" -type f 2>/dev/null | wc -l)
 	if [ "$ci_files" -eq 0 ]; then

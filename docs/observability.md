@@ -315,7 +315,12 @@ seconds; and **resolution**, so you are told when it stops. The first two are wh
 channel is still being read in six months - the same argument this file already makes about
 `journalctl -p err`. `repeat_interval` is **12h for warnings, 4h for critical**.
 
-**`CheckFailing` covers every check id the battery emits - 105 today - but only at FAIL.** Its expression
+**`CheckFailing` covers every check id the battery emits - and deliberately does not say how many.**
+That parenthetical read "105 today" and the battery emitted **137** by 2026-09-09, so it had been
+wrong for longer than it was ever right: nothing derives it, nothing checks it, and the rule covers
+every id whether the sentence keeps up or not. The number is gone rather than corrected a second
+time, on the same grounds as the five prose copies of "of 2" in `docs/agents.md`. **But only at
+FAIL.** Its expression
 is `home_server_check_status == 3`, so **a check that is deliberately WARN never notifies**, and
 several here are WARN precisely because they must not block a reboot. Usually that is right: a WARN
 belongs in the MOTD and the dashboard, not on a phone. Where it is not - `deploy.image_digest`,

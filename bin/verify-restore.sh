@@ -136,14 +136,36 @@ case "$REPO_KIND" in
 	server|server_offsite)
 		# THE SERVER HOLDS THESE AS ENVIRONMENT VARIABLES, NOT AS FILES. Both
 		# server kinds run from a timer that passes .env through EnvironmentFile=,
-		# and by hand from a checkout with no environment at all - so source it when
-		# the variable is absent, the same sentinel bin/backup-server.sh uses.
-		if [ -z "${BACKUP_LOCAL_REPOSITORY:-}" ] && [ -f "$ROOT/.env" ]; then
-			set -a
-			# shellcheck disable=SC1091
-			. "$ROOT/.env"
-			set +a
-		fi
+		# and by hand from a checkout with no environment at all - so the by-hand
+		# case has to read the file.
+		#
+		# BUT NEVER BY SOURCING IT, WHICH IS WHAT THIS DID FOR ONE AFTERNOON.
+		# `set -a; . "$ROOT/.env"` is the obvious spelling and it is wrong here:
+		# three values are bcrypt hashes - NTFY_USER_HASH and friends, `$2b$10$...`
+		# - and the shell expands `$2`, `$1` and `$3` as POSITIONAL PARAMETERS. Under
+		# `set -u` that aborts the script on the first one, naming a line number in
+		# .env and no variable: `/var/home-server/.env: line 251: $2: unbound
+		# variable`. Without `set -u` it is worse, because it succeeds: the sigils
+		# expand to empty and the hash is silently truncated.
+		#
+		# The unit path never saw it - EnvironmentFile= sets the variables, so the
+		# sentinel below is false and the file is never read - which is exactly the
+		# shape that gets committed green. Read the literal, and only the keys this
+		# script uses; nothing here wants the other two hundred variables.
+		env_get() {  # <name> -> the value exactly as written, no expansion
+			[ -f "$ROOT/.env" ] || return 0
+			sed -n "s/^$1=//p" "$ROOT/.env" | tail -1
+		}
+		# NAMED ONE BY ONE RATHER THAN LOOPED, because the loop spelling needs
+		# `eval` to assign through a variable name and that is a second expansion
+		# pass over a value this whole block exists to keep unexpanded. Command
+		# substitution does not re-expand its output, so these six are literal.
+		BACKUP_LOCAL_REPOSITORY="${BACKUP_LOCAL_REPOSITORY:-$(env_get BACKUP_LOCAL_REPOSITORY)}"
+		BACKUP_LOCAL_PASSWORD="${BACKUP_LOCAL_PASSWORD:-$(env_get BACKUP_LOCAL_PASSWORD)}"
+		BACKUP_OFFSITE_REPOSITORY="${BACKUP_OFFSITE_REPOSITORY:-$(env_get BACKUP_OFFSITE_REPOSITORY)}"
+		BACKUP_OFFSITE_PASSWORD="${BACKUP_OFFSITE_PASSWORD:-$(env_get BACKUP_OFFSITE_PASSWORD)}"
+		BACKUP_OFFSITE_ACCESS_KEY="${BACKUP_OFFSITE_ACCESS_KEY:-$(env_get BACKUP_OFFSITE_ACCESS_KEY)}"
+		BACKUP_OFFSITE_SECRET_KEY="${BACKUP_OFFSITE_SECRET_KEY:-$(env_get BACKUP_OFFSITE_SECRET_KEY)}"
 
 		# A PRIVATE FILE RATHER THAN A COMMAND LINE, copied from
 		# bin/backup-server.sh: restic wants a file, and the obvious spelling -
