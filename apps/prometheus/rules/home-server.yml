@@ -681,6 +681,135 @@ groups:
             At this point the backup, the metrics store and the databases are
             all at risk of a write failure.
 
+      - alert: CapacityCheckWarning
+        # THE CATCH-ALL FOR THE CAPACITY SECTION, on CiCheckWarning's and
+        # AgentCheckWarning's precedent: it covers every check added to that
+        # section later without a rule change. var_commitment is excluded so the
+        # one finding with its own arithmetic pages once rather than twice, at
+        # two severities, thirty minutes apart.
+        #
+        # NOT A CheckFailing SIBLING, and the reason is structural: every check
+        # in that section is WARN or NOTE by charter, because bin/reboot-host.sh
+        # refuses to act on a host this battery calls unhealthy and a capacity
+        # projection weeks out must never hold up an OS security update. `== 3`
+        # could therefore never match.
+        expr: >-
+          home_server_check_status{section="capacity",
+            id!="capacity.var_commitment"} == 2
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Capacity check {{ $labels.id }} is warning"
+          description: >-
+            Either the /var census has gone stale, or a share of the disk has
+            appeared that nothing names. `jq -r '.checks[]|select(.id=="{{ $labels.id }}")'
+            /var/lib/home-server/status.json` has the wording, and
+            `bin/storage-census.sh --dry-run` prints the breakdown it grades.
+
+      - alert: VarCommitmentExceedsCapacity
+        # THE ARITHMETIC NOTHING WAS DOING. Every ceiling on this host was sized
+        # against the free space on the day it was written, and no two of them
+        # were ever added together - so on 2026-09-09 the artifact store, three
+        # CI lanes, the TSDB and the journal between them committed more than the
+        # 86 GiB that was left, while every individual check read green.
+        #
+        # 0.95 IS FilesystemAlmostFull's 0.05 ONE LEVEL UP, and the three
+        # constants move together: here, that alert below, and
+        # capacity.var_commitment in bin/verify-host.sh.
+        #
+        # WARNING, NOT CRITICAL, and that is the whole character of it: nothing
+        # is broken. It says the ceilings are wrong, weeks before the disk
+        # agrees. FilesystemFillingUp and FilesystemAlmostFull are what page when
+        # it actually happens.
+        #
+        # 6h RATHER THAN 30m because the input is hourly - bin/verify-host.sh
+        # writes status.json once an hour - so a shorter window evaluates against
+        # a single sample and one bad walk becomes a page.
+        expr: >-
+          home_server_storage_committed_bytes
+            > home_server_storage_capacity_bytes * 0.95
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: "The configured ceilings on /var exceed 95% of the volume"
+          description: >-
+            If every capped consumer reached the limit it is configured with,
+            /var would cross FilesystemAlmostFull's line. Fix a ceiling rather
+            than deleting once by hand - CI_ARTIFACT_KEEP_DAYS,
+            GITHUB_RUNNER_LANE_MAX_MB, SystemMaxUse, retention.size - and note
+            that whatever is uncapped contributes only what it holds today, so
+            this is a floor. topk(5, home_server_var_consumer_bytes) names the
+            largest consumers; /system/storage draws them.
+
+      - alert: VarFillPredicted
+        # WHAT A LEVEL ALERT STRUCTURALLY CANNOT SAY. FilesystemFillingUp fires
+        # at 10% free, which at the 4 GiB/day measured over the 25 days to
+        # 2026-09-09 is about fifteen days out, and at the 11 GiB/day of a
+        # CI-active week is five. The LEVEL is identical in both cases and only
+        # the slope differs - and the slope is what decides whether there is time
+        # to fix a ceiling or only time to delete.
+        #
+        # 6h RANGE, NOT 1h. /var is sawtoothed by the nightly backup staging -
+        # 7.8 GiB written and rewritten - and by lane resets, so a 1h window
+        # predicts exhaustion every night at 03:00 and recovers by 04:00. 6h
+        # spans a whole backup cycle, and `for: 2h` means the prediction has to
+        # survive several evaluations of it.
+        #
+        # 14 DAYS IS THE LEAD TIME THE REMEDIES NEED: the artifact sweep's window
+        # is the shortest lever and takes a day to act, an image prune is a
+        # maintenance decision, and "raise nothing and accept it" also needs a
+        # person.
+        expr: >-
+          predict_linear(
+            node_filesystem_avail_bytes{mountpoint="/var"}[6h],
+            14 * 24 * 3600) < 0
+        for: 2h
+        labels:
+          severity: warning
+        annotations:
+          summary: "/var is on course to fill within a fortnight"
+          description: >-
+            The RATE, not the level - FilesystemFillingUp has not necessarily
+            fired. topk(3, deriv(home_server_var_consumer_bytes[24h])) names
+            which consumer is doing it and /system/storage draws it stacked. If
+            it is ci_artifacts, bin/ci-artifacts-sweep.sh's window is the lever,
+            and docs/ci.md records why it must not go below 7 days.
+
+      - alert: PodmanVolumesLeaking
+        # THE CONDITION THE NIGHTLY RECLAIM CANNOT REACH. The ExecStartPost= on
+        # podman-auto-update.service is `podman image prune -f`; images and
+        # volumes are different stores, and nothing on this host had ever removed
+        # an orphaned volume. Measured 2026-09-09: 332 of 340, 9,227 MB, oldest
+        # four weeks - 171 postgres and 81 valkey data directories from conduct's
+        # per-phase datastores, minted by two call sites passing `rm -f` without
+        # `-v`.
+        #
+        # BOTH CONJUNCTS, NEVER EITHER ALONE. A night of recreates legitimately
+        # leaves fresh orphans, which is the system working; a leak is orphans
+        # that are OLD. 48h is two of podman-auto-update.timer's cycles.
+        #
+        # WARNING, NEVER CRITICAL: it is reclaimable disk, which is
+        # containers.storage_orphans' own argument, and a fourth critical alert
+        # for housekeeping is the failure this whole family is about.
+        expr: >-
+          home_server_storage_volumes_orphaned > 32
+            and
+          home_server_storage_volumes_orphaned_bytes > 1073741824
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} podman volumes are orphaned and holding disk"
+          description: >-
+            Anonymous volumes no container references. `podman volume ls --filter
+            dangling=true` lists them and `podman volume prune` reclaims. Do NOT
+            reach for `prune -a`: the image store's unreferenced half is the
+            previous image of each service, which is what podman-auto-update's
+            rollback restores. If this returned after being fixed, a `podman rm`
+            has lost its `-v` or an image has added a VOLUME nothing covers.
+
       - alert: DiskHealthFailing
         # SMART's own overall verdict. It is conservative to the point of being
         # late, so a zero here is never a false alarm.

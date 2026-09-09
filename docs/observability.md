@@ -292,6 +292,82 @@ second file is simply served unchanged in between.
 **Backing up a live TSDB is the trap this arrangement exists around**, and it is documented under
 `docs/backups.md` rather than here because it breaks the backup rather than the metrics.
 
+### The /var census, and the sum nothing was computing
+
+**`/var` is one 233 GB partition and until 2026-09-09 the only thing measuring it was a single
+number.** `node_filesystem_avail_bytes` said it went from **47.4 GiB used on 2026-08-15 to 146.4 GiB
+on 2026-09-09** - +99 GiB in 25 days, 4.0 GiB/day mean and 11.3 GiB/day across a CI-active window -
+and could not say why. Answering that took an ssh session and six `du`s.
+
+**The finding was not "X is big".** Every consumer had been sized against the free space on the day
+it was written, and no two of them were ever added together:
+
+| consumer | held | its own ceiling | still owed |
+|---|---:|---:|---:|
+| CI artifact store | 37 G | none, until this change | +49 G to its 30-day steady state |
+| CI lanes | 34 G | 60 G (3 x `GITHUB_RUNNER_LANE_MAX_MB`) | +26 G |
+| Prometheus TSDB | 0.4 G | 16 G (`--storage.tsdb.retention.size`) | +15.6 G |
+| journal | 5.4 G | 16 G (`SystemMaxUse`) | +10.6 G |
+
+Every check was green, because each consumer was comfortably inside its own limit. **`bin/storage-census.sh`**
+walks four roots hourly and leaves `~/.cache/home-server/storage-census`; `bin/collect-metrics.py`'s
+`storage` source publishes it as **`home_server_var_consumer_bytes{consumer,group}`**, and
+`bin/verify-host.sh`'s **Capacity** section grades it.
+
+**A labelled series rather than one fact per consumer**, for the reason `source_units` enumerates the
+generator directory: a flat fact per consumer would force the dashboard to name every one of them,
+and a hand-maintained roster is the most driftable shape this repository has. Adding a consumer to
+the census puts a band on `/system/storage` with no change anywhere else. The name is
+`home_server_var_*` and not `home_server_storage_*` deliberately - `source_status` mints
+`home_server_<fact key>` and the census's own facts are `storage_*`, so anything inside that
+namespace is one future fact key away from a duplicate sample, which rejects the whole scrape.
+
+**It is self-proving.** Its named consumers sum to `df`'s used figure by construction, and whatever
+no consumer claims is published as `other_unaccounted` rather than dropped - measured at 1,925 MB of
+150,468, **1.3%**. `capacity.var_breakdown` grades that share, so a consumer nobody added shows up as
+the unaccounted band growing instead of every other share silently being wrong.
+
+| check | what it says |
+|---|---|
+| `capacity.census` | the walk ran, and within its own two periods. Graded first and separately, because a stale census is not a capacity finding - it is the reason the other two cannot be trusted |
+| `capacity.var_breakdown` | how much of `/var` is in nothing the census names |
+| `capacity.var_commitment` | **the finding**: what `/var` would hold if every capped consumer reached its ceiling. WARN past 95%, NOTE past 90% - `FilesystemAlmostFull`'s and `FilesystemFillingUp`'s own lines one level up, and the three constants move together |
+| `containers.volume_orphans` | anonymous volumes nothing references. `containers.storage_orphans` counts leftover *build containers*, which is a different subject with a different remedy |
+| `ci.artifact_store` | now carries a **40960 MB budget** alongside its sweep-freshness arm |
+
+**The commitment is expressed as headroom still owed, not as a sum of ceilings**, and that is what
+makes it composable: the TSDB is a part of `config/` and the journal a part of `/var/log`, so summing
+ceilings against consumers would double-count the parts. Adding only each capped thing's REMAINING
+entitlement is correct whatever tree it lives in. **The ceiling summed is the enforced one, never a
+check's tolerance** - `metrics.tsdb_size` grades against 18432 MB, but what Prometheus enforces is
+`retention.size=16GB`, and summing tolerances inflates every consumer by whatever slack its own check
+was given.
+
+**Every one of these was proved to fail before it was trusted**, against the live host:
+`CI_ARTIFACT_BUDGET_MB=32768` drives the budget arm (the store held 38,142 MB),
+`CI_ARTIFACT_BUDGET_MB=90000` drives the commitment past 95% at a measured 108%, and
+`HOME_SERVER_STORAGE_STATE=/nonexistent` drives all three note arms without a single false pass.
+
+**`podman unshare du -x`, and the `-x` is the half this repository had not recorded.** The existing
+lesson - a plain `du` under-reads a subuid-owned tree silently - is true and incomplete. Applied to
+the podman graph root the same reflex is a **78% over-read**, because inside the namespace `du`
+descends into every running container's `overlay/<id>/merged` and counts its whole rootfs on top of
+the layers it is composed from. Measured the same day, same trees, MB:
+
+| tree | plain `du` | `podman unshare du` | `sudo du` |
+|---|---:|---:|---:|
+| `cache/github-runner/lanes` | 19,539 | **32,846** | 32,846 |
+| `~core/.local/share/containers/storage` | 31,921 | **74,166** | 41,610 |
+
+61 overlay mounts were visible inside the namespace against 1 outside. `-x` stops at a filesystem
+boundary and `merged` is a different filesystem.
+
+**And `podman system df`'s Images "reclaimable" figure must never reach a series or a panel.** It
+read 18.67 GB on the day this was written, and that is not free space: it is largely the previous
+image of each service, which is exactly what `podman-auto-update`'s rollback restores. Only the
+`Local Volumes` row is read, for `containers.volume_orphans`.
+
+
 ## Alerting
 
 **Since 2026-08-15 something finally leaves the house.** Everything above is only legible to someone

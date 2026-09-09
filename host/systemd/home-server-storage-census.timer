@@ -1,0 +1,33 @@
+# ==============================================================================
+# Hourly, at :20
+# ------------------------------------------------------------------------------
+# HOURLY BECAUSE THE DATA MOVES DAILY. /var grew 4.0 GiB a day over the 25 days
+# to 2026-09-09 - about 170 MB an hour - so an hourly walk is already an order of
+# magnitude finer than the thing it measures. It is not a per-minute signal and
+# was never worth the 30-second tick's budget; see the .service for that argument.
+#
+# :20 RATHER THAN :00, to stay off home-server-verify.timer's hour mark. The
+# battery runs at :05 and READS this marker, so the census must land before it,
+# not with it - and an hour of staleness is nothing against a number that moves
+# 170 MB in that time. :20 is the far side of the battery rather than a race with
+# it: verify at :05 reads the walk from :20 of the previous hour.
+#
+# Persistent=true SO A MACHINE THAT WAS OFF STILL HAS A RECENT CENSUS when the
+# battery next runs. THE TRAP THAT COMES WITH IT: enabling a Persistent= timer
+# writes its stamp immediately, so there is no missed elapse and the unit does
+# NOT fire on first enable - the marker stays absent, and every capacity check
+# reads "the census has never run" until the next :20. The one-time
+# `systemctl --user start` is in host/systemd/README.md with its siblings.
+# ==============================================================================
+
+[Unit]
+Description=Hourly /var storage census
+
+[Timer]
+OnCalendar=*-*-* *:20
+Persistent=true
+RandomizedDelaySec=2min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

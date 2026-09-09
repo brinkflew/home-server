@@ -45,6 +45,15 @@ NoNewPrivileges=true
 Volume=${DOCKER_VOLUME_CONFIG}/joal:/config:Z
 Volume=${DOCKER_VOLUME_MEDIA}/downloads/faking:/config/torrents
 
+# `/data` IS THE IMAGE'S DEFAULT CONF DIR AND `Exec=` BELOW OVERRIDES IT, so
+# nothing reads it - but the image still declares `VOLUME /data`, and an
+# uncovered VOLUME is a fresh anonymous volume on every create that the teardown
+# leaves behind. Measured on the host: 0 MB and empty, one of the 40 empty
+# orphans in a population of 332 holding 9,350 MB. Same finding and same fix as
+# flaresolverr's /config; the joal state that matters is under /config above,
+# which is bind-mounted and backed up.
+Tmpfs=/data:rw,size=16m
+
 Environment=PUID=0
 Environment=PGID=0
 Environment=UMASK=${UMASK}

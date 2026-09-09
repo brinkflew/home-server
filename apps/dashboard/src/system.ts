@@ -36,6 +36,7 @@
 
 import * as fmt from "@/format";
 import type { AmAlert, Tone } from "@/types";
+import type { ChartSeries, Point } from "@/charts";
 
 /** NaN rather than 0 for an absent gauge, everywhere below. */
 const n = (v: number | undefined): number => (v === undefined ? Number.NaN : v);
@@ -558,6 +559,96 @@ export function mountReading(mountpoint: string, total: number, free: number): M
 export function fullestMount(mounts: MountReading[]): MountReading | null {
   const rated = mounts.filter((m) => Number.isFinite(m.ratio));
   return rated.length ? rated.reduce((a, b) => (b.ratio > a.ratio ? b : a)) : null;
+}
+
+/**
+ * THE ORDER OF THE /var STACK, DECLARED ONCE.
+ *
+ * FIXED, NEVER QUERY ORDER, and that is the whole reason this exists.
+ * MetricChart keys its brightness ramp on the BAND index - its own docblock says
+ * so - so a stack ordered by whatever Prometheus happened to return reshuffles
+ * every colour on the day a group appears or vanishes. A group with no data is
+ * simply absent from the drawing; the order of the ones that remain does not
+ * move.
+ *
+ * Largest first, so the big committed consumers sit at the bottom of the stack
+ * where a reader looks for them, and the small ones do not vanish into a hairline
+ * between two giants.
+ */
+export const VAR_GROUPS: { key: string; label: string }[] = [
+  { key: "ci", label: "CI" },
+  { key: "podman", label: "images" },
+  { key: "backups", label: "backups" },
+  { key: "config", label: "config" },
+  { key: "conduct", label: "fleet" },
+  { key: "log", label: "logs" },
+  { key: "cache", label: "cache" },
+  { key: "checkout", label: "checkout" },
+  { key: "other", label: "other" },
+];
+
+/**
+ * The /var breakdown as stack bands, in declared order.
+ *
+ * A GROUP THE SPEC DOES NOT KNOW IS NOT DROPPED - it is folded into `other`.
+ * A stack pinned to the filesystem's size claims its bands add up to the whole
+ * disk, so silently discarding one would make every share on the chart wrong
+ * while it still looked right. The census already guarantees the sum: its named
+ * consumers add to df's used figure by construction, and whatever no consumer
+ * claims is published as other_unaccounted rather than left out.
+ *
+ * `free` is appended last so the bands sum to the VOLUME rather than to what is
+ * used - the same property LoadPage's memory stack has against MemTotal, and the
+ * only thing that makes pinning yMax honest.
+ */
+export function varStack(
+  byGroup: Map<string, Point[]>,
+  free: Point[],
+): ChartSeries[] {
+  const known = new Set(VAR_GROUPS.map((g) => g.key));
+  const out: ChartSeries[] = [];
+  for (const g of VAR_GROUPS) {
+    const points = byGroup.get(g.key);
+    if (points && points.length) out.push({ points, label: g.label, tone: "ok" });
+  }
+  // Anything the spec has not heard of, summed into one band rather than lost.
+  const strays: Point[][] = [];
+  for (const [key, points] of byGroup) if (!known.has(key)) strays.push(points);
+  if (strays.length) {
+    const merged: Point[] = strays[0].map((p, i) => [
+      p[0],
+      strays.reduce((sum, s) => sum + (s[i]?.[1] ?? 0), 0),
+    ]);
+    out.push({ points: merged, label: "unnamed", tone: "ok" });
+  }
+  if (free.length) out.push({ points: free, label: "free", tone: "ok" });
+  return out;
+}
+
+/**
+ * One row of the commitment table: what a consumer holds against what it is
+ * entitled to take.
+ *
+ * AN UNCAPPED CONSUMER IS GREY, NOT GREEN. It has no ceiling to be inside of, so
+ * reporting it as healthy is the same defect as `fsTone` drawing an unmeasurable
+ * mount teal - which is the rule one screen up in this file, written before this
+ * function existed. The tone is decided here and never in a .vue file: a
+ * hardcoded ternary at a call site is a defect this repository has now recorded
+ * three separate times.
+ */
+export function commitmentRow(
+  now: number,
+  ceiling: number,
+): { headroom: number; ratio: number; tone: Tone } {
+  if (!Number.isFinite(ceiling) || ceiling <= 0) {
+    return { headroom: Number.NaN, ratio: Number.NaN, tone: "off" };
+  }
+  const ratio = now / ceiling;
+  return {
+    headroom: ceiling - now,
+    ratio,
+    tone: ratio >= 0.95 ? "fail" : ratio >= 0.85 ? "warn" : "ok",
+  };
 }
 
 /**

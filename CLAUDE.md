@@ -1816,6 +1816,33 @@ signal read green.
   survived every SUCCESSFUL run while the failing paths cleaned up correctly. Bash keeps one
   definition per name and one EXIT trap, and neither redefinition warns.
 
+### Four ceilings that each fitted and did not fit together
+- `/var` went 47.4 -> 146.4 GiB in 25 days and the only instrument was one number that cannot say
+  why. The artifact store, three lanes, the TSDB and the journal committed more than the free space
+  between them while every check read green, because each was inside its OWN limit.
+- The sweep priced 30 days at 2.5 MB/run; the measured mean is **506 MB**, and the store had never
+  once reached steady state, so "swept 0 runs" was correct and told nobody anything.
+- `bin/storage-census.sh` sums to `df` by construction, so a consumer nobody added grows the
+  unaccounted band rather than silently making every share wrong.
+
+### The lesson about `du` was half a lesson
+- `podman unshare du` is right for a subuid tree and a **78% over-read on the graph root**, where it
+  walks into each running container's `merged` and counts its rootfs twice. `-x` is the fix.
+- `podman system df`'s Images "reclaimable" is the auto-update rollback, not free space.
+
+### A quadlet does not leak volumes and two call sites did
+- 332 of 340 volumes orphaned, 9,227 MB; classified by contents, **252 were conduct's per-phase
+  postgres and valkey**. Quadlet emits `--rm` and `rm -v` and leaks nothing; two `rm -f` call sites
+  missing `-v` did, plus two uncovered image `VOLUME` paths that were both empty.
+- `podman image prune -f` cannot reclaim a volume, and `containers.storage_orphans` counts only build
+  containers - so nothing on the host could see it.
+
+### The dashboard typecheck was checking nothing
+- **`vue-tsc --noEmit` resolves no program** against a `files: []` tsconfig with project references,
+  so it passes a planted template error. `--build` is the gate, and three real defects were sitting
+  behind that green tick.
+- The global `.dim` means STALE and ADDS to a scoped one, so a caption borrowing it reads as stale.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

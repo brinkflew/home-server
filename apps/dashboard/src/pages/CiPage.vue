@@ -485,7 +485,7 @@ const diskCondTip = computed(() => ({
     "what ci.lane_disk grades on, and what triggers a budget reset",
   ],
   caveat:
-    "Disk was never the constraint here - a lane holds about 4.7 GB in normal use and /var has over 150 GB free. The budget exists to bound a store that grows, not to protect the volume.",
+    "A lane holds about 12.5 GB in normal use and /var has 86 GB free, so this budget now does both jobs: three lanes at 20 GB is 60 GB of a 233 GB volume, and it is the second largest committed consumer on the disk. See the commitment on /system/storage.",
 }));
 
 const memoryTip = computed(() => ({

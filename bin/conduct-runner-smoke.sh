@@ -53,7 +53,8 @@ say()  { printf '\n%s\n' "$*"; }
 # cannot follow. The repo's other traps are one-liners, which is why this is the
 # first place the directive is needed.
 cleanup() {
-	podman rm -f conduct-smoke >/dev/null 2>&1 || true
+	# -v, for the same reason bin/github-runner.sh's cleanup() carries it.
+	podman rm -f -v conduct-smoke >/dev/null 2>&1 || true
 	podman network rm -f "$NET" >/dev/null 2>&1 || true
 	rm -rf "$WT" "$FLEET_ROOT/scratch/.smoke"
 }

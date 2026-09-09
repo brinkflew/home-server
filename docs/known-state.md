@@ -5403,3 +5403,69 @@ service on the rack read **memory starved**. Nothing on the host was.
   and the evidence for the diagnosis is that same asymmetry: trees cleaned, password directories not,
   in the same runs. A forced early exit was the control, and it left nothing behind.
 - Bash keeps one EXIT trap and one definition per name, and neither redefinition warns.
+
+### Four ceilings that each fitted and did not fit together
+- **`/var` went from 47.4 GiB used on 2026-08-15 to 146.4 GiB on 2026-09-09** - +99 GiB in 25 days,
+  4.0 GiB/day mean, 11.3 on a CI-active window - and the only instrument that could see it was
+  `node_filesystem_avail_bytes`, one number that cannot say why. Answering "why" took an ssh session
+  and six `du`s, which is what `bin/storage-census.sh` exists to end.
+- **The finding is not that anything is big, it is that nothing summed the ceilings.** The artifact
+  store's 30-day window (+49 G to its steady state), three lanes at 20 GB (+26 G), the TSDB's 16 GB
+  (+15.6 G) and the journal's 16 GB (+10.6 G) committed more than the 86 GiB left, while every check
+  read green because each consumer was inside its own limit. `capacity.var_commitment` is that sum.
+- **The commitment adds each capped thing's REMAINING entitlement, never its ceiling**, because the
+  TSDB is part of `config/` and the journal part of `/var/log` - summing ceilings against consumers
+  double-counts the parts. And it sums the ENFORCED ceiling, never a check's tolerance:
+  `metrics.tsdb_size` grades against 18432 M and Prometheus enforces `retention.size=16GB`.
+- **`ci.artifact_store` reported `37611MB of run scratch` and graded only sweep freshness**, so it
+  passed. The sweep's own header priced 30 days at "about 2.5 MB per run, against 153 GB free": the
+  measured mean is **506 MB**, stable at 400-530 on every one of the 13 days the store had existed,
+  so the figure was wrong from the start rather than drifting. The store began 2026-08-27, so at day
+  13 of a 30-day window **nothing had been evicted yet** and a sweep reporting "swept 0 runs" was
+  correct and told nobody anything.
+- **The census is self-proving**: its consumers sum to `df` by construction and whatever none claims
+  is published as `other_unaccounted` - 1,925 MB of 150,468, 1.3% - so a consumer nobody added shows
+  up as that growing rather than as every other share silently being wrong.
+
+### The lesson about `du` was half a lesson
+- **`podman unshare du` is right for a subuid-owned tree and a 78% OVER-read on the graph root.**
+  Inside the namespace `du` descends into every running container's `overlay/<id>/merged` and counts
+  its whole rootfs on top of the layers it is made of - 61 overlay mounts visible inside against 1
+  outside. Measured: lanes 19,539 plain / 32,846 unshared / 32,846 sudo; graph root 31,921 / **74,166**
+  / 41,610. `-x` stops at a filesystem boundary and `merged` is a different filesystem.
+- `bin/github-runner.sh`'s `lane_du_mb()` had carried the first half and not the second since it was
+  written, so a lane holding a live nested container would have over-read, fired `gc_lane` spuriously
+  and been graded by `ci.lane_disk`.
+- **`podman system df`'s Images "reclaimable" is not free space** - 18.67 GB of it is the previous
+  image of each service, which is what `podman-auto-update`'s rollback restores. Only the
+  `Local Volumes` row may be read.
+
+### A quadlet does not leak volumes and two call sites did
+- **332 of 340 podman volumes were orphaned, 9,227 MB, oldest the 2026-08-12 migration.** Classifying
+  every one by its contents: **171 postgres and 81 valkey data directories** from conduct's per-phase
+  datastores, 40 empty, 36 nested container stores from CI, 3 historical *arr configs. 252 of 332 and
+  about 90% of the bytes came from one place.
+- **The mechanism was NOT the nightly recreate**, which was the obvious guess and wrong: quadlet
+  emits `--rm` on `ExecStart` and `podman rm -v -f -i` on both `ExecStop` and `ExecStopPost` (27 and
+  54 occurrences), so a covered service reclaims its own. It was `conduct/podman.py`'s `rm -f` with
+  no `-v`, and `bin/github-runner.sh`'s `cleanup()` with the same omission.
+- **`podman image prune -f` structurally cannot reclaim a volume** - images and volumes are different
+  stores - and `containers.storage_orphans` counts leftover BUILD CONTAINERS, so nothing on the host
+  could see this. `containers.volume_orphans` is the one that can.
+- **Two image `VOLUME` paths were uncovered and both were empty**: `flaresolverr:/config`, whose
+  quadlet declared no `Volume=` at all, and `joal:/data`, whose default conf dir `Exec=` overrides.
+  Measured at 0 MB, so a fresh empty volume had been mounted on every recreate for four weeks with
+  both services working - a `Tmpfs=` cannot lose what was already being discarded, and states it.
+- **`dangling=true` excludes a container that has never been started**, verified on podman 5.8.4 with
+  a `podman create` that was never run: it means "referenced by no container in any state".
+
+### The dashboard typecheck was checking nothing
+- **`vue-tsc --noEmit` passes a planted template error**, because `tsconfig.json` is `files: []` plus
+  project references - so it resolves no program at all. `vue-tsc --build` is what the `build` script
+  runs and what catches it; proved both directions by planting `:series="varSeriesTypo"`.
+- Three real defects were sitting behind that green tick: `usePoll` takes an interval and not an
+  options object, `checkTone` is in `health.ts` and not `system.ts`, and the host store exposes
+  `byId` rather than `checks`. `WindowPicker` also takes no props - it is a singleton that belongs in
+  a `<Teleport defer to="#toolbar">` - so a `v-model` on it does nothing.
+- **The global `.dim` means STALE and ADDS to a page's scoped `.dim`**, so a caption borrowing it
+  renders as though its panel had stopped updating. A caption needs its own name.

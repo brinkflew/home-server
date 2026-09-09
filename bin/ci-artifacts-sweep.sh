@@ -20,8 +20,25 @@
 # a pull request merges and reads the artifacts of that pull request's LAST CI
 # run, which may be weeks old if the branch sat - so a 7-day sweep would break
 # exactly the slow-moving pull requests and nothing else, which is the worst
-# possible distribution of a failure. Thirty is what they asked for. Sizing at
-# the time of writing: about 2.5 MB per run, against 153 GB free on /var.
+# possible distribution of a failure. Thirty is what they asked for.
+#
+# THE SIZING ABOVE USED TO READ "about 2.5 MB per run, against 153 GB free on
+# /var" AND IT WAS NEVER RIGHT. Measured 2026-09-09 over the 75 runs then in the
+# store: a mean of 506 MB, and stable at 400-530 MB on every one of the 13 days
+# the store had existed - so this was not drift, the figure was wrong from the
+# start. The bulk is e2e-shard-N-nyc raw coverage at 220-311 MB a shard. At the
+# measured 5.8 runs a day, thirty days is about 86 GB, against 86 GiB free.
+#
+# THE STORE HAD NEVER REACHED STEADY STATE WHEN THAT WAS DISCOVERED, which is
+# why nothing looked wrong: it began on 2026-08-27, so at day 13 of a 30-day
+# window NOTHING had been evicted yet and the first eviction was 2026-09-26.
+# A sweep reporting "swept 0 runs" was correct and told nobody anything.
+#
+# THE WINDOW IS DELIBERATELY UNCHANGED HERE. What it costs is now GRADED rather
+# than assumed - ci.artifact_store carries a 40960 MB budget derived from what
+# /var can afford, and capacity.var_commitment adds every ceiling on the volume
+# together once an hour. Lowering KEEP_DAYS is a decision to take with those two
+# numbers in hand and the first real eviction observed, not from this comment.
 #
 # THE GRANULARITY IS A WHOLE RUN. A run's artifacts are written by several jobs
 # at several times, so sweeping individual files would leave a run half-present -

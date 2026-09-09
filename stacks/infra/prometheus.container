@@ -89,10 +89,18 @@ Environment=TZ=${TIMEZONE}
 # reach apps/prometheus/prometheus.yml and would leave the self-scrape target
 # free to drift from the listener. One source, no drift - the same argument that
 # leaves sonarr:8989 written out. The retention is 13 months: a full
-# year-over-year comparison with a month of margin, which at roughly 2,000
-# series and 30s costs about 4-6 GB against 186 GB free. --retention.size is a
+# year-over-year comparison with a month of margin. --retention.size is a
 # ceiling so it can never fill the disk that also carries config/ and
 # /var/backups; whichever limit is reached first wins.
+#
+# THE SIZE CEILING IS A COMMITMENT AND NOT A GUESS, which is a correction: this
+# used to say "roughly 2,000 series and 30s costs about 4-6 GB against 186 GB
+# free" and both halves have moved. Head series is 2,896-3,378 against a 4,500
+# budget, and /var has 86 GB free as of 2026-09-09 - so 16GB is 6.7% of the
+# volume, and it is the number capacity.var_commitment sums rather than the
+# 18432 MB tolerance metrics.tsdb_size grades against. A tolerance is the point
+# above which retention is provably not being enforced; a commitment may only
+# claim what is actually enforced, which is this line.
 Exec=--config.file=/etc/prometheus/prometheus.yml \
      --storage.tsdb.path=/prometheus \
      --storage.tsdb.retention.time=400d \

@@ -82,7 +82,9 @@ say()  { printf '\n%s\n' "$*"; }
 # cannot follow.
 cleanup() {
 	for c in $(podman ps -aq --filter "label=io.home-server.ci-smoke=$SMOKE_TAG" 2>/dev/null); do
-		podman rm -f "$c" >/dev/null 2>&1 || true
+		# -v: the lane base declares VOLUME on two paths nothing here reads,
+		# and a smoke run that leaks is the same leak as the driver's.
+		podman rm -f -v "$c" >/dev/null 2>&1 || true
 	done
 	podman network rm -f "$NET" >/dev/null 2>&1 || true
 	# `podman unshare rm`, NOT a plain rm. Everything under the lane belongs to

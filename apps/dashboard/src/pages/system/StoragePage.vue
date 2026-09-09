@@ -17,18 +17,25 @@
  * are the one derivation; a second copy is how the two views would come to
  * disagree about which mount is full.
  */
-import { computed } from "vue";
+import { computed, onUnmounted, watch } from "vue";
 
 import Band from "@/components/Band.vue";
 import PanelBox from "@/components/PanelBox.vue";
+import MetricChart from "@/components/MetricChart.vue";
 import StatusDot from "@/components/StatusDot.vue";
+import WindowPicker from "@/components/WindowPicker.vue";
 
 import { usePoll } from "@/composables/usePoll";
 import { useMetricsStale } from "@/composables/useStaleness";
+import { useTimeWindow } from "@/composables/useTimeWindow";
+import { useCrosshair } from "@/composables/useCrosshair";
 import { useHostStore } from "@/stores/host";
-import { instant, instantBy, labelsBy, value } from "@/api/prometheus";
+import { instant, instantBy, labelsBy, range, value } from "@/api/prometheus";
+import { onGrid, toPoints } from "@/charts";
+import type { Point } from "@/charts";
 import { SYSTEM } from "@/queries";
 import * as sys from "@/system";
+import { checkTone } from "@/health";
 import * as fmt from "@/format";
 import type { Tone } from "@/types";
 
@@ -109,9 +116,106 @@ function toneClass(tone: Tone): Record<string, boolean> {
 function rail(tone: Tone): string {
   return tone === "ok" ? "transparent" : `var(--${tone})`;
 }
+// ---------------------------------------------------------------------------
+// What fills /var, over time
+// ---------------------------------------------------------------------------
+/**
+ * THE QUESTION THE MOUNT TABLE ABOVE CANNOT ANSWER. It says /var is 64% full;
+ * it cannot say what put it there, and until bin/storage-census.sh existed
+ * nothing on this host could - finding out took an ssh session and six du's.
+ *
+ * THE BANDS SUM TO THE VOLUME, WHICH IS WHAT MAKES yMax HONEST. The census's
+ * named consumers add to df's used figure by construction and publish whatever
+ * no consumer claims as other_unaccounted, so used + free is the whole disk.
+ * MetricChart's own docblock says a stack is only honest with a yMax naming the
+ * total its bands add up to - see LoadPage's memory stack against MemTotal.
+ *
+ * HOURLY DATA ON A CHART THAT CAN SHOW AN HOUR. The census walks once an hour,
+ * so a 1h window is two points and a flat line means "low resolution", not "a
+ * still machine". The aside says so rather than leaving it to be inferred.
+ */
+const { window: win } = useTimeWindow();
+const cross = useCrosshair();
+onUnmounted(() => cross.clear());
+
+const growth = usePoll(
+  async (signal) => {
+    const end = Math.floor(Date.now() / 1000);
+    const start = end - win.value.seconds;
+    const step = win.value.step;
+    const opts = { window: win.value.seconds, step, signal };
+
+    const [groups, free, committed, capacity] = await Promise.all([
+      range(SYSTEM.varByGroup, opts),
+      range(SYSTEM.filesystemAvail + '{mountpoint="/var"}', opts),
+      instant(SYSTEM.varCommitted, signal),
+      instant(SYSTEM.varCapacity, signal),
+    ]);
+
+    // ONE SORT, NOT TWO: the label and its line come out of the same map, which
+    // is the pairing LoadPage's splitBy comment exists to protect.
+    const byGroup = new Map<string, Point[]>();
+    for (const m of groups) {
+      const key = m.metric.group;
+      if (key) byGroup.set(key, onGrid(toPoints(m.values), start, end, step));
+    }
+    return {
+      byGroup,
+      free: free.length ? onGrid(toPoints(free[0].values), start, end, step) : [],
+      committed: value(committed[0]?.value),
+      capacity: value(capacity[0]?.value),
+      // FROM THE SAME PASS THAT BUILT THE POINTS. Deriving the axis from
+      // Date.now() at render time instead lets the frame and the data describe
+      // different spans on a slow poll.
+      start,
+      end,
+    };
+  },
+  60_000,
+);
+
+// The window is read inside the loader, so a change to it would otherwise not
+// show until the next tick - which reads as a dead button. LoadPage carries the
+// identical watch for the identical reason.
+watch(win, () => {
+  void growth.refresh();
+});
+
+const from = computed(() => growth.data.value?.start);
+const to = computed(() => growth.data.value?.end);
+
+const varSeries = computed(() =>
+  sys.varStack(growth.data.value?.byGroup ?? new Map(), growth.data.value?.free ?? []),
+);
+
+/** The one finding this band exists for: every ceiling on the volume, added up.
+ *  Its tone comes from the check rather than a ratio recomputed here - a second
+ *  opinion about one fact is how a rail comes to disagree with the sentence
+ *  beside it, which is why checkTone() is the single mapping. */
+const commitment = computed(() => {
+  const committed = growth.data.value?.committed ?? Number.NaN;
+  const capacity = growth.data.value?.capacity ?? Number.NaN;
+  const check = host.byId.get("capacity.var_commitment");
+  if (!Number.isFinite(committed) || !Number.isFinite(capacity) || capacity <= 0) {
+    return { text: fmt.NO_DATA, sub: "the census has not reported a commitment", tone: "off" as Tone };
+  }
+  return {
+    text: `${fmt.percent(committed / capacity, 0)} committed`,
+    sub: `${fmt.bytes(committed)} of ${fmt.bytes(capacity)} if every capped consumer reached its ceiling`,
+    // A check that is not in the document is GREY, not green. The battery may
+    // not have run since the census landed, and reporting an unmeasured
+    // commitment as healthy is the absence-read-as-health defect this
+    // repository has recorded four times.
+    tone: check ? checkTone(check.status) : ("off" as Tone),
+  };
+});
 </script>
 
 <template>
+  <Teleport defer to="#toolbar">
+    <WindowPicker />
+  </Teleport>
+
   <!-- "Headroom", not "Right now": that is the Health band one tab over, and
        this word is also what the fullest mount actually reports. -->
   <Band label="Headroom">
@@ -128,6 +232,49 @@ function rail(tone: Tone): string {
         <span class="reading mono">{{ lead.text }}</span>
       </div>
       <p class="lead-sub mono">{{ lead.sub }}</p>
+    </PanelBox>
+  </Band>
+
+  <!-- BETWEEN "how full" AND "what hardware", because that is the causal order:
+       the mount table says /var is filling, this says what is filling it, and
+       the drives below are what it all sits on. -->
+  <Band label="Growth" :cols="2">
+    <PanelBox label="What fills /var" :stale="metricsStale">
+      <template #aside>
+        <span class="mono cap">hourly census</span>
+      </template>
+      <MetricChart
+        :series="varSeries"
+        :height="120"
+        :y-max="growth.data.value?.capacity"
+        stacked
+        legend
+        y-axis
+        x-axis
+        :tick-base="1024"
+        :format="(v: number) => fmt.bytes(v, 0)"
+        :from="from"
+        :to="to"
+      />
+    </PanelBox>
+
+    <PanelBox label="Commitment" :stale="metricsStale">
+      <template #aside>
+        <span class="mono cap">every ceiling, added up</span>
+      </template>
+      <div class="lead">
+        <StatusDot :tone="commitment.tone" :size="9" />
+        <span class="reading mono">{{ commitment.text }}</span>
+      </div>
+      <p class="lead-sub mono">{{ commitment.sub }}</p>
+      <!-- THE NUMBER NOTHING WAS COMPUTING. Every consumer of /var was sized
+           against the free space on the day it was written and no two were ever
+           added together, so on 2026-09-09 four ceilings between them committed
+           more than the disk had left while every check read green. -->
+      <p class="lead-sub mono">
+        Uncapped consumers contribute only what they hold today, so this is a
+        floor. Raising a ceiling raises it.
+      </p>
     </PanelBox>
   </Band>
 
@@ -280,6 +427,15 @@ function rail(tone: Tone): string {
 }
 
 .dim {
+  color: var(--fg-5);
+}
+
+/* A CAPTION, WHICH IS NOT THE SAME THING AS `.dim` even though it looks like
+   it. base.css's global `.dim` means STALE - 0.42 opacity and desaturated - and
+   it ADDS to the scoped colour rule above rather than replacing it, so a label
+   that merely wants to be quiet would render as though its panel had stopped
+   updating. The distinction is one docs/dashboard.md already records. */
+.cap {
   color: var(--fg-5);
 }
 

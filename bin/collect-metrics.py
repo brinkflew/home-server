@@ -392,6 +392,79 @@ def source_filesystems(m):
 # podman-auto-update restarts everything nightly - a device label would mint
 # thousands of dead series a year.
 
+# THE CONSUMERS OF /var, AND THE ONE THING A FLAT FACT CANNOT DO
+# ------------------------------------------------------------------------------
+# Everything else derived from a du on this host is a scalar fact in
+# bin/verify-host.sh, bridged into home_server_*_bytes by source_status for free.
+# This family is labelled instead, for one reason: a stacked chart and a topk()
+# both need to range over the consumers, and a flat fact per consumer would force
+# the dashboard to NAME every one of them. A hand-maintained roster is the most
+# driftable shape this repository has a name for - it is why source_units
+# enumerates the generator directory rather than listing units - so a consumer
+# added to bin/storage-census.sh must appear on the chart with no change here and
+# no change to the bundle.
+#
+# home_server_var_*, NOT home_server_storage_*, AND THE NAMESPACE IS DELIBERATE.
+# source_status mints home_server_<fact key>, and the census's own facts in
+# verify-host are storage_*, so any name inside that namespace is one future fact
+# key away from a duplicate sample - which rejects the WHOLE scrape, not one
+# panel. bin/lint-repo.sh leg 9 grades exactly this collision.
+#
+# IT READS A MARKER AND WALKS NOTHING. The du is 9.4 s and lives on
+# home-server-storage-census.timer; this source costs a file read, which is what
+# lets it sit in the fast tier so the series does not blink between hourly walks.
+STORAGE_MARKER = os.path.expanduser("~/.cache/home-server/storage-census")
+
+
+def source_storage(m):
+    """The /var breakdown, from the hourly census marker.
+
+    Absent keys are ABSENT, never zero: _marker_number returns None and
+    Metrics.add drops the sample. A consumer whose tree could not be read must
+    not read as "holds nothing" - that is absence-read-as-health, which this
+    repository has recorded four separate times.
+    """
+    marker = _marker(STORAGE_MARKER)
+    if not marker:
+        # Nothing to publish, and nothing to say: the census has never run. The
+        # finding belongs to capacity.census_fresh in bin/verify-host.sh, which
+        # can tell "never" from "stale" because it reads the same file.
+        return
+
+    for key, raw in sorted(marker.items()):
+        if not key.endswith("_mb"):
+            continue
+        # df_total_mb AND df_used_mb ALSO END IN _mb AND ARE NOT CONSUMERS.
+        # Without this they join the family as consumer="df_used", which is the
+        # whole filesystem stacked on top of the parts that add up to it - a
+        # chart claiming /var is twice its own size. Caught by reading the first
+        # exposition rather than by any test. They are not republished under a
+        # name of their own either: node_filesystem_size_bytes and
+        # node_filesystem_avail_bytes already carry them, and one quantity under
+        # two names on two schedules is how two readers of a metric come to
+        # disagree on screen.
+        if key in ("df_total_mb", "df_used_mb"):
+            continue
+        consumer = key[:-3]
+        value = _marker_number(raw, scale=float(1 << 20))
+        if value is None:
+            continue
+        # The group is the consumer's own first token, so the taxonomy is
+        # written where the consumer is declared and never by a regex here.
+        # `sum by (group)` is the chart; the bare consumer is the table.
+        group = consumer.split("_", 1)[0]
+        m.add("home_server_var_consumer_bytes", value,
+              {"consumer": consumer, "group": group},
+              "Bytes held under /var by one named consumer, from the hourly "
+              "census in bin/storage-census.sh. The set sums to df's used "
+              "figure: other_unaccounted carries whatever no consumer claims.")
+
+    m.add("home_server_var_census_timestamp_seconds",
+          _epoch(marker.get("census_at")), None,
+          "When bin/storage-census.sh last completed a walk. A thing cannot "
+          "grade its own liveness, so the staleness check reads this.")
+
+
 def source_network(m):
     for line in read_text("/proc/net/dev").splitlines()[2:]:
         if ":" not in line:
@@ -5408,6 +5481,10 @@ def _round_report(conn, row, window, pairs, settled):
 # tier was 0.114 s against a 30 s budget.
 SOURCES = (
     ("filesystems", source_filesystems, False, None),
+    # FAST despite being derived from a 9.4 s walk, because it only READS the
+    # marker that walk leaves. In the slow tier the series would blink out nine
+    # ticks in ten for no gain - see home-server-storage-census.service.
+    ("storage", source_storage, False, None),
     ("network", source_network, False, None),
     ("units", source_units, False, None),
     ("containers", source_containers, False, None),

@@ -152,6 +152,17 @@ boot_state="${HOME_SERVER_BOOT_STATE:-/var/lib/home-server/boot-state}"
 # from the unit alone. Warning on the second one means every reboot produces a
 # false alarm for up to a day, which is exactly how a person learns to ignore
 # this line. So it is only a finding once the machine has been up longer than
+# ------------------------------------------------------------------------------
+# The /var census, read once and shared
+# ------------------------------------------------------------------------------
+# bin/storage-census.sh walks /var hourly on its own timer and leaves this
+# marker; two sections read it - containers.volume_orphans and the whole
+# Capacity section - so the path is spelled here and nowhere else. The walk is
+# 9.4 s and deliberately does NOT happen in this script: the battery is what
+# --greenboot runs, and its exit code decides whether the OS rolls back.
+CENSUS="${HOME_SERVER_STORAGE_STATE:-$HOME/.cache/home-server/storage-census}"
+census_get() { sed -n "s/^$1=//p" "$CENSUS" 2>/dev/null | tail -1; }
+
 # the timer's period.
 check_timer_run() {  # <id> <label> <period-seconds> <unit> [--user]
 	local id="$1" label="$2" period="$3" unit="$4"
@@ -1871,6 +1882,62 @@ if [ -z "$GREENBOOT" ]; then
 	else
 		warn containers.storage_orphans "leftover build container(s) in storage: $orphans - they hold dangling images, so the nightly 'podman image prune -f' cannot reclaim; clear with 'podman rm --storage <name>'"
 	fi
+
+	# ORPHANED VOLUMES, WHICH THE CHECK ABOVE STRUCTURALLY CANNOT SEE.
+	# --------------------------------------------------------------------------
+	# containers.storage_orphans counts leftover BUILD CONTAINERS. This counts
+	# anonymous VOLUMES nothing references, which is a different subject with a
+	# different remedy - and it was completely unmeasured until 2026-09-09, when
+	# 332 of 340 volumes turned out to be orphaned, holding 9,227 MB and growing
+	# since the migration on 2026-08-12.
+	#
+	# THE NIGHTLY RECLAIM CANNOT REACH THEM AND THAT IS THE POINT. The
+	# ExecStartPost= on podman-auto-update.service is `podman image prune -f`;
+	# images and volumes are different stores.
+	#
+	# WHAT MINTED THEM, measured by classifying all 332 by their contents: 171
+	# postgres data directories and 81 valkey, from conduct's per-phase
+	# datastores, against 40 empty and 36 nested container stores from CI. A
+	# quadlet does NOT leak - the generator emits `--rm` on ExecStart and
+	# `podman rm -v -f -i` on ExecStop - so this was two call sites passing
+	# `rm -f` without `-v`, one in each repository, plus two image VOLUME paths
+	# no mount covered. All four are fixed; this is what says so if one returns.
+	#
+	# BOTH CONJUNCTS, NEVER EITHER ALONE. A night of recreates legitimately
+	# leaves a few fresh orphans, which is the system working; a leak is orphans
+	# that are OLD. 48h is two of podman-auto-update.timer's cycles, which is
+	# check_timer_run's "stale at two periods" rule applied to the thing that
+	# mints them, and 1024 MB is 0.4% of /var and about three days of the
+	# measured rate - so it fires within days of a leak restarting and never on
+	# ordinary residue.
+	#
+	# WARN, NEVER FAIL, for containers.storage_orphans' own stated reason: it is
+	# reclaimable disk, not a health problem, and bin/reboot-host.sh refuses to
+	# act on a host this battery calls unhealthy.
+	vol_total=$(census_get volumes_total)
+	vol_orph=$(census_get volumes_orphaned)
+	vol_orph_mb=$(census_get volumes_orphaned_mb)
+	vol_oldest=$(census_get volume_orphan_oldest_at)
+	vol_age_h=""
+	if [ -n "$vol_oldest" ]; then
+		vol_oldest_e=$(date -d "$vol_oldest" +%s 2>/dev/null || echo "")
+		[ -n "$vol_oldest_e" ] &&
+			vol_age_h=$(( ( $(date +%s) - vol_oldest_e ) / 3600 ))
+	fi
+	if [ -z "$vol_orph" ]; then
+		note containers.volume_orphans "the census has not recorded podman's volume counts - not measured"
+	elif [ "$vol_orph" -eq 0 ]; then
+		ok containers.volume_orphans "no orphaned anonymous volumes of ${vol_total:-?}"
+	elif [ -z "$vol_age_h" ] || [ "$vol_age_h" -le 48 ]; then
+		ok containers.volume_orphans "$vol_orph of ${vol_total:-?} volume(s) orphaned, none older than 48h - ordinary residue from a recreate, which the next teardown reclaims"
+	elif [ -n "$vol_orph_mb" ] && [ "$vol_orph_mb" -gt 1024 ]; then
+		warn containers.volume_orphans "$vol_orph of ${vol_total:-?} anonymous volume(s) are orphaned, holding ${vol_orph_mb}MB, and the oldest is ${vol_age_h}h old - something is minting volumes nothing removes. The nightly 'podman image prune -f' structurally cannot reclaim these. 'podman volume ls --filter dangling=true' lists them and 'podman volume prune' reclaims; do NOT reach for 'prune -a', which takes the auto-update rollback images with it"
+	else
+		note containers.volume_orphans "$vol_orph of ${vol_total:-?} volume(s) orphaned holding ${vol_orph_mb:-?}MB, oldest ${vol_age_h}h - orphaned but not yet costly"
+	fi
+	fact storage_volumes_total "${vol_total:-}" num
+	fact storage_volumes_orphaned "${vol_orph:-}" num
+	fact storage_volumes_orphaned_mb "${vol_orph_mb:-}" num
 
 	# EVERY QUADLET IS SUPPOSED TO BE RUNNING, AND NOTHING ASSERTED IT.
 	# On 2026-08-18 caddy was DOWN for 35 minutes - every public service
@@ -3642,6 +3709,30 @@ if [ -z "$GREENBOOT" ]; then
 	# every surface at once. So the failure is a gate that silently enforces
 	# nothing, from a file this host is now the only copy of apart from the
 	# backup.
+
+	# THE BUDGET, AND IT IS DERIVED FROM WHAT /var CAN AFFORD RATHER THAN
+	# FROM WHAT THE STORE COSTS. /var is 237,899 MB. Reserve the 10% that
+	# FilesystemFillingUp defends (23,790), subtract what everything except
+	# this store holds today (112,326 measured 2026-09-09) and the headroom
+	# the other capped consumers are still owed - three lanes 28,594, the
+	# journal 10,797, the TSDB 16,000 - and 46,392 MB is what is left. 40960
+	# is that rounded down, leaving about 5 GB for the uncapped set to drift.
+	#
+	# AND IT CLOSES ON THE RETENTION WINDOW, WHICH IS THE NUMBER THAT HAS TO
+	# MOVE. At the measured 5.8 runs/day and 506 MB/run, 40960 MB is 14 days;
+	# bin/ci-artifacts-sweep.sh keeps 30 and refuses below 7 for a reason it
+	# states at length. So this check reaching its budget is not a fault in
+	# the store - it is the sentence "30 days at 506 MB/run does not fit this
+	# filesystem", said by a check rather than by a person with an ssh
+	# session. Raising the number is only defensible after re-running the
+	# arithmetic above, which capacity.var_commitment now does every hour.
+	#
+	# THE SWEEP'S OWN HEADER PRICED THIS AT 2.5 MB/RUN. It was never right:
+	# the mean is 506 MB and was stable at 400-530 on every one of the 13
+	# days the store had existed when it was first measured.
+	ci_artifact_budget_mb="${CI_ARTIFACT_BUDGET_MB:-40960}"
+	fact github_runner_artifact_budget_mb "$ci_artifact_budget_mb" num
+
 	ci_store="${GITHUB_RUNNER_ARTIFACTS:-$ci_root/artifacts}"
 	if [ ! -d "$ci_store" ]; then
 		fact github_runner_artifact_state_bytes ""
@@ -3695,10 +3786,12 @@ if [ -z "$GREENBOOT" ]; then
 			warn ci.artifact_store "the artifact store exists and holds NO baselines.json (${ci_state_bytes:-0} bytes of other content under state/) - so any coverage gate reading it gets 'absent' and PASSES, on every surface at once, and a green pipeline says nothing about whether a regression would have been caught. Seed it; see docs/ci.md"
 		elif [ -n "$ci_swept_age" ] && [ "$ci_swept_age" -gt 3 ]; then
 			warn ci.artifact_store "the artifact store holds ${ci_state_bytes} bytes of baseline and ${ci_runs_mb:-?}MB of run scratch, but the sweep last ran ${ci_swept_age} days ago against a daily timer - check home-server-ci-artifacts-sweep.timer"
+		elif [ -n "$ci_runs_mb" ] && [ "$ci_runs_mb" -gt "$ci_artifact_budget_mb" ]; then
+			warn ci.artifact_store "the artifact store holds ${ci_runs_mb}MB of run scratch, over its ${ci_artifact_budget_mb}MB budget - unlike a CI lane nothing clears this on its own, and the sweep is working: it takes whole runs at 30 days and the store simply arrives faster than that. The lever is CI_ARTIFACT_KEEP_DAYS in bin/ci-artifacts-sweep.sh, which must not go below 7; see docs/ci.md and capacity.var_commitment"
 		elif [ -z "$ci_swept_at" ]; then
 			note ci.artifact_store "the artifact store holds ${ci_state_bytes} bytes of baseline and ${ci_runs_mb:-?}MB of run scratch; the sweep has never recorded a run, which on a fresh install means the one-time start in host/systemd/README.md was skipped"
 		else
-			ok ci.artifact_store "the shared artifact store holds $ci_baselines coverage baseline(s) (${ci_state_bytes} bytes) and ${ci_runs_mb:-?}MB of run scratch, swept ${ci_swept_age} day(s) ago"
+			ok ci.artifact_store "the shared artifact store holds $ci_baselines coverage baseline(s) (${ci_state_bytes} bytes) and ${ci_runs_mb:-?}MB of its ${ci_artifact_budget_mb}MB budget in run scratch, swept ${ci_swept_age} day(s) ago"
 		fi
 	fi
 
@@ -4351,6 +4444,124 @@ if [ -z "$GREENBOOT" ]; then
 	# What IS answerable from in here is the question one step earlier: is the
 	# timer even armed? That reads systemd's configuration rather than this
 	# script's own output, so it has no feedback loop.
+	# ==========================================================================
+	say capacity "Capacity"
+	# --------------------------------------------------------------------------
+	# WHAT NOTHING ON THIS HOST WAS ADDING UP. Every consumer of /var was sized
+	# against the free space on the day it was written, and no two of them were
+	# ever summed: the artifact store's 30-day window, three CI lanes at 20 GB
+	# each, the TSDB's 16 GB and the journal's 16 GB. On 2026-09-09, with /var at
+	# 146 GiB of 232 and 86 GiB free, those ceilings between them committed more
+	# than the free space that was left - and every check on the host was green,
+	# because each consumer was comfortably inside its own limit.
+	#
+	# THE INPUT IS bin/storage-census.sh's MARKER AND NOT A du HERE. The battery
+	# is what --greenboot runs and its exit code decides whether the OS rolls
+	# back; four traversals of 150 GB do not belong on that path. The census is
+	# hourly on its own timer and this reads what it left, which is the same
+	# "one measurement, several readers" shape ci.artifact_store already has.
+	# --------------------------------------------------------------------------
+	cen_at=$(census_get census_at)
+
+	cap_total=$(census_get df_total_mb)
+	cap_used=$(census_get df_used_mb)
+	cap_unacc=$(census_get other_unaccounted_mb)
+
+	# The census's own liveness. A stale census is not a capacity finding - it is
+	# the reason the capacity findings below cannot be trusted, so it is graded
+	# first and separately. Three hours is two of its hourly periods plus slack,
+	# which is check_timer_run's own "stale at two periods" rule rather than a
+	# number invented here.
+	if [ -z "$cen_at" ]; then
+		note capacity.census "bin/storage-census.sh has never recorded a walk - on a fresh install that means the one-time start in host/systemd/README.md was skipped, and nothing below is measured until it runs"
+	else
+		cen_e=$(date -d "$cen_at" +%s 2>/dev/null || echo "")
+		cen_age=$(( ( $(date +%s) - ${cen_e:-0} ) / 3600 ))
+		if [ -z "$cen_e" ]; then
+			note capacity.census "the census marker's timestamp '$cen_at' could not be parsed - not measured"
+		elif [ "$cen_age" -gt 3 ]; then
+			warn capacity.census "the /var census last ran ${cen_age}h ago against an hourly timer - check home-server-storage-census.timer; every capacity finding below is that old"
+		else
+			ok capacity.census "the /var census ran ${cen_age}h ago"
+		fi
+	fi
+
+	# --------------------------------------------------------------------------
+	# Does the breakdown still add up?
+	# --------------------------------------------------------------------------
+	# THE CENSUS IS SELF-PROVING AND THIS IS WHERE THAT IS CASHED IN. Its named
+	# consumers sum to df's used figure by construction, so whatever no consumer
+	# claims lands in other_unaccounted rather than silently making every share
+	# wrong. Measured on 2026-09-09: 1,925 MB of 150,468, 1.3% - essentially the
+	# OS. A quarter is twenty times that and is reachable only when a root has
+	# stopped being measured or something large has appeared that nothing names.
+	if [ -z "$cap_unacc" ] || [ -z "$cap_used" ] || [ "${cap_used:-0}" -le 0 ]; then
+		note capacity.var_breakdown "the census did not record a breakdown - not measured"
+	else
+		cap_unacc_pct=$(( cap_unacc * 100 / cap_used ))
+		if [ "$cap_unacc_pct" -gt 25 ]; then
+			warn capacity.var_breakdown "${cap_unacc}MB of /var's ${cap_used}MB (${cap_unacc_pct}%) is in nothing the census names - a consumer has appeared that bin/storage-census.sh does not measure, or one of its roots stopped being readable. Run it with --dry-run to see which"
+		else
+			ok capacity.var_breakdown "/var holds ${cap_used}MB, of which ${cap_unacc}MB (${cap_unacc_pct}%) is unaccounted"
+		fi
+	fi
+	fact storage_unaccounted_mb "${cap_unacc:-}" num
+
+	# --------------------------------------------------------------------------
+	# The sum nobody was computing
+	# --------------------------------------------------------------------------
+	# COMMITTED = WHAT IS HELD NOW, PLUS WHAT EVERY CAPPED CONSUMER IS STILL
+	# ENTITLED TO TAKE. Expressing it as headroom-still-owed rather than as a sum
+	# of ceilings is what makes it composable: the TSDB is a part of config/ and
+	# the journal a part of /var/log, so summing ceilings against consumers would
+	# double-count the parts. Adding only the REMAINING entitlement is correct
+	# whatever tree a capped thing lives in.
+	#
+	# THE CEILING SUMMED IS THE ENFORCED ONE, NEVER A CHECK'S TOLERANCE.
+	# metrics.tsdb_size grades the store against 18432M, but that is the number
+	# above which retention is provably not being enforced; what Prometheus
+	# actually enforces is --storage.tsdb.retention.size=16GB in
+	# stacks/infra/prometheus.container, so 16384 is what a commitment may claim.
+	# Summing tolerances inflates every consumer by whatever slack its own check
+	# was given, and the difference does not show up anywhere in the output.
+	cap_committed=""
+	if [ -n "$cap_used" ] && [ -n "$cap_total" ]; then
+		cap_committed=$cap_used
+		cap_owed() {
+			# cap_owed <ceiling> <current>; adds the unused entitlement.
+			[ -n "$2" ] || return 0
+			[ "$1" -gt "$2" ] && cap_committed=$(( cap_committed + $1 - $2 ))
+			return 0
+		}
+		cap_lanes=0
+		for _l in $ci_lanes_enabled; do cap_lanes=$(( cap_lanes + 1 )); done
+		cap_owed "$ci_artifact_budget_mb" "$(census_get ci_artifacts_mb)"
+		[ "$cap_lanes" -gt 0 ] && cap_owed $(( cap_lanes * 20480 )) "$(census_get ci_lanes_mb)"
+		cap_owed "$jd_cap_mb" "$(census_get log_journal_mb)"
+		cap_owed 16384 "${tsdb_mb:-}"
+	fi
+
+	if [ -z "$cap_committed" ] || [ -z "$cap_total" ] || [ "${cap_total:-0}" -le 0 ]; then
+		note capacity.var_commitment "the census did not record /var's size - not measured"
+	else
+		cap_pct=$(( cap_committed * 100 / cap_total ))
+		cap_msg="if every capped consumer reached its ceiling /var would hold ${cap_committed}MB of ${cap_total}MB (${cap_pct}%)"
+		# 95 and 90 are FilesystemAlmostFull's and FilesystemFillingUp's own
+		# lines one level up, so the three constants move together. WARN and NOTE
+		# only, never FAIL: bin/reboot-host.sh refuses to act on a host this
+		# battery calls unhealthy, and a capacity projection weeks out must never
+		# hold up an OS security update.
+		if [ "$cap_pct" -gt 95 ]; then
+			warn capacity.var_commitment "$cap_msg - past FilesystemAlmostFull's line, and nothing would have done anything wrong. Lower a ceiling rather than deleting once by hand: CI_ARTIFACT_KEEP_DAYS, GITHUB_RUNNER_LANE_MAX_MB, SystemMaxUse, retention.size"
+		elif [ "$cap_pct" -gt 90 ]; then
+			note capacity.var_commitment "$cap_msg - past FilesystemFillingUp's line"
+		else
+			ok capacity.var_commitment "$cap_msg"
+		fi
+	fi
+	fact storage_committed_mb "${cap_committed:-}" num
+	fact storage_capacity_mb "${cap_total:-}" num
+
 	say verify "Self"
 	if [ "$(systemctl --user is-enabled home-server-verify.timer 2>/dev/null)" = enabled ]; then
 		ok verify.timer_enabled "home-server-verify.timer enabled"

@@ -1,0 +1,47 @@
+# ==============================================================================
+# Break /var down by consumer, hourly
+# ------------------------------------------------------------------------------
+# A plain user unit rather than a quadlet, for the reason every host-side job in
+# this directory is one: it reads paths in the user's own namespace through
+# `podman unshare`, which has to run where podman runs and not inside a
+# container.
+#
+# NOT A SOURCE IN bin/collect-metrics.py, AND THAT IS THE DESIGN DECISION HERE.
+# The obvious home is the collector, which already publishes everything else -
+# but the census is 9.4 s measured, and home-server-metrics.service is budgeted
+# at TimeoutStartSec=25s against a 30-second tick precisely so two collectors can
+# never overlap. Spending a third of that on a number that moves ~170 MB an hour
+# would be the wrong trade twice over. So the walk lives here, on its own hourly
+# timer, and the collector reads the marker it leaves - which costs microseconds
+# and keeps the series continuous between walks.
+#
+# NOT PART OF bin/verify-host.sh EITHER, though that is also hourly and already
+# pays for six du's. The battery is what --greenboot runs, and its exit code
+# decides whether the OS rolls back; four traversals of 150 GB do not belong on
+# that path. verify-host READS this marker instead, which is the same "one
+# measurement, three readers" shape bin/ci-artifacts-sweep.sh already has.
+#
+# NO Slice=, DELIBERATELY. The sweep next door takes Slice=app-ci.slice because
+# it sweeps the lanes' own tree. This one walks the whole of /var - the lanes,
+# the agent fleet, config/, the backups and the graph root - so charging it to
+# any one slice would make that slice's own headroom reading include work that
+# is not its. home-server-backup.service sets no slice for the same reason; the
+# per-unit MemoryMax below is the bound.
+#
+# See: bin/storage-census.sh, bin/verify-host.sh (capacity.*), docs/observability.md
+# ==============================================================================
+
+[Unit]
+Description=Break /var down by consumer into the storage census marker
+Documentation=file:/var/home-server/docs/observability.md
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/var/home-server/.env
+ExecStart=/var/home-server/bin/storage-census.sh
+TimeoutStartSec=600
+MemoryHigh=192M
+MemoryMax=256M
+Nice=10
+CPUWeight=20
+IOWeight=20

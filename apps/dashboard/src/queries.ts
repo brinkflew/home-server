@@ -123,6 +123,29 @@ export const SYSTEM = {
   filesystems: "node_filesystem_size_bytes",
   filesystemAvail: "node_filesystem_avail_bytes",
 
+  /**
+   * THE /var CENSUS. bin/storage-census.sh walks /var hourly and leaves a
+   * marker; bin/collect-metrics.py reads it and publishes one labelled series,
+   * which is the only shape a stacked chart and a topk() can both range over.
+   *
+   * `home_server_var_*` AND NOT `home_server_storage_*`, DELIBERATELY.
+   * source_status mints `home_server_<fact key>` out of bin/verify-host.sh's
+   * facts, and the census's own facts there are `storage_*` - so any name inside
+   * that namespace is one future fact key away from a duplicate sample, which
+   * rejects the WHOLE scrape rather than one panel. bin/lint-repo.sh leg 9
+   * grades exactly that collision.
+   *
+   * The GROUP sum is the chart and the bare consumer is the table: adding a
+   * consumer to the census puts a band on the chart with no change here, which
+   * is the reason this is labelled rather than one query per consumer.
+   */
+  varByGroup: "sum by (group) (home_server_var_consumer_bytes)",
+  varConsumer: "home_server_var_consumer_bytes",
+  varCommitted: "home_server_storage_committed_bytes",
+  varCapacity: "home_server_storage_capacity_bytes",
+  varOrphanedVolumes: "home_server_storage_volumes_orphaned",
+  varOrphanedVolumeBytes: "home_server_storage_volumes_orphaned_bytes",
+
   disksInfo: "home_server_disk_info",
   diskHealth: "home_server_disk_health_ok",
   diskTemp: "home_server_disk_temperature_celsius",

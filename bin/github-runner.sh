@@ -706,8 +706,19 @@ lane_reset() {
 # 2,500 MB actual, and the same understatement reaches ci.lane_disk, which is
 # therefore grading a fiction. A garbage collector reading a number that is
 # systematically low is one that never fires.
+#
+# AND `-x`, WHICH IS THE OTHER HALF OF THAT LESSON AND WAS MISSING FOR AS LONG
+# AS THE FIRST HALF WAS RIGHT. Unsharing is correct for a subuid-owned tree and
+# is a 78% OVER-read the moment the tree contains a live overlay mount: inside
+# the namespace `du` descends into every running container's overlay/<id>/merged
+# and counts that container's whole rootfs on top of the layers it is composed
+# from. Measured on the graph root 2026-09-09 - 74,166 MB unshared against
+# 41,610 MB actual, where 61 overlay mounts were visible inside the namespace
+# against 1 outside. A lane holding a live nested container is the same shape,
+# and the over-read would fire gc_lane spuriously and be graded by ci.lane_disk.
+# `-x` stops at a filesystem boundary and `merged` is a different filesystem.
 lane_du_mb() {
-	podman unshare du -sm "$1" 2>/dev/null | cut -f1
+	podman unshare du -sxm "$1" 2>/dev/null | cut -f1
 }
 
 gc_lane() {
@@ -852,7 +863,17 @@ reap_offline() {
 cleanup() {
 	stopping=1
 	log "stopping"
-	[ -n "$cname" ] && podman rm -f "$cname" >/dev/null 2>&1
+	# `-v`, AND THE ONE CHARACTER IS A DISK LEAK. quay.io/podman/stable declares
+	# VOLUME on /var/lib/containers and /home/podman/.local/share/containers, and
+	# neither is a path this lane reads - the nested store is the bind mount at
+	# /var/lib/nested-storage and $HOME is /home/runner. So each lane teardown
+	# left two anonymous volumes behind, and nothing on the server reclaims one:
+	# the nightly job is `podman image prune -f`, and images are a different
+	# store. Measured 2026-09-09 by classifying all 332 orphaned volumes on the
+	# host, 36 were these. A quadlet does not have the bug - the generator emits
+	# `--rm` on ExecStart and `podman rm -v -f -i` on ExecStop - which is where
+	# the spelling comes from. See containers.volume_orphans in bin/verify-host.sh.
+	[ -n "$cname" ] && podman rm -f -v "$cname" >/dev/null 2>&1
 	[ -n "$runner_id" ] && delete_runner "$runner_id"
 	podman unshare rm -f "$jitfile" 2>/dev/null
 	marker_write 0

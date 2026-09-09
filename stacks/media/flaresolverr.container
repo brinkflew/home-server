@@ -56,6 +56,22 @@ NoNewPrivileges=true
 DNS=9.9.9.9
 DNS=1.1.1.1
 
+# THE IMAGE DECLARES `VOLUME /config` AND NOTHING HERE COVERED IT, so podman
+# minted a fresh anonymous volume on every create and left it behind on every
+# teardown. Nothing on the server reclaims one - the nightly job is `podman
+# image prune -f`, and images are a different store - so they accumulated from
+# 2026-08-12 until they were counted: 332 orphans holding 9,350 MB, of which the
+# empty ones are this path and joal's.
+#
+# A TMPFS RATHER THAN A BIND MOUNT, BECAUSE THE PATH HOLDS NOTHING. Measured on
+# the host: the live volume is 0 MB and empty. FlareSolverr is configured
+# entirely by environment and keeps its sessions in memory, so a fresh empty
+# /config has been mounted here on every recreate for four weeks with the
+# service working. A tmpfs cannot lose what was already being discarded nightly;
+# what it changes is that the discarding is now stated in the file rather than
+# being a leak nobody had read. See containers.volume_orphans in bin/verify-host.sh.
+Tmpfs=/config:rw,size=16m
+
 Environment=LOG_LEVEL=info
 Environment=LOG_HTML=false
 Environment=CAPTCHA_SOLVER=none
