@@ -858,6 +858,75 @@ else
 	skip "the agents checkout is not beside this one (set AGENTS_REPO to point at it)"
 fi
 
+# ------------------------------------------------------------------------------
+say "Custom properties"
+# ------------------------------------------------------------------------------
+# A DECLARATION THAT READS A PROPERTY NOTHING DEFINES DOES NOTHING, AND LOOKS
+# EXACTLY LIKE ONE THAT WORKS.
+#
+# var(--x) with no --x anywhere is invalid at computed-value time: an inherited
+# property falls back to `inherit` and an unset one to its initial value, so the
+# rule silently does nothing and the element usually still looks right, because
+# the value it inherits is the one somebody meant. Nothing in the toolchain says
+# a word - vue-tsc does not read CSS, and there is no CSS test.
+#
+# THIS REPOSITORY HAS HIT IT TWICE. --ink* and --t-micro were in no stylesheet
+# and are already in docs/known-state.md; --fg-1 on the network overview's
+# headline was the second, and it went unseen because --fg is what it fell back
+# to and --fg is what it should have said.
+#
+# A PROPERTY IS DECLARED IN TWO PLACES AND BOTH COUNT. `--x:` in a stylesheet,
+# and "--x" set from a template - Band.vue passes --cols and the tables pass
+# --rail through :style - so the reads and the writes have to be collected from
+# the whole tree rather than from tokens.css, or every locally-scoped property
+# in the app reads as undefined.
+#
+# AND COMMENTS ARE NOT CODE. The first version of this read them, and its first
+# finding was --cards in a HomePage docblock explaining the bento grid that was
+# DELETED - a rule describing what a file used to do, reported as a live defect.
+# Block and template comments come out of both sides before either is collected:
+# a property named only in a comment neither declares nor reads anything.
+if [ -d apps/dashboard/src ] && command -v python3 >/dev/null 2>&1; then
+	undefined=$(python3 - <<'PYEOF'
+import pathlib, re, sys
+
+root = pathlib.Path("apps/dashboard/src")
+files = sorted(p for p in root.rglob("*") if p.suffix in {".vue", ".css", ".ts"})
+# /* ... */ covers a CSS rule's comment and a .vue docblock alike; <!-- --> is
+# the template's. Left alone: // to end of line, because a var() in one is not
+# a shape this app has and eating a line that begins with a URL would be worse.
+STRIP = re.compile(r"/\*.*?\*/|<!--.*?-->", re.S)
+blob = {p: STRIP.sub(" ", p.read_text(encoding="utf-8")) for p in files}
+
+# Declared: a CSS declaration, or a quoted key handed to :style / setProperty.
+declared = set()
+for text in blob.values():
+    declared.update(re.findall(r"(--[A-Za-z0-9_-]+)\s*:", text))
+    declared.update(re.findall(r"[\"'](--[A-Za-z0-9_-]+)[\"']", text))
+
+# Read: var(--x). A fallback - var(--x, 4px) - is still a read of --x.
+missing = {}
+for path, text in blob.items():
+    for name in re.findall(r"var\(\s*(--[A-Za-z0-9_-]+)", text):
+        if name not in declared:
+            missing.setdefault(name, set()).add(str(path))
+
+for name in sorted(missing):
+    print(name, " ".join(sorted(missing[name])))
+PYEOF
+	)
+	if [ -n "$undefined" ]; then
+		while read -r name where; do
+			[ -n "$name" ] || continue
+			bad "$name is read but declared nowhere - $where"
+		done <<< "$undefined"
+	else
+		ok "every var(--x) under apps/dashboard/src names a property something declares"
+	fi
+else
+	skip "no apps/dashboard/src, or python3 is not installed"
+fi
+
 echo
 if [ "$fails" -gt 0 ]; then
 	printf '\033[31m%d check(s) FAILED\033[0m\n' "$fails"

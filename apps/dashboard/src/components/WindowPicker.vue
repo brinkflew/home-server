@@ -34,15 +34,29 @@ const { windows, active, setWindow } = useTimeWindow();
    which were themselves byte-identical to each other. */
 .picker {
   display: flex;
-  flex-wrap: wrap;
   gap: 2px;
   padding: 2px;
   border-radius: var(--r-sm);
   background: var(--field);
   border: 1px solid var(--line);
-  /* It is about 178px of controls in a header half that clips, so it wraps
-     rather than losing "7d" off the end. Below 640 it rides the toolbar's own
-     scrollable row instead, and does not need to. */
+
+  /* IT DOES NOT WRAP, AND IT NEVER DID. This carried `flex-wrap: wrap` under a
+     comment saying it wrapped "rather than losing 7d off the end" - but
+     flex: none, one line below it, sets flex-shrink to 0, so the box is its
+     max-content width at every width and the wrap could not fire. Measured on
+     /system/load: 165x34.19 at 1360, 1180, 1150, 1100, 1000, 950 and 901
+     alike.
+
+     WHAT ACTUALLY HAPPENS IS THE THING THE COMMENT SAID IT AVOIDED. The header
+     gives this element its full width and clips the toolbar around it, so "7d"
+     is off the edge from about 1130 down and at 901 the toolbar is 0px wide.
+     That is a separate defect from the one this file was touched for - it is
+     about what the 900-1180 band should DO, and a scroller there is ruled out
+     because base.css gives one a 9px bar, which would put the header's height
+     back under the control of what a page teleported.
+
+     The dead declaration is gone rather than left to be believed. Below 640 the
+     picker rides the toolbar's own scrollable row, where it needs neither. */
   flex: none;
 }
 

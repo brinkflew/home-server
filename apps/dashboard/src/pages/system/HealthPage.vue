@@ -277,7 +277,7 @@ const availability = usePoll(async (signal) => {
 }
 
 /* Three equal columns above 900, packed left below it, and a label-left readout
-   below 640 - the round board's recipe, unchanged through four pages. */
+   below 640 - the round board's recipe, on all eight pages that carry it. */
 .conds {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

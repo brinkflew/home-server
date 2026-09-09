@@ -5229,3 +5229,58 @@ service on the rack read **memory starved**. Nothing on the host was.
   carries its own; the spread across the four is 18px, which is what stretch is actually for.
 - **A pure ramp draws a flat line at the window anybody looks at.** 34 a week is 1.2 units over six
   hours on a 0-700 axis, so the panel whose point is the slope drew none.
+
+### The shell's own height was a function of its pages, and the worst band was unsampled
+- **`.bar` declared no height at all** - 28px of padding plus whatever its tallest child happened to
+  be - and one of the three children is `#toolbar`, which every route fills differently. The
+  `WindowPicker` is 34.19px against an inactive tab's 32.14px, so five routes rendered a 63.19px
+  header and eight a 61.14px one; the header is not sticky above 900, so those two pixels moved the
+  whole page body on every navigation between the two sets.
+- **The 900-1180 band was 27px, not 2, and `shoot.mjs` walked straight past it.** `.toolbar` is the
+  only child that can give way, so it is crushed there and the teleported TEXT wraps inside it -
+  `overflow: hidden` clips horizontally and grows vertically, which is the one direction that moves
+  the page. **At 901 the toolbar is 0px WIDE**: the payload is clipped to nothing and its wrapped
+  lines still push the height - `read only` two lines, `asks the fleet` three, `/home`'s two ages
+  four - so `/home` measured **90.56px**, 29px taller than it needed to be FOR CONTENT THAT WAS NOT
+  ON SCREEN AT ALL. **Three rungs make four BANDS** and the walk sampled three; the fixture
+  viewports are 1360, 901, 834 and 390 now.
+- The row is declared - `--bar-row: 35px`, `ceil` of the picker - as a **floor** on `.left` and on
+  `.toolbar`, plus `white-space: nowrap` on the toolbar. A `height` would slice an over-tall payload
+  in silence; a floor lets one grow the header where the walk names the route. **The floor is in the
+  CSS and the ceiling is in the harness**, which carries no number and only requires the routes to
+  agree. 64px on every route above the rung, 109 below it.
+- **`--bar-row` and not `--row`**: `tokens.css` already spends `--row` on a gradient, and page
+  content is teleported INTO the header's subtree, so a page asking for that background would have
+  been handed `35px`.
+- Below 900 that is a constant 109px against 88.4-107.2, so nine of fourteen routes pay 18px of
+  sticky header on a phone. Named rather than implied; 35 is the smallest constant available, and
+  the lever if it is ever too much is the bar's own padding, never the row.
+- **`WindowPicker`'s `flex-wrap: wrap` could never fire**, because `flex: none` one line below it
+  sets `flex-shrink` to 0 - measured 165x34.19 at seven widths - so the comment claiming it wrapped
+  "rather than losing 7d off the end" described the opposite of what happens: `7d` is off the
+  clipped edge from about 1130 down and at 901 the toolbar is 0px wide. Dead declaration removed;
+  the clipping is a separate open question, and a scroller is ruled out because `base.css` gives one
+  a 9px bar, which would put the header's height back under the control of what a page teleported.
+- Four comments in `NavBar.vue` named a System toolbar that no longer exists, and two files said the
+  header wraps and sticks at 640 when the rung has been 900 since the drawer moved.
+
+### A custom property nothing defines does nothing, and looks exactly like one that works
+- `network/OverviewPage.vue`'s headline read `var(--fg-1)`, **defined in no stylesheet** - the
+  name's only appearance in the app. Invalid at computed-value time, so `color` fell back to
+  `inherit` and landed on `--fg` from `body`: the right colour by accident, and a declaration that
+  becomes the wrong one the moment any ancestor sets a colour. **Third of a family**, after `--ink*`
+  and `--t-micro`.
+- `bin/lint-repo.sh` leg 12 collects every `--x` DECLARED under `apps/dashboard/src` - CSS
+  declarations and the ones handed through `:style`, because `Band` passes `--cols` and the tables
+  pass `--rail` - against every `--x` read through `var()`. Proved to fail on `--fg-1` planted back.
+- **Its first finding was a false one, and it is why the leg strips comments**: `--cards` in a
+  `HomePage` docblock explaining a bento grid that was DELETED, reported as a live defect. A
+  property named only in a comment neither declares nor reads anything.
+- The same page was the eighth lead panel and **the one that never got the shared recipe** - seven
+  were byte-identical on five values and it differed on all five, with different rungs too, so its
+  panel was ~5px shorter than the same panel everywhere else. The comparison is never on screen.
+- **The counted sentence had already moved in two directions**: `HomePage.vue` said the recipe was
+  "unchanged through five pages" and `system/HealthPage.vue` said four, on the same day, about the
+  same recipe. Eight carry it. The number is gone from all three copies rather than corrected a
+  third time.
+

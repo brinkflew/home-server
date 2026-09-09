@@ -122,7 +122,30 @@ const age = computed(() => {
 </template>
 
 <style scoped>
+/* THE CONTROL ROW IS DECLARED, BECAUSE THIS HEADER HAD NO HEIGHT OF ITS OWN. It
+   was 28px of padding plus whatever its tallest child happened to be, so a route
+   teleporting a WindowPicker got a 2px taller header than one teleporting a note
+   - and the header is not sticky above 900, so the whole page body stepped down
+   on navigation. In the 900-1180 band, which nothing had ever sampled, it was
+   27px: /home's two freshness readings wrapped to four stacked lines.
+
+   35px is ceil(34.19), the WindowPicker measured - a 1px border and 2px of
+   padding around a .pick of 5px/11px over --t-mono-md's 18.19px line. It also
+   clears the 34px .menu button below 900 and the 34px a ChipLink becomes under
+   (pointer: coarse), where base.css redefines --pad-chip to 7px 10px. Every
+   element in here carries an explicit unitless line-height, so none of this
+   depends on whether the webfont has loaded.
+
+   --bar-row RATHER THAN --row, which tokens.css already defines as a gradient.
+   It has no consumer today, but page content is teleported INTO this subtree, so
+   a page reaching for background: var(--row) would silently be handed 35px.
+
+   IT IS A FLOOR AND fixtures/shoot.mjs IS THE CEILING. A `height` would slice an
+   over-tall payload in silence, since the toolbar clips in both directions; a
+   floor lets one grow the header where the walk can name the route. That
+   division is what makes the number honest rather than a claim. */
 .bar {
+  --bar-row: 35px;
   display: flex;
   align-items: center;
   gap: 9px;
@@ -131,11 +154,15 @@ const age = computed(() => {
 }
 
 /* THE NAV NEVER COMPRESSES AND THE TOOLBAR ALWAYS CAN. The type going from
-   12px to 13px widened the tabs, and the System page teleports the most into
-   this bar - an OS line, a staged chip and a window picker. With everything
-   shrinkable the mark lost its wordmark and the OS line wrapped, which took
-   the whole header to 75px and put a tab under it. A page's own toolbar is the
-   half that may give way, so it is the half that shrinks.
+   12px to 13px widened the tabs, and the page that teleports the most into this
+   bar is Library - a search field, a chip and a window picker. With everything
+   shrinkable the mark lost its wordmark and a teleported line wrapped, which
+   took the whole header to 75px and put a tab under it. A page's own toolbar is
+   the half that may give way, so it is the half that shrinks.
+
+   THAT FIXED THE WRAP FOR THE NAV AND NOT FOR THE TOOLBAR'S OWN TEXT, which is
+   what `white-space: nowrap` below is for. Giving way by wrapping is still
+   giving way in the one direction that moves the page.
 
    Below 640 neither of those is true any more: the nav is not here at all.
 
@@ -149,6 +176,13 @@ const age = computed(() => {
   min-width: 0;
   flex: none;
   margin-right: auto;
+
+  /* Above 900 the three children share one row and this is the one that is
+     always here, so flooring it pins the bar even when the toolbar has removed
+     itself - which is the deferred Teleport's first mount, and would be any
+     route that teleported nothing. Measured with #toolbar emptied: 64px with
+     this floor, 61.14 without it, at 1360 and at 901 alike. */
+  min-height: var(--bar-row);
 }
 
 .menu {
@@ -227,17 +261,38 @@ const age = computed(() => {
   font: var(--t-ui-md);
 }
 
+/* THIS IS THE ONLY CHILD THAT CAN GIVE WAY, and until 2026-09-09 the way it gave
+   was to WRAP. .left and .verdict are both flex: none, so between the 900 rung and
+   about 1180 this is crushed to 32-231px and a teleported note broke across
+   lines - `asks the fleet` became three of them at 960, /home's two ages four at
+   901. overflow: hidden does not prevent that: it clips horizontally and grows
+   vertically, which is the one direction that moves the page.
+
+   nowrap IS ON THE CONTAINER RATHER THAN ON EACH PAYLOAD. It inherits, so it
+   governs the eleven teleport sites and any written later; putting .truncate on
+   the five .note rules would have fixed five call sites and said nothing about
+   the sixth. It makes "the toolbar is the half that gives way" mean clip, which
+   is what the overflow below already intended.
+
+   The floor is here as well as on .left because below 900 this is a row of its
+   own, and .left cannot speak for a row it is not in. */
 .toolbar {
   display: flex;
   align-items: center;
   gap: 9px;
   min-width: 0;
+  min-height: var(--bar-row);
+  white-space: nowrap;
   overflow: hidden;
 }
 
-/* Four of the eight pages teleport nothing but a note, and two teleport
-   nothing at all on some routes. An empty flex item still opens a flex line
-   once the header wraps, so it stops occupying one. */
+/* The four section layouts teleport nothing but a note. NO ROUTE TELEPORTS
+   NOTHING - ten sites in ten files, every one of them unconditional - so this
+   never fires today. It is here because an empty flex item still opens a flex
+   line once the header wraps, and display: none outranks the floor above it
+   while a floor cannot reach a row that is not there at all. The .left floor
+   is what holds the wide case if this ever does fire; measured, 64px against
+   61.14 without it. */
 .toolbar:empty {
   display: none;
 }
@@ -303,8 +358,16 @@ const age = computed(() => {
 
    The tabs leave, the wordmark leaves, the header sticks, and a page's own
    toolbar gets a scrollable row of its own rather than being clipped to
-   nothing. There is still exactly ONE #toolbar element - eight pages teleport
-   into it and a second target would be two answers to one question. */
+   nothing. There is still exactly ONE #toolbar element - ten sites in ten
+   files teleport into it and a second target would be two answers to one
+   question.
+
+   AND THE ROW IS FLOORED HERE TOO, because these are two rows rather than one:
+   the header is a constant 109px on every route below 900 against 88.4-107.2
+   before. Nine of the fourteen routes pay 18px of sticky header on a phone for
+   it, which is the price of a constant and 35px is the smallest one available.
+   If that is ever judged too much, the lever is this bar's own 14px padding
+   below 900 - never the row, which is what a control needs to be. */
 @media (max-width: 900px) {
   .bar {
     flex-wrap: wrap;
@@ -330,8 +393,16 @@ const age = computed(() => {
 
   /* Row one is the menu, the glyph and the verdict. Row two is whatever the
      page teleported, full width, at the gutter and scrollable in place - the
-     System page sends an OS line, a staged chip and a window picker, which is
-     about 400px of controls that used to be clipped to nothing. */
+     Library page sends a search field, a chip and a window picker, which is
+     about 400px of controls that used to be clipped to nothing.
+
+     A CLASSIC SCROLLBAR WOULD ADD ITS OWN HEIGHT HERE, on exactly the routes
+     whose controls overflow. base.css gives it 9px, and Library is the only
+     route that reaches it - measured at 390, 405px of controls in a 362px row,
+     against 362 in 362 on the other nine; on touch, and in the headless Chromium the walk
+     uses, it is an overlay and costs nothing. Not worth scrollbar-gutter: an
+     always-present empty trough under `read only` on thirteen routes is a
+     worse trade than 9px on one. */
   .verdict {
     order: 2;
     flex: 0 1 auto;

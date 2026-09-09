@@ -204,12 +204,13 @@ is the same shape as everything else in this document - a fault whose only sympt
 of a symptom - which is why the fix is a check rather than a suppression. **`overflow-x: hidden` on
 `body` was refused deliberately**: it conceals this class of defect instead of removing it, and it
 breaks `position: sticky` in some engines. `fixtures/shoot.mjs` asserts `scrollWidth` against
-`clientWidth` at three viewports instead, on nine routes.
+`clientWidth` at four viewports instead, on thirteen routes.
 
 **Three rungs, and they are literals because a media query cannot read a custom property.** 1180 is
 the existing `Band` fold. **900** is where the racks gain a scroller, N-up grids fold, tables drop
-their lowest-priority columns, and the nav becomes a drawer. **640** is where the header sticks,
-the page gutter tightens to 14px and tables drop to their essential columns. `1100`, `1280` and
+their lowest-priority columns, and the nav becomes a drawer - **and where the header wraps and
+sticks**, which two places said was 640 for as long as the rung had been 900. **640** is where the
+page gutter tightens to 14px and tables drop to their essential columns. `1100`, `1280` and
 `1400` still exist on three pages, each doing a real job at a real width; normalising them would
 have been a desktop behaviour change made for tidiness. The ladder is in
 `docs/repo-conventions.md`.
@@ -231,7 +232,11 @@ toolbar, which has its own; the tally truncates and the dot and the age are `fle
 required flattening `#toolbar` out of its wrapper and into the bar directly - nested, a
 `flex-basis: 100%` sized the *wrapper*, which put the verdict on a line by itself and left the
 toolbar indented under it, three rows for two things. There is still exactly **one** `#toolbar`
-element: eight pages teleport into it and a second target would be two answers to one question.
+element: ten sites in ten files teleport into it and a second target would be two answers to one
+question.
+
+**That row had no declared height until 2026-09-09**, so it was a function of what a page teleported
+into it - see *The header was a function of its pages* below.
 
 **A LIST OF RECORDS IS STILL A TABLE ON A PHONE.** Six columns do not fit 375px, so `.tbl` gained
 **column priority**, one tier per rung: `.p4` drops at 1180, `.p3` at 900, `.p2` at 640, and
@@ -2245,3 +2250,111 @@ Column widths were then measured at all three rungs rather than reasoned about: 
 because `c-act` narrows to 84px there and the title takes a two-line clamp, the round board's answer
 again. Final count **52 problems, matching the recorded baseline exactly**, all of them the one
 expected missing-poster 404, with no console error, no page error and no overflow at any viewport.
+
+## The header was a function of its pages, 2026-09-09
+
+The report was that navigating moved the layout a few pixels.
+
+**IT DID, AND THE HEADER HAD NO HEIGHT OF ITS OWN, WHICH MADE IT A FUNCTION OF ITS PAGES.** `.bar`
+was 28px of padding plus whatever its tallest child happened to be, and the tallest child is
+sometimes the toolbar: `WindowPicker` is 34.19px against an inactive tab's 32.14px, so `/library`,
+`/ci`, `/system/load`, `/services/list` and `/agents/fleet` rendered a **63.19px** header and the
+other eight a **61.14px** one. The header is not sticky above 900, so those two pixels moved the
+whole page body every time somebody navigated. It is the defect that was reported.
+
+**And two places said the header wraps and sticks at 640**, which has been the 900 rung since the
+drawer moved. `base.css`'s ladder and the paragraph above both said it; `NavBar.vue` was the only
+file that was right.
+
+**The band nobody had sampled was twenty times worse.** `.toolbar` is the only child that can give
+way - `.left` and `.verdict` are both `flex: none` - and between the 900 rung and about 1180 it is
+crushed to 32-231px, at which point the teleported *text wraps inside it*. `overflow: hidden` does
+not prevent that: it clips horizontally and grows vertically, which is the one direction that moves
+the page. Measured at 901: `/home` **90.56px**, the three Agents routes **83.00px**, the note routes
+65.00 and `/library` 63.19 - a **27px** spread.
+
+**And the toolbar is 0px wide there**, which is what made it invisible as well as unmeasured. The
+payload is clipped to nothing and its wrapped lines still push the height: `read only` two lines,
+`asks the fleet` three, `/home`'s two freshness readings four. So `/home` was 29px taller than it
+needed to be **for content that was not on screen at all** - a header growing for something nobody
+could see, on a page whose own body then started 29px lower. Three rungs make four *bands* and the
+walk sampled three of them; this was the fourth.
+
+**So the row is declared: `--bar-row: 35px`, a floor on `.left` and on `.toolbar`, and
+`white-space: nowrap` on the toolbar.** 35 is `ceil(34.19)`, the picker measured, and it clears the
+34px `.menu` button and the 34px a `ChipLink` becomes under `(pointer: coarse)`. Every route now
+reports exactly **64px** at 1360, 1180, 1024 and 901, and exactly **109px** at 900, 834, 640 and
+390. `--bar-row` rather than `--row`, which `tokens.css` already spends on a gradient - it has no
+consumer, but page content is teleported *into* this subtree and would have been handed `35px` for a
+background.
+
+**It is a floor in the CSS and a ceiling in the harness, and that division is the point.** A
+`height` would slice an over-tall payload in silence, since the toolbar clips both ways; a floor
+lets one grow the header where `fixtures/shoot.mjs` can name the route. The check carries **no
+number** - it asserts only that every route agrees at a given viewport - so moving the row
+deliberately is one edit that the check follows rather than fights.
+
+**The cost is named rather than implied.** Below 900 the header is a constant 109px against
+88.4-107.2 before, so nine of the fourteen routes pay 18px of sticky header on a phone. 35 is
+already the smallest constant available. The lever, if it is ever too much, is the bar's own 14px
+padding below 900 - never the row, which is what a control needs to be.
+
+**`WindowPicker` never wrapped, and its comment said it did.** It carried `flex-wrap: wrap` under a
+comment claiming it wrapped *"rather than losing 7d off the end"*, with `flex: none` on the next
+line setting `flex-shrink` to 0 - so the box is its max-content width at every width and the wrap
+could not fire. Measured on `/system/load`: 165x34.19 at 1360, 1180, 1150, 1100, 1000, 950 and 901
+alike. **What actually happens is the thing the comment said it avoided**: `7d` is off the clipped
+edge from about 1130 down, and at 901 the toolbar is 0px wide. The dead declaration is gone; the
+clipping is a separate open question about what that band should *do*, and a scroller there is ruled
+out because `base.css` gives one a 9px bar - which would put the header's height back under the
+control of what a page teleported.
+
+### The page that never got the recipe, and the property nothing defines
+
+`network/OverviewPage.vue` was the eighth lead panel and the one that never got the shared recipe.
+Seven were byte-identical on five values and it differed on all five - a 5px `lead-sub` rather than
+7, a flat 10px `conds` gap rather than `--gap`/`--gap-lg`, 14/12 rather than 15/14, a 3px `cond` gap
+rather than 5 - and its two rungs were different too: it folded three columns to two at 900 and to
+one at 640 where the others go `flex-wrap: wrap` and then to the label-left subgrid. So its panel
+was about 5px shorter than the same panel everywhere else, and nobody could see it, because the
+comparison is never on screen.
+
+**And its headline read `var(--fg-1)`, which is defined in no stylesheet.** `tokens.css` has `--fg`
+and `--fg-2`..`--fg-5` and `--fg-dim`; that was the name's only appearance in the app. It is invalid
+at computed-value time, so `color` fell back to `inherit` and landed on `--fg` from `body` - the
+right colour, by accident, and a declaration that would have become the wrong one the moment any
+ancestor set a colour. **Third of a family**: `--ink*` and `--t-micro` were the first two, and this
+document and `docs/known-state.md` both record them as declarations that did nothing.
+
+**So `bin/lint-repo.sh` grew a twelfth leg.** It collects every `--x` *declared* anywhere under
+`apps/dashboard/src` - CSS declarations and the ones handed through `:style`, because `Band` passes
+`--cols` and the tables pass `--rail` - and every `--x` *read* through `var()`, and fails on a read
+nothing declares. It was proved to fail on `--fg-1` planted back.
+
+**Its first finding was a false one, and that is the reason it strips comments.** `--cards` in a
+`HomePage` docblock explaining the bento grid that was *deleted* - a sentence describing what the
+file used to do, reported as a live defect. Block and template comments now come out of both sides
+before either is collected: a property named only in a comment neither declares nor reads anything.
+
+### The counted sentence had already moved, in two directions
+
+`HomePage.vue` said the `conds` recipe was "unchanged through five pages" and
+`system/HealthPage.vue` said four, on the same day, about the same recipe. Neither was right: eight
+pages carry it now. The number is gone from all three copies rather than corrected for the third
+time - the sentence names the set instead of counting it.
+
+### What proved it
+
+`npm run build`, `bin/lint-repo.sh` and `node fixtures/shoot.mjs` at 1360, **901**, 834 and 390.
+
+**Every assertion was made to fail before it was trusted.** The baseline walk, with the check in
+place and no CSS changed, printed all four `header @` lines and named the routes; each of the three
+declarations was then removed on its own to show which band it holds - `white-space: nowrap` brings
+back 901 and nothing else, the `.toolbar` floor brings back 834 and 390 and nothing else. The
+`.left` floor holds a state no route has, so it was measured directly instead: with `#toolbar`
+emptied the header is 64px with it and 61.14 without, at 1360 and 901 alike.
+
+Final count **69 problems against a baseline of 73** - four fewer, and the four are the header
+lines. Everything remaining is the one expected missing-poster 404. The new viewport reported no
+horizontal overflow on any route, which is the first time anything has looked at that band.
+

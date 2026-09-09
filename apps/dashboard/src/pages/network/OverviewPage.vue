@@ -370,37 +370,53 @@ function portTip(p: net.PortRow) {
 </template>
 
 <style scoped>
-/* --- the header --- */
+/* --- the header ----------------------------------------------------------
+   THE SHARED RECIPE, WHICH THIS PAGE NEVER GOT. Seven lead panels - Home,
+   Library, CI, system/Health, services/Health, the round board and the fleet
+   view - are byte-identical on five values, and this one differed on all five:
+   a 5px lead-sub, a flat 10px conds gap, 14/12 rather than 15/14, and a 3px
+   cond gap. The panel was about 5px shorter than the same panel everywhere
+   else and its conditions about 2px tighter per row, which is a difference
+   nobody chose and nobody could see beside its siblings. */
 .lead {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
 }
 
+/* --fg, NOT --fg-1. This read var(--fg-1), which is defined in no stylesheet
+   here - tokens.css has --fg and --fg-2..--fg-5 and --fg-dim, and this was the
+   name's only appearance in the app. It is invalid at computed-value time,
+   so `color` fell back to `inherit` and landed on --fg from body: the right
+   colour, by accident, and a declaration that would have become the wrong one
+   the moment any ancestor set a colour. bin/lint-repo.sh grades it now. */
 .reading {
   font: var(--t-mono-xl);
-  color: var(--fg-1);
+  color: var(--fg);
 }
 
 .lead-sub {
-  margin-top: 5px;
+  margin-top: 7px;
   font: var(--t-mono-sm);
   color: var(--fg-5);
 }
 
+/* Three equal columns above 900, packed left below it, and a label-left readout
+   below 640 - the round board's recipe, on all eight pages that carry it. */
 .conds {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
+  gap: var(--gap) var(--gap-lg);
+  margin-top: 15px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-divider);
 }
 
 .cond {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 5px;
   min-width: 0;
 }
 
@@ -610,14 +626,43 @@ function portTip(p: net.PortRow) {
 /* --- the tablet --- */
 @media (max-width: 900px) {
   .conds {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    display: flex;
+    flex-wrap: wrap;
   }
 }
 
-/* --- the phone --- */
+/* The conditions, on a phone: the label moves left of its value, three rows, one
+   condition each, labels in a column of their own. The 92px fallback is the
+   width of MEMORY at --t-label, measured, and is what the browser uses where
+   subgrid is unavailable. */
 @media (max-width: 640px) {
   .conds {
-    grid-template-columns: minmax(0, 1fr);
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    column-gap: var(--gap);
+    row-gap: 14px;
+  }
+
+  .cond {
+    grid-template-columns: 92px 1fr;
+    grid-template-columns: subgrid;
+    display: grid;
+    grid-column: 1 / -1;
+    align-items: center;
+    column-gap: var(--gap);
+    row-gap: 4px;
+  }
+
+  .cond .label {
+    grid-area: 1 / 1;
+  }
+
+  .cond .cvalue {
+    grid-area: 1 / 2;
+  }
+
+  .cond .sub {
+    grid-area: 2 / 2;
   }
 
   /* THE RAIL NEEDS ITS WIDTH BACK ON THE CELL ONCE THE HEADER IS GONE. Under

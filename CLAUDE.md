@@ -1760,6 +1760,26 @@ signal read green.
   welded to an unlabelled top edge - the memory chart's ceiling from the other direction. Only one
   of the four charts carried `x-axis`, and `Band.stretch` hid the height mismatch that caused.
 
+### The shell's own height was a function of its pages, and the worst band was unsampled
+- **`.bar` declared no height** - 28px of padding plus its tallest child - and one of the three
+  children is `#toolbar`, which every route fills differently. Five routes rendered 63.19px and
+  eight 61.14px; the header is not sticky above 900, so the whole page moved on navigation.
+- **The 900-1180 band was 27px rather than 2, and `shoot.mjs` walked past it.** The toolbar is the
+  only child that can give way, so the teleported TEXT wraps inside it - and at 901 it is 0px WIDE,
+  so `/home` was 29px taller for content that was not on screen at all. **Three rungs make four
+  BANDS**; the fixture viewports are 1360, 901, 834 and 390 now.
+- `--bar-row: 35px` is a FLOOR on `.left` and `.toolbar` plus `white-space: nowrap` - the floor is
+  in the CSS and the ceiling is in the harness, which carries no number. Below 900 that is a
+  constant 109px against 88.4-107.2, named rather than implied.
+- **`WindowPicker`'s `flex-wrap: wrap` could never fire** - `flex: none` one line below it - so its
+  comment described the opposite of what happens: `7d` is clipped from ~1130 down.
+- **A custom property nothing defines does nothing and looks like one that works.** `var(--fg-1)`
+  fell back to `inherit` and landed on the right colour by accident; third of a family after
+  `--ink*` and `--t-micro`, and `bin/lint-repo.sh` leg 12 grades it. Its first finding was a false
+  one, in a comment, which is why it strips them.
+- The same page was the eighth lead panel and the one that never got the shared recipe, and the
+  sentence counting that recipe had already drifted in two directions at once.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

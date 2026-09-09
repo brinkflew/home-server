@@ -246,9 +246,11 @@ a:hover {
 
      1180  the existing fold. A Band goes to one column. Band.vue states it.
       900  tablet. N-up tile grids fold, the racks gain a scroller, tables
-           drop their lowest-priority columns.
-      640  phone. The nav becomes a drawer, the header wraps and sticks,
-           tables drop to their essential columns.
+           drop their lowest-priority columns, and the nav becomes a drawer -
+           the header wraps and sticks here, NOT at 640, which this said until
+           2026-09-09. NavBar.vue measured the rung and moved; this did not.
+      640  phone. The page gutter tightens to 14px and tables drop to their
+           essential columns.
 
    1100, 1280 and 1400 also exist, on three pages, each doing a real job at a
    real width. They are left alone deliberately: normalising them onto the

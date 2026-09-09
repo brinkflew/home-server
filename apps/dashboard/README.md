@@ -254,11 +254,25 @@ Two harnesses, neither of them a test suite:
 
 ```bash
 node fixtures/smoke.mjs               # drives the row model, sort, links and posters in node
-node fixtures/shoot.mjs /tmp          # screenshots all four pages, reports console errors
+node fixtures/shoot.mjs /tmp          # screenshots all thirteen routes at four viewports
 ```
 
 `smoke.mjs` needs nothing but vite. `shoot.mjs` needs playwright, which is **deliberately not a
 dependency** - it says so and exits 2 rather than being quietly unrunnable.
+
+**`shoot.mjs` asserts two things no screenshot can show, and both are absences.** Horizontal
+overflow, `scrollWidth` against `clientWidth` on every route - `overflow-x: hidden` on `body` would
+have concealed that class of defect instead of removing it, worst on touch where the scrollbar is an
+overlay. And **one header height per viewport**: the shell header had no declared height, so it was
+28px of padding plus whatever a page teleported into it, and the five routes that send a
+`WindowPicker` were 2px taller than the eight that do not. Neither assertion carries a number - the
+row height is declared once in `NavBar.vue` and this only requires the routes to agree.
+
+**The fourth viewport is 901, and it is a band rather than a rung.** Three rungs make four bands and
+this walk sampled three of them; the unsampled one is 900-1180, where the header is squeezed but has
+not yet wrapped and the toolbar is the only child that can give way. It measured 61, 65, 83 and
+90px on four routes there, with `/home`'s two freshness readings broken across four stacked lines,
+and nothing had ever looked.
 
 Against the real Prometheus instead - it publishes no host port, so tunnel to its bridge address:
 
