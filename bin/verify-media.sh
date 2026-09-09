@@ -215,7 +215,23 @@ if [ -z "$MEDIA_ROOT" ]; then
 fi
 LIBRARY_ROOT="$MEDIA_ROOT/library"
 
-probe() { podman exec jellyfin /usr/lib/jellyfin-ffmpeg/ffprobe "$@"; }
+# --events-backend=none BECAUSE THIS RUNS ONCE A WEEK OVER 725 FILES AND EVERY
+# EXEC WOULD OTHERWISE COST A JOURNAL RECORD CARRYING JELLYFIN'S WHOLE LABEL SET.
+# Measured on the first timed run: 58 `container exec` events for twelve useful
+# lines, at about 1.7 KB each because the linuxserver image's OCI labels include
+# its full description - so a full sweep is roughly 2.5 MB of noise a week, and
+# the findings this script exists to print are buried in it.
+#
+# Nothing consumes an exec event here. This repository has already turned off
+# podman's health_status events entirely for the same reason and at a far larger
+# scale - they were 47.3% of all journal bytes - so the precedent is not that
+# events are precious, it is that they are worth what somebody reads.
+#
+# LOCAL TO THIS CALL rather than in containers.conf, which is the difference
+# from that change: health_status was every container all the time, and this is
+# one script's own exec chatter. A global setting would take the events a person
+# debugging a container start actually wants.
+probe() { podman --events-backend=none exec jellyfin /usr/lib/jellyfin-ffmpeg/ffprobe "$@"; }
 
 # Host path -> the path jellyfin sees. Accept a container path unchanged so the
 # output of a podman-side command can be pasted straight back in.
