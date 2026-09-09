@@ -48,7 +48,22 @@
 #
 # EXIT 1 MEANS TWO THINGS and the marker is what separates them: a completed
 # sweep that found drift, and a die() that could not run at all. The script's
-# header says so; media.keyframe_drift reads media_error rather than the code.
+# header says so; media.verify_run reads media_error rather than the code.
+#
+# SuccessExitStatus=1, AND THE FIRST FULL SWEEP IS WHY. It found 690 drifting
+# files of 725 - a real backlog - exited 1 as designed, and systemd put the unit
+# in `failed`. That is wrong in three directions at once: it leaves a permanent
+# red unit on a host where `systemctl --user list-units --failed` is the fastest
+# health check, it makes containers.failed_units FAIL, and a FAIL in this
+# battery is what bin/reboot-host.sh refuses to reboot on - so a library that
+# needs re-transcoding would have blocked an OS security update.
+#
+# THE UNIT'S JOB IS TO RUN THE SWEEP, and both of those outcomes are it having
+# run. A finding is not a fault: that distinction is the whole reason
+# media.keyframe_drift and media.verify_run are two checks rather than one, and
+# this is the same sentence said to systemd. The `die()` case is covered by the
+# same clause and correctly so - the marker's media_error is what reports it,
+# which is the check written for exactly that.
 #
 # NO Before= AND NO Wants= ON ANYTHING - not even on jellyfin, which this
 # reaches into. A Wants= would start the container to run a check about it, and
@@ -68,6 +83,7 @@ ExecCondition=/var/home-server/bin/verify-media.sh --gate
 ExecStart=/var/home-server/bin/verify-media.sh --library \
           --marker %h/.cache/home-server/media-state
 TimeoutStartSec=90min
+SuccessExitStatus=1
 
 Nice=10
 CPUWeight=20

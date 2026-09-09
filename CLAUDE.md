@@ -2009,6 +2009,19 @@ signal read green.
   is not 401, so the leg said "not a refusal of the token, but not a write either" rather than
   sending somebody to rotate a working PAT. Re-run: **HTTP 201**.
 
+### A finding is not a fault, and systemd had to be told
+- **The first full library sweep put its own unit in `failed`** - 690 drifting files, `exit 1` as
+  designed, and systemd read the job as having gone wrong. That is a permanent red unit,
+  `containers.failed_units` FAILing, and **a FAIL in this battery is what `bin/reboot-host.sh`
+  refuses to reboot on** - so a library needing re-transcoding would have blocked an OS security
+  update.
+- `SuccessExitStatus=1`. The unit's job is to RUN the sweep, and a completed sweep that found
+  something is it having run - the same sentence that made the drift and the run two checks, said to
+  systemd instead of to a reader. The `die()` path is covered too, correctly: `media_error` in the
+  marker is what reports it.
+- The general shape: **a script whose exit code encodes a FINDING cannot also use it to encode its
+  own health**, and a `Type=oneshot` is graded on exactly that code.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

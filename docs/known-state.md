@@ -5922,3 +5922,21 @@ service on the rack read **memory starved**. Nothing on the host was.
   have sent somebody to rotate a working PAT.
 - Fixed and re-run: **HTTP 201**, the record written and removed, 31 days before the first renewal
   Caddy had scheduled.
+
+## A finding is not a fault, and systemd had to be told
+
+- **The first full library sweep put its own unit in `failed`.** It found 690 drifting files, exited
+  1 as designed, and systemd read that as the job having gone wrong. Wrong in three directions at
+  once: a permanent red unit on a host where `systemctl --user list-units --failed` is the fastest
+  health check, `containers.failed_units` FAILing, and a FAIL in this battery is what
+  `bin/reboot-host.sh` refuses to reboot on - so **a library needing re-transcoding would have
+  blocked an OS security update**.
+- `SuccessExitStatus=1` is the fix. The unit's job is to RUN the sweep, and a completed sweep that
+  found something is it having run - the same sentence that made `media.keyframe_drift` and
+  `media.verify_run` two checks, said to systemd instead of to a reader.
+- **It covers the `die()` case too, correctly.** That path also exits 1, and the marker's
+  `media_error` is what reports it - which is the check written for exactly that, and the reason the
+  exit code was never the right thing for a unit to grade here.
+- The general shape: **a script whose exit code encodes a FINDING cannot also use it to encode its
+  own health**, and a `Type=oneshot` is graded on exactly that code. Anything here that reports
+  findings on a timer needs either a success clause or an exit code reserved for "I could not run".
