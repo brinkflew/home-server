@@ -13,6 +13,7 @@ import {
   ALL_QUERIES,
   AVAILABILITY,
   CI,
+  MEDIA,
   NETWORK,
   PULSE_QUERY,
   SERVICES,
@@ -30,6 +31,35 @@ interface SeriesSpec {
 
 const constant = (v: number): At => () => v;
 const swing = (key: string, base: number, amplitude: number): At => (t) => wave(key, t, base, amplitude);
+
+/**
+ * A MONOTONIC CLIMB TOWARDS NOW, for the quantities that have a direction.
+ *
+ * A library that grows and a subtitle backlog that drains are both slopes, and
+ * `swing` cannot express one - it oscillates around a base, so a chart of it
+ * says "steady" whatever the real series is doing. Anchored at module load and
+ * NOT re-read per fetch: the anchor is what makes the past deterministic, and
+ * `() => now - 12` re-evaluated per call is the fixture-clock trap that let
+ * eight rows drift across their thresholds while the dev server stayed up.
+ *
+ * Negative in the past, which is the point: `235 GB + ramp(...)` is smaller a
+ * week ago and `1109 - ramp(...)` is larger.
+ */
+const RAMP_ANCHOR = Math.floor(Date.now() / 1000);
+const ramp = (key: string, t: number, perWeek: number): number =>
+  ((t - RAMP_ANCHOR) / (7 * 86400)) * perWeek + wave(key, t, 0, Math.abs(perWeek) * 0.015);
+
+/**
+ * Zero most of the window, with occasional work in it.
+ *
+ * THE QUEUE DRAINS TO ZERO BY DESIGN, so a fixture that is permanently busy
+ * hides the state this host is normally in and a flat zero makes the chart look
+ * broken. Neither is what the page has to render well.
+ */
+const burst = (key: string, t: number, floor: number, peak: number): number => {
+  const w = wave(key, t, 0.5, 0.5);
+  return w > 0.86 ? Math.round(floor + (peak - floor) * ((w - 0.86) / 0.14)) : floor;
+};
 
 const GB = 1024 ** 3;
 const MB = 1024 ** 2;
@@ -336,6 +366,65 @@ function bySeries(): Record<string, SeriesSpec[]> {
       at: constant(1),
     },
   ];
+
+  // --- the library, the backlog and the queue -------------------------------
+  // WRITTEN FROM THE COLLECTOR, NOT FROM THE PAGE. A fixture derived from its
+  // consumer cannot contradict the consumer - the trap that let `staged_version`
+  // stay dead on the live host and perfect in every screenshot - so the label
+  // sets and the shapes here are the live host's, read off
+  // /var/home-server/cache/textfile on 2026-09-09.
+
+  // TWO LIBRARIES, NOT THREE. The live host has `documentaries` in
+  // library_records at the queued stage and in NEITHER libraryBytes nor
+  // libraryFiles, so a stacked chart gets a series that exists in one query and
+  // not its neighbour. That asymmetry is the fixture's job to carry.
+  table[MEDIA.libraryBytes] = [
+    { metric: { library: "movies", stage: "transcoded" }, at: (t) => 235 * GB + ramp("movbytes", t, 9 * GB) },
+    { metric: { library: "series", stage: "transcoded" }, at: (t) => 543 * GB + ramp("serbytes", t, 21 * GB) },
+  ];
+
+  table[MEDIA.libraryFiles] = [
+    { metric: { library: "movies", stage: "transcoded" }, at: (t) => 62 + Math.floor(ramp("movfiles", t, 3)) },
+    { metric: { library: "series", stage: "transcoded" }, at: (t) => 662 + Math.floor(ramp("serfiles", t, 14)) },
+  ];
+
+  table[MEDIA.libraryItems] = [
+    { metric: { kind: "movies" }, at: constant(62) },
+    { metric: { kind: "series" }, at: constant(12) },
+    { metric: { kind: "episodes" }, at: constant(662) },
+  ];
+
+  // The queue drains to zero by design, so it is zero most of the window with a
+  // burst in it - a flat zero fixture would make the chart look broken and a
+  // permanently busy one would hide the state this host is normally in.
+  table[MEDIA.pipelineQueued] = [{ metric: {}, at: (t) => burst("queued", t, 0, 7) }];
+  table[MEDIA.pipelineItems] = [{ metric: { state: "seeding" }, at: swing("seeding", 8, 2) }];
+  table[MEDIA.pipelineStalled] = [{ metric: {}, at: constant(0) }];
+
+  // 626 EPISODES AND ONE FILM, which is the live reading of the series the page
+  // actually draws - `_wanted_items`, matching library.json's
+  // no_subtitle_episodes. `_missing` is 1,109 on the same host and is
+  // deliberately not catalogued; see MEDIA in queries.ts.
+  //
+  // It DRAINS across the window rather than swinging, because the number the
+  // condition prints is a backlog and the only thing worth reading off the
+  // chart is its slope.
+  table[MEDIA.subtitlesWanted] = [
+    // A DRIFT WITH TEXTURE ON IT, not a pure ramp. At 34 a week the line moves
+    // 1.2 units across a six-hour window on a 0-700 axis, which renders as
+    // perfectly flat - a panel whose whole point is the slope, drawing none at
+    // the default window. Episodes arrive and get subtitled all day, so the
+    // real series wobbles; this one wobbles and drifts down.
+    { metric: { kind: "episodes" }, at: (t) => wave("subwant", t, 626, 16) - ramp("subdrift", t, 40) },
+    { metric: { kind: "movies" }, at: constant(1) },
+  ];
+
+  // MISSING AGAINST SEARCHABLE, and the gap is the point: 28 films are missing
+  // and 3 of them can be searched for, because the rest are not released yet.
+  table[MEDIA.moviesMissing] = [{ metric: {}, at: swing("movmiss", 28, 3) }];
+  table[MEDIA.moviesSearchable] = [{ metric: {}, at: swing("movsearch", 3, 2) }];
+  table[MEDIA.episodesMissing] = [{ metric: {}, at: swing("epmiss", 15, 4) }];
+  table[MEDIA.episodesSearchable] = [{ metric: {}, at: swing("epsearch", 15, 4) }];
 
   // --- availability --------------------------------------------------------
   // bazarr has had a bad fortnight; everything else is flat. The oldest six

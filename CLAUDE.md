@@ -1734,6 +1734,32 @@ signal read green.
   see the fixture drift; and no fixture carries `degraded` deliberately, so the state machine is a
   pure function `smoke.mjs` drives through all five.
 
+### The two pages that never got the pass, and the pixel a pill ellipsed on
+- `/home` and `/library` were the last content pages with no Band, no headline and no `.tbl`;
+  Library used none of the four primitives. Both stay flat - the splits were forced by height.
+- `c-state` at 118px ellipsed `downloading` on ONE pixel, and `no_subtitles` - the widest of the
+  nine labels, and the state this host has most of - had never been rendered by any fixture.
+- Five filter chips in a non-wrapping row put 91px of horizontal scroll on the document at 390,
+  silent on touch. Panning is reserved for a grid that cannot shed a column.
+- **Grey for a measured zero is absence-read-as-health facing the other way**: a host with nobody
+  watching and nothing in flight drew its ORDINARY state in the encoding meaning "nobody asked".
+- One filter behind three readings, because `ACTIVE_STATES` sat beside a `stateClass` that already
+  answered it. `in flight` is the live states PLUS `queued`; `seeding` and `done` have landed.
+- **The media disk had no tone at all** - Library did its own `used = total - free` with no ratio, so
+  95% rendered exactly like 20% on a mount `/system/storage` grades two pages away. A stalled row
+  also drew a bare ProgressBar track, which is the fourth call site to make that mistake.
+- **Seven metric families were collected for four hundred days and never once asked for**, and no
+  fixture had ever carried a `search`, `seeding` or `torrent` check either.
+- A sub-line reading `2 errors, 2 stalled` under `3 files` invited an arithmetic that was wrong, and
+  only the text `shoot.mjs` dumps could have caught it - every number was right on its own.
+- **`subtitles_missing` is 1,109 and `subtitles_wanted_items` is 626 on one host** - files across
+  languages against items wanting at least one - and a chart drew the first under a condition
+  printing the second. Only the LIVE host could show it: a fixture has one number per series and
+  cannot disagree with itself.
+- **A `stacked` chart with no `yMax` is forbidden by MetricChart's own docblock**, and unpinned it
+  welded to an unlabelled top edge - the memory chart's ceiling from the other direction. Only one
+  of the four charts carried `x-axis`, and `Band.stretch` hid the height mismatch that caused.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

@@ -273,14 +273,16 @@ than an absence. The items carry no separator at all - every one of them is self
 (`ship 4/5`, `took 2h`, `$8.28`), and a separator that has to hide together with its own neighbour
 is how the dash got there in the first place.
 
-**The four hand-rolled racks are panned instead, and that is repair rather than design.** Services
+**The four hand-rolled racks were panned instead, and that was repair rather than design.** Services
 floored at ~784px, CI at ~748px, Library at ~666px and the System timeline at 320px before its chart
 track; none could shed a column without being rebuilt as a `.tbl`, which was the follow-up each of
-them carried. **Two have had it**: the System timeline on 2026-09-07 and Services on 2026-09-08, both
-on the `.p4`/`.p3`/`.p2` ladder with a fold under the surviving column. CI and Library still pan. CI's rack has **no header row at all** - its eleven column labels live only in
-tooltips - and that is a real limitation of stopping at repair depth. What makes them reachable is
-that `Tooltip` gained a tap-elsewhere dismiss: a tap has always *opened* one, there was simply no
-way to shut it.
+them carried. **All four have now had it**: the System timeline and CI on 2026-09-07, Services on
+2026-09-08 and Library on 2026-09-09, every one on the `.p4`/`.p3`/`.p2` ladder with a fold under the
+surviving column. **This paragraph said "CI and Library still pan" for a day after CI had stopped**,
+which is the drift the rule about comments naming "the only section that is" exists to catch - the
+sentence was true when it was written and nothing rewrites prose when the code under it moves.
+What made the panned racks reachable while they lasted was `Tooltip` gaining a tap-elsewhere
+dismiss: a tap has always *opened* one, there was simply no way to shut it.
 
 **The network drawing was panned for the opposite reason: it did not reflow, it shrank.** It was
 1498x856 and aspect-preserving, so a 390px panel rendered it at a 0.197 factor - 13px node names at
@@ -2038,3 +2040,208 @@ The handoff itself was checked in a browser rather than reasoned about: both red
 landing on `/network/overview?focus=net-solver#segments` with the table filtered to one row and the
 page scrolled 313px to it, `clear` restoring all fifteen, a hand-typed `?focus=nonsense` still
 self-clearing, and the range query fired by the rack view and by no other.
+
+## Home and Library got the pass the other five had, 2026-09-09
+
+`/home` and `/library` were the last two content pages with none of it. Measured before the change:
+every other content page carried between one and four `Band`s and most carried the headline reading;
+`HomePage.vue` had **no `Band`, no `.tbl` and no `--t-mono-xl`** in 361 lines, and `LibraryPage.vue`
+had **none of the four primitives at all** - no `Band`, no `PanelBox`, no `.tbl`, no headline - and
+not one media query in 285 lines of scoped CSS.
+
+**Neither page is a split, and that is the decision rather than the omission.** The splits were
+forced by height: Agents at 1,476 lines, System at 1,553, and Network and Services at 803 and 957
+where one band *was* the page. 361 and 576 are nowhere near it, and a sub-nav over two bands would
+be symmetry bought with the one thing the ladder is short of. Four of seven tabs are sections; these
+two stay flat, as `/ci` does.
+
+### Library was the last hand-rolled rack, and `base.css` had said so all along
+
+The rebuild onto `.tbl` is a follow-up this document already carried. Seven columns on the
+`.p4`/`.p3`/`.p2` ladder: `detail` goes at 1180, `progress` and `size` at 900, `state` and `rate` at
+640, where the state pill folds into the title cell keeping its left edge and its tone - the round
+board's answer, for the round board's reason. The `--rail` is set on the **row** so whichever cell is
+first draws it. The 520px inner scroller is gone: a list that is the reason the view exists must not
+hide its tail behind an inner scrollbar, which is the argument Alerts settled when it became band
+two on `/system/health`.
+
+**`c-state` is 128px and was measured, and 118 was wrong by one pixel.** With the column widened out
+of the way the nine pills measure 46 to 102px - `no subtitles` is the widest - and the cell carries
+24px of padding. At 118 the cell offered 94 and `downloading` wanted 95, so it ellipsed to
+`downloadi...` at every width above the rung that drops the column. That is the trap the round
+board's state column already paid for, in the same words: a pill is a flex item with the default
+flex-shrink, and the ellipsis fires on the fraction two integer readings have already rounded away.
+
+**`no_subtitles` had no fixture row and is the state that decides that width.** It has been in
+`FileState`, `STATE_TONE` and `STATE_LABEL` since they existed and had never been rendered, so
+nothing could see that its label is the longest of the nine. It is also the state this host has most
+of: 543 episodes in the fixture, 1,109 live.
+
+### The two headlines, and the arithmetic one of them has to show
+
+`/home` leads with **"5 things happening"** over `2 watching, 3 in flight`, and `/library` with
+**"3 in flight"** over `1 downloading, 1 transcoding, 1 queued`.
+
+**Home's headline sums two of its three conditions, and the sub-line exists to say which.** A
+pending request is somebody waiting on a person in another application - it is not a thing
+happening, so `REQUESTS` is a condition and not an addend. It is also **never amber**: toning it
+would put the front page in warning for as long as anybody had asked for anything, which is the rule
+that cried wolf with a different subject.
+
+**"In flight" is work the pipeline still owes: the three live states plus `queued`.** `queued` is
+`steady` to `stateClass` because nothing about it animates, but it has not landed either, and a
+headline counting only what moves would read `nothing in flight` over a table with a hundred queued
+rows in it. `seeding` and `done` are excluded because both *have* landed - and with eight permanent
+seeds on the live host, including seeding would make the number a constant.
+
+**One filter answers three readings.** `inFlightRows` is what Home's condition counts, what
+Library's headline counts and what Library's `in flight` chip both counts and filters on. The page
+previously carried a hand-written `ACTIVE_STATES` beside a `stateClass` that already answered the
+question - two groupings of one question, which is the drift `roundOutcome` was written to close and
+which `networkLead` demonstrated by counting five while `attentionRows` listed seven.
+
+**Three states before the number, and the last two are why these are functions.** Both halves of
+Home's total come from `activity.json`, so with no document there is no total and `${NaN} things
+happening` would be a headline claiming a dash was measured. A document that answered and then aged
+is a different fact: the number stands and goes grey, because it was true then. `hostLead` makes the
+same split for the same reason.
+
+### Grey meant measured-and-zero, which is the recorded defect facing the other way
+
+The first draft of both condition sets answered `off` for a zero, so a host with nobody watching and
+nothing in flight - **its ordinary state**, the one `HS_FIX_EMPTY` exists to render - drew a grey
+headline reading "nothing happening", in the encoding this application reserves for "nobody asked".
+`fsTone` and `smartLine` were rewritten because absence read as health; this was health reading as
+absence. `ok` is the ordinary body colour rather than green, which is exactly what a fact that was
+measured and is fine should render as. Caught by an assertion, not by a screenshot: it renders
+perfectly either way.
+
+### Two defects a fixture could not have shown, and one only the rendered text did
+
+**The media disk had no tone at all.** Library computed `{ mount, total, used: total - free }`
+itself, with no ratio, so a media disk at 95 percent rendered exactly like one at 20 - on a mount
+`/system/storage` grades correctly two pages away. It goes through `mountReading` and `fsTone` now,
+and `system/HealthPage.vue`'s docblock had already stated the rule it broke: *"a second copy of that
+arithmetic is how the two would start disagreeing about which mount is full."*
+
+**A stalled row drew a bare `ProgressBar` track**, which this store reserves for "in progress, ratio
+unknown" - so the one encoding meaning *it is moving* was drawn on rows that had stopped. The bar is
+omitted where `progress` is null and the dash stands alone. Fourth call site to make this mistake;
+the contract has been right every time.
+
+**Home's in-flight sub-line read `2 errors, 2 stalled` under a value of `3 files`**, which invites an
+arithmetic that is wrong - the stuck rows are a different set and none of the four was among the
+three. It is a count now, `4 need attention`, and the split belongs to `/library`'s own attention
+condition where the value it qualifies is the one it is about. **Found by reading the text
+`shoot.mjs` dumps**, not by any assertion, and it is the clearest case yet for that dump existing.
+
+### Seven metric families nobody had ever asked for
+
+`home_server_library_*`, `requests`, `subtitles_*`, `subtitle_provider_*`, `pipeline_*`, `search_*`
+and `seeding_*` are published on every collector run and Prometheus has kept four hundred days of
+them. **None of them was named in `src/queries.ts` and none was read anywhere in the bundle.** This
+is not the "fetched and drawn nowhere" defect the other passes found - these were never asked for at
+all, so both media pages were built entirely from two documents that carry the working set and no
+history whatever. "Is the subtitle backlog going up or down" was a question this application could
+not answer about a number it printed.
+
+`MEDIA` is in `queries.ts` and in `ALL_QUERIES`, so `uncovered()` covers it. `/library` draws four
+lanes on one window and one cursor. Nothing from the applications themselves: the *arr queues, the
+indexers, the Tdarr queue and the torrent rate are `/services/apps`' already, and drawing them again
+would be one measurement on two surfaces.
+
+**`libraryBytes` is `stage="transcoded"` only.** `queued/` is a staging area that drains to zero by
+design, so stacking it would draw the pipeline working as if the library had grown. The live host
+also has a `documentaries` series in `library_records` and in neither `library_bytes` nor
+`library_files`, so a stacked chart legitimately gets a series present in one query and absent from
+its neighbour - the fixture carries that asymmetry rather than tidying it away.
+
+### Two numbers for one word, and only the live host could show it
+
+**`home_server_subtitles_missing` and `home_server_subtitles_wanted_items` are not the same
+quantity**, and the first draft of this page drew one in a panel directly under a condition printing
+the other. `_missing` counts missing subtitle FILES across every configured language and reads
+**1,109** on the live host; `_wanted_items` counts ITEMS wanting at least one and reads **626** -
+and 626 is what `library.json`'s `no_subtitle_episodes` carries, which is what the condition prints.
+Two numbers labelled "subtitles" on one page, disagreeing by 483, with nothing on screen to say they
+measure different things.
+
+**The fixture could not have shown it**, because a fixture has one number per series and cannot
+contradict itself; catching it needed reading the live documents beside the live exposition file.
+That is the rule about a fixture derived from its consumer arriving from a third direction - not
+"the fixture agrees with the page", but "the fixture cannot disagree with itself". The chart draws
+`_wanted_items` now and `_missing` is not catalogued, with the reason recorded at the query.
+
+The same class, checked and cleared one panel over: `Library on disk` totals 777 GB of transcoded
+library where the media disk reads 991 GB used of 8.0 TB. Those differ correctly - the disk also
+holds what is downloading and what is still seeding - and the panel note now says so, because two
+byte readings on one page that do not add up is a question a reader should not have to answer
+themselves.
+
+### Three ways the history band was drawn wrong, and MetricChart had said so
+
+**The library chart was `stacked` with no `yMax`, which the component's own docblock forbids** in
+those words: a stack is *"only honest with a `yMax` naming the total the bands add up to"*. Two
+libraries sharing a disk is an accumulation, not a partition of a known whole, so there is no such
+total - and drawn stacked and unpinned it filled the frame to an unlabelled top edge at 778 GB with
+the highest tick reading 512 GB. That is the welded ceiling this document already records for the
+memory chart, reached from the other direction: not a fixed ceiling no tick lands on, but no ceiling
+at all. Two lines lose nothing here, because each library's own growth is the reading.
+
+**Only one of the four charts carried `x-axis`**, so three of them had no time reference and the
+fourth was taller than its neighbours - which `Band.stretch` then absorbed, hiding the mismatch it
+exists to absorb only a few tens of pixels of. Every chart in the 2x2 band on `/system/load` and on
+`/ci` carries its own axis; this one now does too, and all four print the same five instants. That
+is the rule this document states as *"a time under one chart was above nothing on the one beside
+it"*. Measured after: an 18px spread across the four, which is what `stretch` is for.
+
+**The subtitle series was a pure ramp and drew a dead-flat line.** At 34 a week it moves 1.2 units
+across a six-hour window on a 0-700 axis, so the panel whose whole point is the slope drew none at
+the default window. A backlog does wobble - episodes arrive and get subtitled all day - so the
+fixture wobbles and drifts, and the slope is visible without being invented.
+
+### The evidence band, and the fixture that could not exercise it
+
+`/library` ends with `FindingsPanel` over `['search', 'seeding', 'torrent']`, which is six checks and
+the only page that asks for any of them. **No fixture had ever carried a check from any of the three
+sections**, so the panel rendered "absent from the battery's last run" - the panel being honest about
+a fixture that could not exercise it. The six are in `fixtures/model.ts` now with the live battery's
+own ids and wording, and `search.stalled_queue` is a **warn** deliberately: a stalled download is
+silent, blocks every alternative release with `already meets cutoff`, and ten episodes sat at "no
+connections" for 225-243 hours before `bin/clear-stalled.py` existed. A fixture where the one finding
+this band exists to surface always passes is an empty panel nobody would notice had stopped working.
+
+It is on `/library` and not on `/home` for the reason the fleet page's containment table was deleted:
+the same findings drawn on two surfaces is a pair that can disagree.
+
+### `src/media.ts` is the sixth of these extractions
+
+It was 190 lines of presentation vocabulary and is the section's source module now, the way
+`machine.ts`, `lanes.ts`, `system.ts`, `services.ts` and `network.ts` each became one. Ten computeds
+moved out of the two `.vue` files. **One module for two pages, deliberately** - Home's condition,
+Library's headline and Library's chip are three readings of one array, and a module boundary is what
+stops them becoming three derivations.
+
+Thirteen new assertions, and **every one was proved to fail before it was trusted** by planting the
+original defect back: the queued clause dropped from `inFlightRows`, seeding counted, requests added
+to the total, the absence branch deleted, a stale document still claiming it is now, requests toned
+amber, the subtitle backlog graded, a missing subtitle treated as a fault, a measured zero read as
+unmeasured, an unreadable mount drawn as an empty one, `stale` collapsed into `fresh`, the chip
+filtering on a different list from the one it counts, and the request age spelled with false
+precision. Each was caught by the assertion written for it and by no other.
+
+### What proved it
+
+`npm run build`, `node fixtures/smoke.mjs`, `bin/lint-repo.sh` and `node fixtures/shoot.mjs` at 1360,
+834 and 390. **The first shoot found a real defect the assertions could not**: `/library` reported
+**91px of horizontal overflow at 390**, which is five filter chips in a non-wrapping `inline-flex` -
+450px of segmented control in a 328px panel. `.hscroll` would have been the wrong answer, because
+`base.css` reserves panning for a grid that genuinely cannot shed a column and a filter nobody can
+see is a filter that lies; the row wraps instead. Silent on touch until something looked, which is
+the whole argument for that assertion.
+
+Column widths were then measured at all three rungs rather than reasoned about: the title cell gets
+357px at 1360, 408 at 834 with `progress`, `detail` and `size` gone, and 189 at 390 - up from 169,
+because `c-act` narrows to 84px there and the title takes a two-line clamp, the round board's answer
+again. Final count **52 problems, matching the recorded baseline exactly**, all of them the one
+expected missing-poster 404, with no console error, no page error and no overflow at any viewport.

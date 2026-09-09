@@ -250,6 +250,79 @@ export const SERVICES = {
   vpnInfo: "home_server_vpn_info",
 } as const;
 
+/**
+ * The library, the backlog and the queue - none of which had ever been asked for.
+ *
+ * SEVEN FAMILIES THE COLLECTOR HAS ALWAYS PUBLISHED AND NOTHING HAS EVER READ.
+ * This is not the "fetched and discarded" defect the other passes found; these
+ * were never in this file at all, so Prometheus has kept four hundred days of
+ * them for no reader. Both media pages were built entirely from activity.json
+ * and library.json, which carry the working set and no history whatever - so
+ * "is the subtitle backlog going up or down" was a question the application
+ * could not answer about a number it printed.
+ *
+ * TITLES STILL CANNOT BE LABELS, and nothing here tries: every series below is
+ * a count or a size, keyed by library, stage or kind. The documents keep the
+ * names. See src/api/media.ts for why that split is a privacy decision and not
+ * only a cardinality one.
+ *
+ * NOTHING FROM THE APPLICATIONS THEMSELVES. The *arr queues, the indexers, the
+ * Tdarr queue and the torrent rate are all drawn on /services/apps already, and
+ * drawing them again here would be the same measurement on two surfaces - which
+ * docs/dashboard.md records as a defect twice, both times with the two copies
+ * eventually disagreeing.
+ */
+export const MEDIA = {
+  /** Bytes on disk per library, transcoded only: `queued` is a staging area that
+   *  drains to zero by design, so stacking it would draw the pipeline working as
+   *  if the library had grown. */
+  libraryBytes: 'home_server_library_bytes{stage="transcoded"}',
+  /** Files per library, same stage and the same reason. */
+  libraryFiles: 'home_server_library_files{stage="transcoded"}',
+  /** Items as the applications count them - series, movies, episodes - which is
+   *  NOT libraryFiles: a series is one item and many files. */
+  libraryItems: "home_server_library_items",
+
+  /** What the pipeline still owes, by state. */
+  pipelineItems: "home_server_pipeline_items",
+  pipelineQueued: "home_server_pipeline_queued",
+  pipelineStalled: "home_server_pipeline_stalled",
+
+  /**
+   * Bazarr's backlog, per kind. A BACKLOG AND NOT A QUEUE - see
+   * libraryConditions in src/media.ts for why it is never graded amber.
+   *
+   * `_wanted_items` AND NOT `_missing`, WHICH IS A DIFFERENT NUMBER FOR THE
+   * SAME WORD. `home_server_subtitles_missing` counts missing subtitle FILES
+   * across every configured language and reads 1,109 on the live host;
+   * `_wanted_items` counts ITEMS wanting at least one and reads 626 - and 626
+   * is what library.json's `no_subtitle_episodes` carries, which is what this
+   * page's own subtitles condition prints. Cataloguing the other one and
+   * drawing it in the panel directly under that condition would have put two
+   * numbers labelled "subtitles" on one page, disagreeing by 483, with nothing
+   * on screen to say they measure different things.
+   *
+   * ONLY THE LIVE HOST COULD SHOW THIS. The fixture had one number and could
+   * not contradict itself, which is the rule about a fixture derived from its
+   * consumer arriving from a third direction.
+   */
+  subtitlesWanted: "home_server_subtitles_wanted_items",
+
+  /**
+   * Missing against SEARCHABLE, and the gap between them is the reading.
+   *
+   * CLAUDE.md records that most of what is "missing" is simply not released
+   * yet, and that `isAvailable` reads true for a 2027 film - so a chart of
+   * `missing` alone would draw a backlog nobody can act on. Drawn together,
+   * the searchable line is the part bin/search-missing.py can do something
+   * about and the distance to the other is the part it cannot.
+   */
+  moviesMissing: "home_server_search_movies_missing",
+  moviesSearchable: "home_server_search_movies_searchable",
+  episodesMissing: "home_server_search_episodes_missing",
+  episodesSearchable: "home_server_search_episodes_searchable",
+} as const;
+
 export const AVAILABILITY = {
   /**
    * HOURLY, NOT DAILY, AND THE STEP IS WHY. Averaging server-side is still the
@@ -578,6 +651,7 @@ export const ALL_QUERIES: string[] = [
   ...Object.values(SYSTEM),
   ...Object.values(SERVICES),
   ...Object.values(AVAILABILITY),
+  ...Object.values(MEDIA),
   ...Object.values(NETWORK),
   ...Object.values(CI),
   ...Object.values(AGENTS),

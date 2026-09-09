@@ -5146,3 +5146,86 @@ service on the rack read **memory starved**. Nothing on the host was.
 - **No fixture carries `degraded` deliberately** - a permanent warning strip on every screenshot is
   worse - so `collectorState` is a pure function in `src/health.ts` that `smoke.mjs` drives through
   all five, rather than a computed in the store that nothing without a browser can reach.
+
+### The two pages that never got the pass, and the pixel a pill ellipsed on
+- `/home` and `/library` were the last content pages with no `Band`, no headline and no `.tbl`;
+  Library used **none of the four primitives** and had not one media query in 285 lines of CSS. Both
+  stay flat: the splits were forced by height at 803-1,553 lines and these are 361 and 576.
+- **`c-state` at 118px ellipsed `downloading` on ONE pixel.** Measured with the column widened out
+  of the way, the nine pills run 46-102px and the cell carries 24px of padding, so 118 offered 94
+  and the pill wanted 95. Same family as the round board's state column: a pill is a flex item with
+  the default flex-shrink and the ellipsis fires on the fraction two integer readings rounded away.
+- **`no_subtitles` is the widest of the nine labels and had never been rendered.** It has been in
+  `FileState`, `STATE_TONE` and `STATE_LABEL` since they existed with no fixture row, so nothing
+  could see that it is what the column has to be sized against - and it is the state this host has
+  most of, 1,109 episodes live.
+- **Five filter chips in a non-wrapping `inline-flex` put 91px of horizontal scroll on the whole
+  document** at 390 - 450px of segmented control in a 328px panel, silent on touch. `.hscroll` is
+  the wrong answer: panning is reserved for a grid that cannot shed a column, and a filter nobody
+  can see is a filter that lies.
+
+### Grey for a measured zero is the absence-read-as-health defect facing the other way
+- Both media condition sets answered `off` for a zero, so a host with nobody watching and nothing in
+  flight - **its ordinary state** - drew a grey headline in the encoding reserved for "nobody asked".
+  `fsTone` and `smartLine` were rewritten because absence read as health; this was the mirror.
+- `ok` is the ordinary body colour and not green, which is what a fact that was measured and is fine
+  should render as. Neither rendering can be told from the other in a screenshot.
+
+### One filter behind three readings, and the media disk that had no tone at all
+- Home's IN FLIGHT condition, Library's headline and Library's `in flight` chip are three readings of
+  one array. The page carried a hand-written `ACTIVE_STATES` beside a `stateClass` that already
+  answered it - the drift `roundOutcome` closed, and the one `networkLead` demonstrated by counting
+  five while `attentionRows` listed seven.
+- **IN FLIGHT is the three live states PLUS `queued`.** `queued` is `steady` because nothing about it
+  animates, but it has not landed; `seeding` and `done` have, and eight permanent seeds would make
+  the number a constant.
+- **Library computed its own `used = total - free` with no ratio**, so a media disk at 95% rendered
+  exactly like one at 20% on a mount `/system/storage` grades correctly two pages away.
+  `system/HealthPage.vue`'s docblock already named the rule: a second copy of that arithmetic is how
+  the two start disagreeing about which mount is full.
+- **A stalled row drew a bare `ProgressBar` track**, the encoding for "in progress, ratio unknown".
+  Fourth call site to make that mistake; the contract has been right every time.
+
+### Seven metric families collected for four hundred days and never once asked for
+- `home_server_library_*`, `requests`, `subtitles_*`, `subtitle_provider_*`, `pipeline_*`, `search_*`
+  and `seeding_*` were in no query in `queries.ts` and read nowhere in the bundle. NOT the
+  "fetched and drawn nowhere" defect - never fetched at all, so both media pages were built from two
+  documents carrying the working set and no history, and "is the backlog going up or down" was
+  unanswerable about a number the page printed.
+- **No fixture had ever carried a `search`, `seeding` or `torrent` check either**, so a
+  `FindingsPanel` asking for those sections rendered "absent from the battery's last run" - the panel
+  being honest about a fixture that could not exercise it.
+- The evidence band is on `/library` and not on `/home`: the same findings on two surfaces is a pair
+  that can disagree, which is why the fleet page's containment table was deleted.
+
+### The sub-line that invited an arithmetic, and the dump that caught it
+- Home's in-flight sub read `2 errors, 2 stalled` under a value of `3 files`. The stuck rows are a
+  DIFFERENT set and none of the four was among the three, so the only reading available to somebody
+  looking at it was wrong. It is a count now; the split belongs to the condition it is about.
+- **Found in the text `shoot.mjs` dumps, not by any assertion**, and no fixture could have failed on
+  it: every number was correct and only their juxtaposition was not.
+
+### Two numbers for one word, and the fixture could not disagree with itself
+- **`home_server_subtitles_missing` is 1,109 and `home_server_subtitles_wanted_items` is 626** on the
+  same host: missing subtitle FILES across every configured language against ITEMS wanting at least
+  one. `library.json`'s `no_subtitle_episodes` is the second, which is what /library's condition
+  prints - and the first draft drew the first in a chart directly under it. Two numbers labelled
+  "subtitles" on one page, 483 apart, with nothing on screen to say they measure different things.
+- **Only the live host could show it.** A fixture has one number per series and cannot contradict
+  itself, so this is the fixture rule arriving from a third direction: not "the fixture agrees with
+  the page" but "the fixture cannot disagree with itself". `_missing` is no longer catalogued.
+- Checked and cleared one panel over: `Library on disk` is 777 GB of transcoded library where the
+  media disk reads 991 GB of 8.0 TB used. They differ correctly - the disk also holds what is
+  downloading and seeding - and the note says so, because two byte readings on one page that do not
+  add up is a question a reader should not have to answer for themselves.
+
+### The history band drawn three ways the component had already ruled out
+- **A `stacked` chart with no `yMax` is forbidden by `MetricChart`'s own docblock** - *"only honest
+  with a `yMax` naming the total the bands add up to"* - and two libraries sharing a disk have no
+  such total. Unpinned it filled the frame to an unlabelled top edge at 778 GB under a top tick of
+  512 GB: the welded ceiling recorded for the memory chart, reached from the other direction.
+- **Only one of four charts carried `x-axis`**, so three had no time reference and the fourth was
+  taller - which `Band.stretch` then hid. Every chart in the 2x2 band on `/system/load` and `/ci`
+  carries its own; the spread across the four is 18px, which is what stretch is actually for.
+- **A pure ramp draws a flat line at the window anybody looks at.** 34 a week is 1.2 units over six
+  hours on a 0-700 axis, so the panel whose point is the slope drew none.

@@ -72,7 +72,12 @@ const tally = computed(() => {
 </script>
 
 <template>
-  <PanelBox label="Services" sunken :stale="metricsStale" padding="11px">
+  <!-- `The media stack`, NOT `Services`. docs/dashboard.md's rule is that a band
+       may not repeat its own tab; repeating a DIFFERENT section's tab is worse,
+       because a panel labelled Services on the front page reads as a link to the
+       Services page rather than as ten deep links into the applications. This is
+       the fourth instance of that correction. -->
+  <PanelBox label="The media stack" sunken :stale="metricsStale" padding="11px">
     <template #aside>
       <span class="mono tally">{{ tally }}</span>
     </template>

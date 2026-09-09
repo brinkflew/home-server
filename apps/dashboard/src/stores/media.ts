@@ -24,7 +24,7 @@ import { DocumentNeverWritten } from "@/api/document";
 import { fetchActivity, fetchLibrary } from "@/api/media";
 import { SignedOutError } from "@/api/http";
 import { freshness, type Freshness } from "@/freshness";
-import { sortRows } from "@/media";
+import { sortRows, type MediaRow } from "@/media";
 import { coarse, isoToUnix } from "@/format";
 import { useHostStore } from "@/stores/host";
 import type { ActivityDocument, FileState, LibraryDocument, Transfer } from "@/types";
@@ -175,13 +175,9 @@ export const useMediaStore = defineStore("media", () => {
   };
 });
 
-export interface MediaRow extends Transfer {
-  /** Which document this came from, so the two can dim independently. */
-  origin: "activity" | "library";
-  /** Lowercased title and path, precomputed per document change rather than per
-   *  keystroke. */
-  searchKey: string;
-}
+/** Re-exported so the existing import path still resolves. It is DECLARED in
+ *  @/media, beside every function that takes one. */
+export type { MediaRow };
 
 function searchKeyOf(row: Transfer): string {
   return `${row.title} ${row.sub ?? ""} ${row.path ?? ""}`.toLowerCase();

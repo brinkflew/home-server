@@ -316,12 +316,37 @@ export function libraryDocument(): LibraryDocument {
         source: "filesystem",
         path: "/mnt/media/library/queued/series/Slow Water",
       }),
+      // THE NINTH STATE, AND THE ONLY ONE NO FIXTURE HAD. `no_subtitles` has
+      // been in FileState, STATE_TONE and STATE_LABEL since they existed and
+      // has never been rendered here, so nothing could see that its label is
+      // the LONGEST of the nine - which is what a state column has to be sized
+      // against. The measurement it produced moved that column from 118px,
+      // where `downloading` was already ellipsing on a single pixel.
+      //
+      // It is also the state this host has most of: bazarr's backlog is 543
+      // episodes in this fixture and 1,109 on the live server.
+      row({
+        id: "bazarr:/mnt/media/library/transcoded/series/Northern Lines/S01E04",
+        title: "Northern Lines S01E04",
+        sub: "S01E04",
+        kind: "series",
+        state: "no_subtitles",
+        note: "no subtitle in any configured language after 6 provider(s)",
+        source: "bazarr",
+        app: "bazarr",
+        path: "/mnt/media/library/transcoded/series/Northern Lines/S01E04",
+      }),
     ]),
     requests: unless(REQUESTS),
     request_counts: EMPTY
       ? { total: 0, pending: 0, approved: 0, processing: 0, available: 0, declined: 0 }
       : { total: 104, pending: 1, approved: 25, processing: 25, available: 53, declined: 0 },
-    totals: { no_subtitle_episodes: 543, no_subtitle_movies: 1 },
+    // 626, THE SAME NUMBER fixtures/prometheus.ts GIVES subtitlesWanted, and the
+    // same one the live host reports through both. It was 543 while the series
+    // said 626, so /library's subtitles condition and the chart directly under
+    // it disagreed by 83 - the two files whose job is to check each other,
+    // disagreeing with each other. smoke.mjs now asserts they match.
+    totals: { no_subtitle_episodes: 626, no_subtitle_movies: 1 },
     sources: sources(["jellyfin", "jellyseerr", "radarr", "sonarr", "bazarr", "filesystem"]),
   };
 }

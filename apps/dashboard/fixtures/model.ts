@@ -489,6 +489,35 @@ const CHECKS: Check[] = [
     status: "note",
     message: "smartctl reports no self-test log for dm-0; not measured rather than passing",
   },
+  // --- the media pipeline, which /library is the only reader of ------------
+  // ADDED 2026-09-09, WITH THAT PAGE'S EVIDENCE BAND. No fixture had ever
+  // carried a check from any of these three sections, so a FindingsPanel asking
+  // for them rendered "absent from the battery's last run" - which is the
+  // panel being honest about a fixture that could not exercise it. Wording and
+  // ids are the live battery's, read off status.json rather than written to
+  // suit the page: a fixture derived from its consumer cannot contradict it.
+  { section: "search", id: "search.timer_enabled", status: "pass", message: "home-server-search.timer enabled" },
+  { section: "search", id: "search.run_age", status: "pass", message: "the last sweep was 22h ago" },
+  // THE ONE FINDING THIS PAGE EXISTS TO SURFACE, and it is amber deliberately.
+  // A stalled download is silent, blocks every alternative release with
+  // "already meets cutoff", and nothing on the host clears it - ten episodes sat
+  // at "no connections" for 225-243 hours before bin/clear-stalled.py existed.
+  // A fixture where this always passes is one where the evidence band is an
+  // empty panel nobody would notice had stopped working.
+  {
+    section: "search",
+    id: "search.stalled_queue",
+    status: "warn",
+    message: "2 stalled download(s), the oldest 42m at no peers - each one blocks every alternative release",
+  },
+  { section: "seeding", id: "seeding.timer_enabled", status: "pass", message: "home-server-seeding.timer enabled" },
+  { section: "seeding", id: "seeding.run_age", status: "pass", message: "the policy was applied 0h ago" },
+  {
+    section: "torrent",
+    id: "torrent.disk_io_type",
+    status: "pass",
+    message: "libtorrent 2.0.14.0 with DiskIOType=Posix - no memory-mapped torrent data",
+  },
   { section: "gpu_cdi", id: "gpu.count", status: "pass", message: "1 GPU visible" },
   { section: "gpu_cdi", id: "cdi.spec_count", status: "pass", message: "exactly one spec at /run/cdi/nvidia.yaml" },
   { section: "gpu_cdi", id: "cdi.driver_match", status: "pass", message: "spec names 580.173.02, which is running" },

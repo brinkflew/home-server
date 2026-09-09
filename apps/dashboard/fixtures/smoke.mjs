@@ -11,8 +11,17 @@ const server = await createServer({ server: { middlewareMode: true }, appType: "
 const load = (p) => server.ssrLoadModule(p);
 
 const { activityDocument, libraryDocument } = await load("/fixtures/media.ts");
-const { sortRows, actionFor, badgeFor, whoLine, stateClass, STATE_LABEL, STATE_TONE } =
-  await load("/src/media.ts");
+// THE SIXTH EXTRACTION, ON 2026-09-09. Home and Library were the last two pages
+// whose every decision lived in a .vue file - ten computeds between them, none
+// of them reachable from here - so the module below grew from the presentation
+// vocabulary it already held into this section's source module, the way
+// machine.ts, lanes.ts, system.ts, services.ts and network.ts each did.
+const {
+  sortRows, actionFor, badgeFor, whoLine, stateClass, STATE_LABEL, STATE_TONE,
+  attentionRows, chipCounts, docState, emptiness, filterRows, homeConditions, homeLead,
+  inFlightRows, libraryConditions, libraryLead, mediaActivity, mediaDisk, requestRows,
+  MEDIA_MOUNT,
+} = await load("/src/media.ts");
 const { posterHeight, posterUrl } = await load("/src/images.ts");
 const { containerTone, laneTone, quotaTone, heartbeatTone, collectorState } =
   await load("/src/health.ts");
@@ -190,6 +199,195 @@ check(
   library.requests.find((r) => r.status === "pending").poster,
   null,
 );
+
+
+// --- the two headlines, and the states each of them has ---------------------
+// EVERY ONE OF THESE WAS A COMPUTED IN A .vue FILE until 2026-09-09, which is
+// code nothing in this repository could call. Of the five pages this extraction
+// was done to, every one turned out to be carrying at least one answer that was
+// wrong and rendered perfectly.
+
+const mkRow = (state, i) => ({
+  id: `r${i}`, title: `row ${i}`, sub: null, kind: "movie", state,
+  progress: null, size: null, rate_bps: null, rate_note: null, note: null,
+  source: "test", quality: null, poster: null, poster_tag: null,
+  app: null, app_slug: null, path: null, origin: "activity", searchKey: `row ${i}`,
+});
+const mkRows = (states) => states.map(mkRow);
+const mkSessions = (n, transcodes = 0) =>
+  Array.from({ length: n }, (_, i) => ({
+    id: `s${i}`, method: i < transcodes ? "transcode" : "directplay", hardware: null,
+  }));
+const act = (o) =>
+  mediaActivity({
+    sessions: o.sessions ?? [],
+    rows: o.rows ?? [],
+    requestCounts: o.requestCounts ?? null,
+    playback: o.playback ?? "fresh",
+    library: o.library ?? "fresh",
+  });
+
+// IN FLIGHT IS WORK THE PIPELINE STILL OWES, and the two exclusions are the
+// reading. `seeding` is a policy this host runs deliberately - eight permanent
+// seeds would make this number a constant - and `done` has landed.
+const pipeline = mkRows(["downloading", "transcoding", "queued", "seeding", "done"]);
+check("in flight is what the pipeline still owes", inFlightRows(pipeline).length, 3);
+check("a queued file has not landed", inFlightRows(mkRows(["queued"])).length, 1);
+check("a seeding one has", inFlightRows(mkRows(["seeding"])).length, 0);
+check("and so has a finished one", inFlightRows(mkRows(["done"])).length, 0);
+check("attention is the three states the table draws amber or red",
+  attentionRows(mkRows(["stalled", "error", "no_subtitles", "done", "queued"])).length, 3);
+
+// THE HEADLINE COUNTS THE LIST UNDER IT. networkLead counting five while
+// attentionRows listed seven is the recorded instance of what this prevents,
+// and this page had the same shape: a hand-written ACTIVE_STATES beside a
+// stateClass that already answered the question.
+const chipRow = chipCounts(pipeline);
+check("the in-flight chip counts what the headline counts",
+  chipRow.find((c) => c.id === "flight").n, inFlightRows(pipeline).length);
+check("the chip's filter selects the rows it counted",
+  filterRows(pipeline, "flight", "").length, chipRow.find((c) => c.id === "flight").n);
+check("counts are over the whole set, never the view", chipRow.find((c) => c.id === "all").n, 5);
+
+// --- Home's headline ---------------------------------------------------------
+const mBusy = act({ sessions: mkSessions(2, 1), rows: pipeline, requestCounts: { pending: 0, total: 122 } });
+check("home totals watching plus in flight", homeLead(mBusy, homeConditions(mBusy)).text, "5 things happening");
+check("...and names which numbers went into it", homeLead(mBusy, homeConditions(mBusy)).sub, "2 watching, 3 in flight");
+check("...and is live while something is moving", homeLead(mBusy, homeConditions(mBusy)).live, true);
+
+// A PENDING REQUEST IS WAITING, NOT HAPPENING. It is a condition and not an
+// addend, and it must never tone the headline: somebody asking for a film is
+// not a fault on this host, and grading it would paint the front page amber for
+// as long as anybody had asked for anything.
+const mAsked = act({ sessions: mkSessions(2, 1), rows: pipeline, requestCounts: { pending: 4, total: 122 } });
+check("a pending request is not a thing happening", homeLead(mAsked, homeConditions(mAsked)).text, "5 things happening");
+check("...and never tones the headline", homeLead(mAsked, homeConditions(mAsked)).tone, "ok");
+check("...though it is still on the page", homeConditions(mAsked).find((c) => c.id === "requests").value, "4 pending");
+
+// THE FOURTH STATE, WHICH IS THE ONE THAT NEEDED WRITING. Both halves of the
+// total come from activity.json, so with no document there is no number - and
+// `${NaN} things happening` is a headline claiming a dash was measured.
+const dark = act({ playback: "absent" });
+check("no activity document is a sentence, not a dash", homeLead(dark, homeConditions(dark)).text, "activity not known");
+check("...and it is grey rather than healthy", homeLead(dark, homeConditions(dark)).tone, "off");
+check("...and it names the document", /activity\.json/.test(homeLead(dark, homeConditions(dark)).sub), true);
+
+// STALE IS NOT ABSENT. The number was true when it was measured, so it stands
+// and stops claiming to be now - the same split hostLead makes.
+const mOld = act({ sessions: mkSessions(2), rows: pipeline, playback: "stale" });
+check("a stale document keeps its number", homeLead(mOld, homeConditions(mOld)).text, "5 things happening");
+check("...but stops claiming it is now", homeLead(mOld, homeConditions(mOld)).tone, "off");
+check("...and takes no live dot", homeLead(mOld, homeConditions(mOld)).live, false);
+
+// ZERO IS AN ANSWER. Nothing playing and nothing in flight is the ordinary
+// state of this host - fixtures/media.ts documents HS_FIX_EMPTY as the common
+// production rendering - so it must read as calm rather than as broken.
+const calm = act({ requestCounts: { pending: 0, total: 122 } });
+check("nothing happening is an answer, not an absence", homeLead(calm, homeConditions(calm)).text, "nothing happening");
+check("...it reads calm", homeLead(calm, homeConditions(calm)).tone, "ok");
+check("...and nothing pulses", homeLead(calm, homeConditions(calm)).live, false);
+
+const stuck = act({ rows: mkRows(["error", "downloading"]) });
+check("an errored row reddens the headline", homeLead(stuck, homeConditions(stuck)).tone, "fail");
+const stalledOne = act({ rows: mkRows(["stalled", "downloading"]) });
+check("a stalled row warns it", homeLead(stalledOne, homeConditions(stalledOne)).tone, "warn");
+// THE RULE THAT CRIED WOLF, which memoryTone paid for one page over: a floor of
+// zero on a quantity that is never zero is not a threshold. This host's
+// subtitle backlog is 1,109 episodes deep and has been for as long as it has
+// been measured.
+const noSubs = act({ rows: mkRows(["no_subtitles", "downloading"]) });
+check("a missing subtitle does not", homeLead(noSubs, homeConditions(noSubs)).tone, "ok");
+
+check("home asks three questions", homeConditions(mBusy).map((c) => c.id), ["watching", "flight", "requests"]);
+const noLib = act({ library: "absent" });
+check("a library that did not answer draws a dash, not a zero",
+  homeConditions(noLib).find((c) => c.id === "requests").value, fmt.NO_DATA);
+check("...and says which document it was",
+  homeConditions(noLib).find((c) => c.id === "requests").sub, "library.json has not answered");
+
+// --- Library's headline ------------------------------------------------------
+const half = mediaDisk(new Map([[MEDIA_MOUNT, 100]]), new Map([[MEDIA_MOUNT, 50]]));
+const lib = act({ rows: pipeline });
+const lc = libraryConditions(lib, { no_subtitle_episodes: 1109, no_subtitle_movies: 1 }, half);
+
+check("library leads with what is in flight", libraryLead(lib, lc).text, "3 in flight");
+check("...over what those three are doing", libraryLead(lib, lc).sub, "1 downloading, 1 transcoding, 1 queued");
+check("an empty queue is a design statement, not a fault",
+  libraryLead(act({}), []).sub, "the queue drains to zero by design");
+check("library asks three questions", lc.map((c) => c.id), ["attention", "subtitles", "disk"]);
+check("the subtitle backlog is never a warning", lc.find((c) => c.id === "subtitles").tone, "ok");
+check("...and it is still the largest number on the page",
+  lc.find((c) => c.id === "subtitles").value, "1109 episodes");
+check("a backlog nobody reported is grey, not zero",
+  libraryConditions(lib, null, half).find((c) => c.id === "subtitles").value, fmt.NO_DATA);
+
+// A COUNT, NOT A BREAKDOWN. Home's in-flight sub read `2 errors, 2 stalled`
+// under a value of `3 files`, which invites an arithmetic that is wrong: the
+// stuck rows are a DIFFERENT set from the in-flight ones. Found by reading the
+// rendered page rather than by any fixture, which is what shoot.mjs is for.
+const mixed = act({ rows: mkRows(["downloading", "error", "stalled"]) });
+check("the in-flight sub counts the stuck rows rather than itemising them",
+  homeConditions(mixed).find((c) => c.id === "flight").sub, "2 need attention");
+check("...and it agrees with the number in the singular",
+  homeConditions(act({ rows: mkRows(["downloading", "error"]) })).find((c) => c.id === "flight").sub,
+  "1 needs attention");
+check("...while the split belongs to library's own attention condition",
+  libraryConditions(mixed, null, half).find((c) => c.id === "attention").sub, "1 error, 1 stalled");
+
+// THE DISK GOES THROUGH system.ts RATHER THAN BESIDE IT. This page used to do
+// its own `used = total - free` with no ratio, and therefore no tone at all: a
+// media disk at 95 percent rendered exactly like one at 20.
+const full = libraryConditions(lib, null, mediaDisk(new Map([[MEDIA_MOUNT, 100]]), new Map([[MEDIA_MOUNT, 2]])));
+check("a full media disk is red", full.find((c) => c.id === "disk").tone, "fail");
+check("...and it reddens the headline", libraryLead(lib, full).tone, "fail");
+check("a half-empty one is not", lc.find((c) => c.id === "disk").tone, "ok");
+const mUnread = libraryConditions(lib, null, mediaDisk(new Map(), new Map()));
+check("a mount that did not answer is grey, not empty", mUnread.find((c) => c.id === "disk").tone, "off");
+check("...and draws a dash rather than 0%", mUnread.find((c) => c.id === "disk").value, fmt.NO_DATA);
+check("the mount is the metric's own path, not the design's", MEDIA_MOUNT, "/var/mnt/media");
+
+// THE TWO FIXTURE HALVES HAVE TO AGREE, because the page draws one of them in a
+// chart directly under a condition printing the other. library.json's
+// `no_subtitle_episodes` and Prometheus' `subtitles_wanted_items{kind=episodes}`
+// are the SAME quantity by two transports - the live host reports 626 through
+// both - and the fixture had 543 in one and 626 in the other, so the condition
+// and the panel below it disagreed by 83 with nothing on screen to explain it.
+//
+// This is the fixture rule from a direction it had not come from before: not "a
+// fixture derived from its consumer cannot contradict it", but two halves of one
+// fixture contradicting EACH OTHER, which no page assertion can see.
+const promSubs = (await load("/fixtures/prometheus.ts")).instant(
+  (await load("/src/queries.ts")).MEDIA.subtitlesWanted, Math.floor(Date.now() / 1000),
+);
+const promEpisodes = Math.round(
+  Number(promSubs.data.result.find((r) => r.metric.kind === "episodes").value[1]),
+);
+check("the document and the series report the same subtitle backlog",
+  Math.abs(promEpisodes - library.totals.no_subtitle_episodes) < 20, true);
+
+// --- the three empty states --------------------------------------------------
+check("rows to show is not an empty state", emptiness(3, 9, null), "none");
+check("a filter that hides everything says so", emptiness(0, 9, null), "filtered");
+check("stale and empty is never 'nothing in flight'", emptiness(0, 0, "playback last reported 8m ago"), "stale");
+check("fresh and empty is the healthy state", emptiness(0, 0, null), "fresh");
+
+// --- docState ----------------------------------------------------------------
+check("a document that never answered is absent", docState(false, "could not be read"), "absent");
+check("one that answered and aged is stale", docState(true, "last reported 8m ago"), "stale");
+check("one that answered is fresh", docState(true, null), "fresh");
+
+// --- requests ----------------------------------------------------------------
+const nowS = Math.floor(Date.now() / 1000);
+const oneRequest = (at) => [{
+  id: "q", title: "T", year: null, kind: "movie", status: "pending", status_code: null,
+  media_status_code: null, requested_by: null, requested_at: at, poster: null,
+  poster_tag: null, jellyfin_id: null,
+}];
+check("a request asked two hours ago says so", requestRows(oneRequest(new Date((nowS - 7200) * 1000).toISOString()), nowS)[0].asked, "2h ago");
+// coarse, NOT sinceIso: "2h 03m ago" is false precision for something somebody
+// asked for yesterday.
+check("...coarsely", /m ago/.test(requestRows(oneRequest(new Date((nowS - 7200) * 1000).toISOString()), nowS)[0].asked), false);
+check("a request with no timestamp is a dash, not 'just now'", requestRows(oneRequest(null), nowS)[0].asked, fmt.NO_DATA);
 
 
 // --- the network graph -------------------------------------------------------
