@@ -771,6 +771,127 @@ UNIT_STATES = {"active": 0, "activating": 1, "failed": 2, "deactivating": 3,
 
 GENERATOR = "/run/user/%d/systemd/generator" % os.getuid()
 
+# ------------------------------------------------------------------------------
+# The ingress chain, per hostname
+# ------------------------------------------------------------------------------
+# THE BATTERY GRADES THIS AND KEEPS ONLY THE AGGREGATE. ingress.cert_expiry
+# reports the soonest of the fifteen and ingress.renewal_due a count, because a
+# check message is a sentence; the dashboard's Ingress band wants a row per
+# hostname, and history, so a renewal can be watched happening rather than
+# inferred from a number that got larger.
+#
+# IT STOPS AT THE CERTIFICATES, AND THE DUCKDNS HALF IS DELIBERATELY ABSENT.
+# ingress.ddns_fresh already measures the updater's liveness and its
+# ingress_ddns_age_s fact reaches this same exposition file through
+# source_status - so collecting it again here would be a SECOND reading of one
+# signal on a different schedule, which is the shape this repository has
+# recorded going wrong twice. There is nothing per-host to add to it.
+#
+# SLOW TIER, BECAUSE IT SHELLS OUT. Fifteen `openssl x509` calls is nothing
+# every ten minutes and wasteful every thirty seconds, and a certificate's
+# expiry moves once a quarter. The same argument source_smart makes about a disk.
+#
+# THE LABEL IS BOUNDED BY THE CADDYFILE, which is what makes it affordable: one
+# series per site block, fifteen today, against the ten services of slack
+# metrics.series_count budgets. It is a hostname rather than a path, an id or a
+# title - the shapes docs/observability.md warns arrive in the hundreds.
+#
+# THE STEM IS `ingress_certificate_` AND NOT `ingress_cert_`, deliberately. The
+# battery's facts are `ingress_cert_*`, and source_status mints
+# `home_server_<fact key>` for each of them onto this same file - so a name
+# minted here that a fact could also produce is the collision that rejects the
+# WHOLE scrape, which bin/lint-repo.sh leg 9 exists to catch. The distinct stem
+# keeps the two families apart by construction rather than by remembering.
+INGRESS_CERTS = os.path.join(CONFIG_ROOT, "caddy", "data", "caddy", "certificates")
+
+
+def _ingress_cert_dates(path):
+    """(notBefore, notAfter) as epochs, or (None, None) for either.
+
+    openssl prints `notBefore=Aug 11 19:58:12 2026 GMT`, which is the one format
+    both this and bin/verify-host.sh parse - so the two readers of one store
+    cannot disagree about a date while agreeing about the file.
+    """
+    out = run(["openssl", "x509", "-in", path, "-noout", "-dates"], timeout=5)
+    if not out:
+        return (None, None)
+    dates = {}
+    for line in out.splitlines():
+        key, _, value = line.partition("=")
+        if not value:
+            continue
+        try:
+            dates[key] = calendar.timegm(
+                time.strptime(value.strip(), "%b %d %H:%M:%S %Y %Z"))
+        except (ValueError, TypeError):
+            continue
+    return (dates.get("notBefore"), dates.get("notAfter"))
+
+
+def source_ingress(m):
+    """Per-hostname certificate expiry, and Caddy's own renewal appointment.
+
+    A REFUSAL RAISES AND AN EMPTY STORE DOES NOT, which are two different
+    things. No openssl means this source cannot do the job it is registered
+    for, and reporting success having emitted nothing is the shape
+    source_jellyfin already paid for. A store that is readable and holds no
+    certificate is a MEASUREMENT - `home_server_ingress_certificates 0` - and
+    ingress.cert_coverage is what says whether that is wrong.
+    """
+    if run(["openssl", "version"], timeout=5) is None:
+        raise OSError("openssl is unavailable, so no certificate can be read")
+
+    readable = 1 if os.path.isdir(INGRESS_CERTS) else 0
+    m.add("home_server_ingress_store_readable", readable, None,
+          "1 when Caddy's certificate store is a directory this can walk. An "
+          "absent CERTIFICATE and an absent STORE are different findings.")
+    if not readable:
+        return
+
+    now = time.time()
+    total = 0
+    for path in sorted(glob.glob(os.path.join(INGRESS_CERTS, "*", "*", "*.crt"))):
+        host = os.path.basename(path)[:-4]
+        not_before, not_after = _ingress_cert_dates(path)
+        if not_after is None:
+            # Absent, not zero: a certificate that could not be parsed must not
+            # read as one that expired at the epoch.
+            continue
+        total += 1
+        m.add("home_server_ingress_certificate_expiry_timestamp_seconds",
+              "%d" % not_after, {"host": host},
+              "When this hostname's certificate expires. A TIMESTAMP, not a "
+              "countdown, so a consumer subtracts its own clock and a stale "
+              "scrape cannot read as fresh.")
+
+        # Caddy's own appointment, which is the signal that moves thirty days
+        # before the expiry above does. `_selectedTime` is what it chose out of
+        # Let's Encrypt's ARI window; a renewal that happened moves notBefore
+        # past it and writes a new one further out.
+        try:
+            meta = json.loads(read_text(path[:-4] + ".json"))
+            selected = _epoch(str(meta.get("issuer_data", {})
+                                  .get("renewal_info", {})
+                                  .get("_selectedTime") or ""))
+        except (OSError, ValueError):
+            selected = None
+        if selected is None:
+            continue
+        m.add("home_server_ingress_certificate_renewal_timestamp_seconds",
+              "%d" % selected, {"host": host},
+              "When Caddy has decided it will renew this certificate.")
+        m.add("home_server_ingress_certificate_renewal_overdue",
+              1 if (now > selected and not_before is not None
+                    and not_before < selected) else 0,
+              {"host": host},
+              "1 when Caddy is past the renewal time it chose and the "
+              "certificate on disk still predates it - the renewal path "
+              "failing, about thirty days before anything goes dark.")
+
+    m.add("home_server_ingress_certificates", total, None,
+          "Certificates in the store with a readable expiry.")
+
+
 
 def source_units(m):
     """Unit-level state, which is the half podman cannot see.
@@ -5516,6 +5637,10 @@ SOURCES = (
     ("ci", source_ci, False, None),
     ("playback", source_playback, False, "activity"),
     ("transfers", source_transfers, False, "activity"),
+    # SLOW, and the tier is the whole reason it shells out at all - fifteen
+    # `openssl x509` calls every ten minutes is nothing. A certificate's expiry
+    # moves once a quarter.
+    ("ingress", source_ingress, True, None),
     ("smart", source_smart, True, None),
     ("arr", source_arr, True, None),
     ("jellyfin", source_jellyfin, True, None),

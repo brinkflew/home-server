@@ -25,7 +25,7 @@ import { usePoll } from "@/composables/usePoll";
 import { useMetricsStale } from "@/composables/useStaleness";
 import type { GraphModel } from "@/graph";
 import * as net from "@/network";
-import { NETWORK, SERVICES } from "@/queries";
+import { INGRESS, NETWORK, SERVICES } from "@/queries";
 import { PUBLISHED } from "@/topology";
 
 export interface NetworkReadings {
@@ -36,6 +36,8 @@ export interface NetworkReadings {
   conds: ComputedRef<net.ConditionRow[]>;
   tally: ComputedRef<net.Tally>;
   model: ComputedRef<GraphModel>;
+  certs: ComputedRef<net.CertRow[]>;
+  ingress: ComputedRef<net.IngressReading>;
   /** Whether the drawing may animate. See the comment on it below. */
   flowing: ComputedRef<boolean>;
 }
@@ -53,7 +55,10 @@ export function useNetworkReadings(): NetworkReadings {
    * network.ts calls that page's own liveness() rather than restating it.
    */
   const poll = usePoll(async (signal) => {
-    const [unitState, unitRestarts, info, running, health, netInfo, attached, ports, rx, tx, unmapped] =
+    const [
+      unitState, unitRestarts, info, running, health, netInfo, attached, ports, rx, tx, unmapped,
+      certExpiry, certRenewal, certOverdue, storeReadable, ddnsAge,
+    ] =
       await Promise.all([
         instantBy(SERVICES.unitState, "unit", signal),
         instantBy(SERVICES.unitRestarts, "unit", signal),
@@ -66,6 +71,16 @@ export function useNetworkReadings(): NetworkReadings {
         instant(NETWORK.rx, signal),
         instant(NETWORK.tx, signal),
         instant(NETWORK.unmapped, signal),
+        // THE INGRESS CHAIN, five more instants on a poll that already makes
+        // eleven. They are here rather than in a composable of their own for
+        // the reason this file's own docblock gives about the eleven: only one
+        // child view is mounted at a time, so a second poll would be a second
+        // 30-second clock over the same page rather than fewer queries.
+        instantBy(INGRESS.expiry, "host", signal),
+        instantBy(INGRESS.renewal, "host", signal),
+        instantBy(INGRESS.overdue, "host", signal),
+        instant(INGRESS.storeReadable, signal),
+        instant(INGRESS.ddnsAge, signal),
       ]);
 
     const units: net.UnitReading[] = [...unitState].map(([unit, state]) => ({
@@ -128,6 +143,15 @@ export function useNetworkReadings(): NetworkReadings {
       rx: pair(rx),
       tx: pair(tx),
       unmapped: value(unmapped[0]?.value),
+      certExpiry,
+      certRenewal,
+      certOverdue,
+      // ABSENT AND ZERO ARE DIFFERENT ANSWERS HERE, so neither of these gets a
+      // `?? 0`: undefined means the collector's ingress source has not
+      // reported, and 0 means it reported that the store is unwalkable. The
+      // lead reads them as three states and says which.
+      storeReadable: storeReadable.length ? value(storeReadable[0]?.value) === 1 : undefined,
+      ddnsAge: ddnsAge.length ? value(ddnsAge[0]?.value) : null,
     };
   }, 30_000);
 
@@ -160,6 +184,17 @@ export function useNetworkReadings(): NetworkReadings {
   const tally = computed(() => net.networkTally(segments.value, ports.value));
   const model = computed(() => net.graphModel(segments.value));
 
+  const certs = computed(() =>
+    net.certRows(
+      poll.data.value?.certExpiry ?? new Map(),
+      poll.data.value?.certRenewal ?? new Map(),
+      poll.data.value?.certOverdue ?? new Map(),
+    ),
+  );
+  const ingress = computed(() =>
+    net.ingressLead(certs.value, poll.data.value?.storeReadable, poll.data.value?.ddnsAge ?? null),
+  );
+
   /**
    * MOTION IS THE CLAIM "THIS IS HAPPENING NOW", so a stale reading must stop
    * it. Dimming alone is not enough: the eye reads movement long before it
@@ -180,5 +215,5 @@ export function useNetworkReadings(): NetworkReadings {
     return Date.now() / 1000 - at < 90;
   });
 
-  return { segments, ports, attention, lead, conds, tally, model, flowing };
+  return { segments, ports, attention, lead, conds, tally, model, flowing, certs, ingress };
 }

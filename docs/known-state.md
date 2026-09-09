@@ -5656,3 +5656,67 @@ service on the rack read **memory starved**. Nothing on the host was.
   schema, which is a corrupted control plane rather than a failed start, so nothing would go red.
   `bin/lint-repo.sh`'s Windmill pin leg is what makes reading one of the three sound, and it was
   planted with a disagreeing tag and made to FAIL before it was trusted.
+
+### Fifteen certificates that expire together, and nothing had ever read one
+- **Of 145 checks, not one id matched `cert`, `acme`, `dns` or `expiry`**, and `net` was a single
+  check about the LAN address. Fifteen public hostnames are served on Let's Encrypt certificates
+  Caddy issues per site block over DNS-01 against Gandi, and the whole chain was unmeasured.
+- **Every certificate on disk was still its FIRST issuance**, 29 days before the first renewal
+  Caddy had scheduled: the DNS-01 path had not run since 2026-08-11 and nothing had ever exercised
+  it. Ten of the fifteen expire on ONE day, because they were issued together at the migration - so
+  the failure is not one hostname degrading, it is every public name within hours of each other.
+- **It is silent in three directions at once**, which is what made it a section rather than a line.
+  A failed renewal is a JOURNAL entry, which this repository deliberately does not alert on. **Caddy
+  stays HEALTHY** - it serves an expiring certificate perfectly until the second it expires, so no
+  container or unit signal moves, and `stacks/infra/caddy.container` already said so in its own
+  health check's comment. And the route battery reads STATUS CODES, behind `--routes`, so it is not
+  in the hourly run and a 200 proves nothing about expiry. Caddy renews at about thirty days
+  remaining, so the window between "the renewal started failing" and "everything is dark" is a
+  month in which nothing on this host said anything.
+- **IT ASKS CADDY RATHER THAN RE-DERIVING THE POLICY.** Beside each certificate is a `<name>.json`
+  carrying `renewal_info._selectedTime` - the moment Caddy has decided it will renew that one, out
+  of Let's Encrypt's ARI window. `ingress.renewal_due` fires when that time has passed and the
+  certificate on disk still predates it, which is true from the moment Caddy misses its own
+  appointment rather than three weeks later. Same rule as `ci.runtime_dir`: ask the ENGINE, do not
+  read the policy back out of a file.
+- **WARN AND NOTE ONLY, NEVER FAIL**, for the reason `capacity.var_commitment` gives: both reboot
+  paths refuse to act on a host this battery calls unhealthy, so a certificate three weeks out would
+  block the OS security update it has nothing to do with. The urgency lives in the alert rule -
+  `TlsCertExpiringCritical` reads the FACT rather than the check, because a verdict has no room left
+  to say "seven days" once it has said "twenty-one".
+- **A SECTION MATCHER WAS REFUSED FOR THE OPPOSITE REASON TO `deploy`'s.** Nothing in `ingress` can
+  FAIL, so the matcher was the tempting option rather than the wrong-shaped one; what ruled it out is
+  `OsImageLagging`'s own argument, that the five checks have five different remedies. A dead Gandi
+  PAT, a missing CNAME, a wedged updater and an issuance that never happened are four afternoons.
+- **THE DUCKDNS RECORD CANNOT DRIFT, WHICH DECIDES WHAT IS WORTH MEASURING.** The container logs
+  `Detecting IPv4 via DuckDNS` - it asks duckdns.org what source address its own request came from,
+  so the record it sets IS this host's WAN address by construction. No external address echo, and
+  none was added. What is unmeasured is the updater STOPPING: it serves no HTTP, so nothing reports
+  its health, and **its rotated logs already held 8 DuckDNS WEBSITE HTML replies against 4,936
+  successes** - a bad token is answered with a web page rather than an error. All eight healed
+  inside the five-minute retry and nothing noticed, which is why the check grades a SUSTAINED
+  failure at thirty minutes and keys on the newest SUCCESS: enumerating failure shapes would be
+  chasing a format DuckDNS does not promise.
+- **The two parenthesised SNIPPETS are not site blocks.** 17 top-level blocks, 15 sites; matching on
+  the `{$DOMAIN}` placeholder is what tells them apart, and `cert_coverage` would otherwise report
+  `(base)` and `(protected)` missing for ever. The list is DERIVED from the Caddyfile because a
+  hand-maintained copy of the site blocks is what `CLAUDE.md` calls the most driftable shape here -
+  and a list written beside it could not catch the thing this check exists for.
+- **Every branch was proved to FAIL before it was trusted**, against planted certificates with
+  backdated `notBefore` and a planted `_selectedTime`: 19 assertions, five checks, and absence a
+  `note` in all five. The harness runs the SHIPPED section rather than a copy, extracted between
+  `say ingress` and `say verify` - the full battery costs minutes per scenario on a workstation.
+- **The fixture that failed first was the fixture, not the check.** A `date` on the workstation
+  writes `Wed  9 Sep` where duckdns writes `Wed Sep  9`, so the planted log was in a format the real
+  one never has and `ddns_fresh` correctly answered "could not be parsed". A fixture must reproduce
+  the PRODUCER's format, not whatever the consumer's machine happens to emit.
+- **`ingressLead` dropped the DuckDNS reading on an empty store**, which smoke caught: that sub-line
+  is the only place the number appears on the page, so a readable-but-empty certificate store would
+  have hidden a wedged updater - two independent halves of one chain, and the quieter one silently
+  gone.
+- **The collector's stem is `ingress_certificate_` and the facts are `ingress_cert_`**, deliberately.
+  `source_status` mints `home_server_<fact key>` onto the same exposition file, so a name minted in
+  both places is the collision that rejects the WHOLE scrape - leg 9's trap, avoided by construction
+  rather than by remembering. The DuckDNS half is deliberately absent from the collector for the
+  same reason: the battery's fact already reaches that file, and a second reading on a different
+  schedule is the shape this repository has recorded going wrong twice.

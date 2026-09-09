@@ -1899,6 +1899,21 @@ signal read green.
 - The pin is in **three files** and the check reads one; a half-done bump is two binaries against one
   schema. `bin/lint-repo.sh`'s Windmill pin leg is what makes reading one of them sound.
 
+### Fifteen certificates that expire together, and nothing had ever read one
+- Of 145 checks not one id matched `cert`, `acme`, `dns` or `expiry`, and every certificate on disk
+  was still its FIRST issuance - the DNS-01 path had not run since the migration. Ten of the fifteen
+  expire on ONE day, so the outage is every public name at once.
+- Silent three ways: a failed renewal is a JOURNAL line, **Caddy stays HEALTHY serving an expiring
+  certificate until the second it expires**, and the route battery reads status codes behind
+  `--routes`. Thirty days between "the renewal broke" and "everything is dark".
+- `ingress.renewal_due` asks CADDY - `renewal_info._selectedTime` beside each certificate - rather
+  than re-deriving "one third of the lifetime". WARN and never FAIL, or it blocks the reboot.
+- **The DuckDNS record cannot drift** - the updater asks duckdns.org for its own source address - so
+  what is measured is the updater STOPPING. Its logs already held 8 website-HTML replies against
+  4,936 successes, all self-healed, all unnoticed.
+- The two parenthesised SNIPPETS are not site blocks; the fixture that failed first was the fixture,
+  writing `Wed  9 Sep` where duckdns writes `Wed Sep  9`.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

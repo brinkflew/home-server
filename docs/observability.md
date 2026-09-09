@@ -435,12 +435,35 @@ next - and `ImageMajorJumped` beside it is the event half, which does page.
 
 **Four more targeted rules landed on 2026-09-09, and the section-wide alternative was rejected.**
 Only `capacity`, `agents` and `ci` carry a `home_server_check_status{section=...} == 2` matcher, so
-**nineteen of the twenty-two sections can WARN and page nobody** - `deploy`, `update` and `metrics`
+**twenty of the twenty-three sections can WARN and page nobody** - `deploy`, `update` and `metrics`
 among them. `OsImageLagging`, `RebootWindowLost`, `MetricsSeriesBudget` and `ImageMajorJumped` are
 targeted for the same reason `OsImageStale` is. A `deploy` section matcher was considered and
 refused: unlike capacity, agents and ci, that section legitimately carries FAILs which
 `CheckFailing` already delivers, so a `== 2` catch-all would newly page for `deploy.pinned` and
 `deploy.image_tag` as well.
+
+**Six more landed with the `ingress` section on 2026-09-09, and a section matcher was refused there
+too - for the opposite reason.** That section can never FAIL: every `ingress.*` check is WARN by
+construction, because both reboot paths refuse to act on a host this battery calls unhealthy and a
+certificate three weeks out must not block an OS security update. So the section-wide matcher was
+the *tempting* option rather than the wrong-shaped one, and what ruled it out is `OsImageLagging`'s
+own argument: **the five checks have five different remedies.** A dead Gandi PAT, a missing CNAME
+at the registrar, a wedged DuckDNS updater and an issuance that never happened are four different
+afternoons, and an alert whose annotation names the wrong one costs more than the duplicated
+threshold it saves. `TlsRenewalOverdue`, `TlsCertExpiringSoon`, `TlsCertMissing`, `DdnsUpdateStale`
+and `PublicDnsBroken` are the five.
+
+**`TlsCertExpiringCritical` is the sixth and the only critical here, and it reads a FACT rather
+than a check.** The check cannot escalate on its own - a FAIL would block the reboot, which is the
+argument the whole section rests on - so the severity lives in the rule, where it costs nothing.
+It fires on `home_server_ingress_cert_expiry_days < 7`, because a verdict has no room left to say
+"seven days" once it has said "twenty-one", and at `for: 1h` rather than 6h: at that point another
+six hours of confirmation is six hours of the remaining margin. A null fact is omitted from the
+exposition entirely, so an unmeasured host yields an empty vector and the rule fails safe.
+
+**`TlsRenewalOverdue` is the one that buys the month.** Everything else in the group reports the
+same failure later - the expiry rule three weeks on, and a browser at day zero, on all fifteen
+hostnames at once.
 
 **`OsImageLagging` is NOT a widened `OsImageStale`**, which was the obvious economy. That rule's
 summary says "nothing has STAGED it" and its description recommends `rpm-ostree upgrade`; both are

@@ -147,6 +147,49 @@ Access Token (`GANDI_BEARER_TOKEN`). Consequences worth knowing:
 - The credential is a **PAT, not the legacy `dns_gandi_api_key`** certbot used. That type is
   deprecated and `caddy-dns/gandi` will not authenticate with it.
 
+**None of that was measured until 2026-09-09, and the renewal path had never once run.** Every
+certificate on disk was still its first issuance, twenty-nine days before the first renewal Caddy
+had scheduled. The `ingress` section of `bin/verify-host.sh` grades it now, and the interesting
+half is *how*: **it reads Caddy's own intent rather than re-deriving the policy.** Beside each
+certificate is a `<name>.json` carrying `renewal_info._selectedTime` - the moment Caddy has decided
+it will renew that one, chosen out of Let's Encrypt's ARI window:
+
+```bash
+jq -r '.issuer_data.renewal_info | "\(._selectedTime)  retry \(._retryAfter)"' \
+  config/caddy/data/caddy/certificates/*/*/*.json
+```
+
+`ingress.renewal_due` fires when that time has passed and the certificate on disk still predates it
+- **about thirty days before anything goes dark**, which is the whole return on the check.
+`ingress.cert_expiry` is the backstop for when the metadata is unreadable, and deliberately late at
+twenty-one days: a healthy certificate spends a few days a quarter between thirty days and its
+renewal, and firing there would page every quarter about the system working.
+
+**Three things make the failure silent, and they are why a section was worth it.** The renewal's
+own failure is a journal line, which nothing here alerts on. **Caddy stays healthy** - it serves an
+expiring certificate perfectly until the second it expires, so no container or unit signal moves;
+`stacks/infra/caddy.container` already says so in its own health check's comment. And the route
+battery reads status codes, behind `--routes`, so it is not in the hourly run and a 200 proves
+nothing about expiry. **Ten of the fifteen expire on one day**, because they were issued together
+at the migration - so the outage is every public name within hours of each other, not one hostname
+degrading.
+
+**The DuckDNS record cannot drift from the WAN address, which decides what is worth measuring.**
+The container logs `Detecting IPv4 via DuckDNS`: it asks duckdns.org what source address its own
+request came from, so the record it sets *is* this host's WAN address by construction. No external
+address echo is needed and none is used. What is unmeasured is the updater **stopping** - it serves
+no HTTP, so it never reports health, and a bad token is answered with DuckDNS's own web page rather
+than an error. Its rotated logs already held 8 such HTML replies against 4,936 successes, every one
+of which healed inside the five-minute retry and none of which anything noticed. So
+`ingress.ddns_fresh` keys on the age of the newest **success** and grades a sustained failure at
+thirty minutes, six missed cycles clear of the ordinary three-to-seven-minute spread; enumerating
+failure shapes would be chasing a format DuckDNS does not promise.
+
+`ingress.public_dns` is the registrar half, and the only thing in this chain the host does not
+control: it resolves a site block's hostname and asserts it still follows the DuckDNS record. A
+resolver that does not answer is a `note`, never a finding - a lookup failure must not read as a
+broken CNAME.
+
 **Access control is passkey single sign-on.** Pocket ID is the OIDC provider; Tinyauth bridges
 Caddy's `forward_auth` to it, because Pocket ID has no forward-auth endpoint of its own:
 

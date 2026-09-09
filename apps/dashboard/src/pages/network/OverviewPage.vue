@@ -45,7 +45,7 @@ const metricsStale = useMetricsStale();
 const route = useRoute();
 const router = useRouter();
 
-const { segments, ports, attention, lead, conds, tally } = useNetworkReadings();
+const { segments, ports, attention, lead, conds, tally, certs, ingress } = useNetworkReadings();
 
 // --- selection ----------------------------------------------------------------
 const focus = computed<string | null>(() => {
@@ -144,6 +144,58 @@ function portTip(p: net.PortRow) {
       (p.loopback
         ? "firewalld does NOT govern this one. A loopback publish never reaches the INPUT chain, which is why it needs no rule and gets no protection from one either."
         : "firewalld governs this separately, and host.firewalld below is the check that grades it. A publish with no matching rule is a closed port on a container that looks perfectly healthy."),
+  };
+}
+/**
+ * WHAT THE ROW CANNOT SAY IN TWO WORDS. The state column has room for "renewal
+ * overdue, 44d left" and not for why that is the finding rather than the date
+ * beside it, which is the whole point of grading on Caddy's plan.
+ */
+function certTip(c: net.CertRow) {
+  const lines = [
+    c.days === null ? "no expiry could be read" : `expires in ${c.days} days`,
+    c.planned ? "Caddy has published a renewal time" : "Caddy has published no renewal time",
+  ];
+  if (c.days !== null && c.days < 0) {
+    return {
+      title: c.host,
+      lines,
+      caveat:
+        "Expired. Every request fails its TLS handshake and nothing about the containers looks wrong - Caddy serves an expiring certificate perfectly until the second it expires.",
+    };
+  }
+  if (c.overdue) {
+    return {
+      title: c.host,
+      lines,
+      caveat:
+        "Caddy chose a renewal time out of Let's Encrypt's ARI window, it has passed, and the certificate has not moved. The DNS-01 path is failing about thirty days before anything goes dark - journalctl --user -u caddy carries the ACME error.",
+    };
+  }
+  if (!c.planned) {
+    return {
+      title: c.host,
+      lines,
+      caveat:
+        "With no renewal time, ingress.renewal_due cannot speak for this one and the expiry date is the only signal left. Caddy writes it after its first ARI poll.",
+    };
+  }
+  if (c.days !== null && c.days <= net.CERT_LATE_DAYS) {
+    return {
+      title: c.host,
+      lines,
+      caveat:
+        "Past Caddy's renewal point by more than a week, so this is not a renewal in progress. Ten of these were issued in one afternoon at the migration and expire together, so it is unlikely to be one hostname.",
+    };
+  }
+  return {
+    title: c.host,
+    lines: lines.concat([
+      c.days !== null && c.days <= net.CERT_RENEW_DAYS
+        ? "inside Caddy's own window, which is where a healthy certificate spends a few days a quarter"
+        : "renewing on schedule",
+      "the tone follows Caddy's plan rather than the date, so a comfortable expiry with a missed renewal still reads amber",
+    ]),
   };
 }
 </script>
@@ -361,6 +413,62 @@ function portTip(p: net.PortRow) {
                   ? "loopback only - firewalld never sees this one"
                   : "faces the LAN, and firewalld governs it separately")
               }}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </PanelBox>
+  </Band>
+
+  <Band label="Certificates and the record under them">
+    <template #aside>
+      <span class="mono">{{ certs.length }} certificates</span>
+    </template>
+    <PanelBox :stale="metricsStale">
+      <div class="lead">
+        <StatusDot :tone="ingress.tone" :live="ingress.live" glow :size="8" />
+        <span class="reading" :class="toneClass(ingress.tone)">{{ ingress.text }}</span>
+      </div>
+      <p class="lead-sub mono">{{ ingress.sub }}</p>
+
+      <p v-if="!certs.length" class="empty mono">
+        No certificate has an expiry the collector could read. ingress.cert_coverage below is what
+        says whether that is wrong.
+      </p>
+      <table v-else class="tbl">
+        <thead>
+          <tr>
+            <th class="c-rail" />
+            <th>Hostname</th>
+            <th class="c-days">Expires</th>
+            <th class="c-plan p3">Caddy renews</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="c in certs"
+            :key="c.key"
+            class="hov"
+            :style="{ '--rail': rail(c.tone) }"
+            v-bind="tip.hover(`cert-${c.key}`, certTip(c))"
+          >
+            <td class="rail">
+              <StatusDot :tone="c.tone" :live="c.tone === 'fail'" glow :size="6" />
+            </td>
+            <td>
+              <div class="ident">
+                <span class="sname mono">{{ c.host }}</span>
+                <span class="sstate mono" :class="toneClass(c.tone)">{{ c.state }}</span>
+              </div>
+              <div class="smeta mono">
+                <span class="fold3">{{
+                  c.planned ? "Caddy has chosen a renewal time" : "no renewal time published"
+                }}</span>
+              </div>
+            </td>
+            <td class="c-days mono role">{{ c.days === null ? "-" : `${c.days}d` }}</td>
+            <td class="c-plan p3 mono role">
+              {{ c.overdue ? "overdue" : c.planned ? "scheduled" : "-" }}
             </td>
           </tr>
         </tbody>

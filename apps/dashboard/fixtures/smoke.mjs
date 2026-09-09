@@ -671,6 +671,75 @@ if (batteryNet === null) {
     N.FINDING_IDS.filter((id) => !emitted.has(id)), []);
 }
 
+// --- the ingress chain -------------------------------------------------------
+// THE ONE PROPERTY NO SCREENSHOT COULD SHOW. certRows() grades a certificate on
+// CADDY'S PLAN and not on the clock, so a certificate 44 days out whose renewal
+// Caddy has already missed is amber while one 28 days out that is renewing
+// normally is grey. Both of those are the opposite of what a date-ordered
+// reading would say, and on any given day the live host has neither - so this
+// is asserted here or nowhere.
+{
+  const DAY = 86_400;
+  const now = Date.UTC(2026, 8, 9, 12, 0, 0);
+  const at = (d) => now / 1000 + d * DAY;
+  const rows = (spec) =>
+    N.certRows(
+      new Map(spec.map((c) => [c.host, at(c.expiry)])),
+      new Map(spec.filter((c) => c.renewal !== undefined).map((c) => [c.host, at(c.renewal)])),
+      new Map(spec.filter((c) => c.renewal !== undefined).map((c) => [c.host, c.overdue ?? 0])),
+      now,
+    );
+  const one = (c) => rows([{ host: "x", ...c }])[0];
+
+  check("a comfortable date with a missed renewal is amber",
+    one({ expiry: 44, renewal: -6, overdue: 1 }).tone, "warn");
+  check("...and the row says which of the two it is",
+    one({ expiry: 44, renewal: -6, overdue: 1 }).state, "renewal overdue, 44d left");
+  check("inside Caddy's own window is grey, not amber",
+    one({ expiry: 28, renewal: -1 }).tone, "off");
+  check("...because that is the system working",
+    one({ expiry: 28, renewal: -1 }).state, "28d left, renewing");
+  check("three weeks out with no renewal missed is still amber",
+    one({ expiry: 20, renewal: 25 }).tone, "warn");
+  check("an expired certificate is red", one({ expiry: -1, renewal: -30 }).tone, "fail");
+  check("...and says so rather than counting backwards",
+    one({ expiry: -1, renewal: -30 }).state, "expired");
+  check("a certificate with no renewal time is graded on its date alone",
+    [one({ expiry: 70 }).tone, one({ expiry: 70 }).planned], ["ok", false]);
+  check("rows are sorted by hostname, not by date",
+    rows([{ host: "watch", expiry: 10 }, { host: "auth", expiry: 90 }]).map((r) => r.host),
+    ["auth", "watch"]);
+
+  // THE HEADLINE IS THE COUNT THAT NEEDS SOMETHING DOING, and the overdue count
+  // outranks the near ones for the same reason the row tone does.
+  const many = rows([
+    { host: "a", expiry: 61, renewal: 31 },
+    { host: "b", expiry: 44, renewal: -6, overdue: 1 },
+    { host: "c", expiry: 20, renewal: 25 },
+  ]);
+  check("the lead leads with the overdue renewal", N.ingressLead(many, true, 180).text,
+    "1 renewal overdue");
+  check("...and is amber", N.ingressLead(many, true, 180).tone, "warn");
+  check("...and carries the duckdns reading in its sub-line",
+    N.ingressLead(many, true, 180).sub.includes("DuckDNS updated 3m ago"), true);
+  check("a healthy set counts and names the soonest",
+    N.ingressLead(rows([{ host: "a", expiry: 61, renewal: 31 }]), true, 180).text,
+    "1 certificates, soonest 61d");
+
+  // ABSENCE IS NOT HEALTH, AND AN UNREADABLE STORE IS NOT AN EMPTY ONE. These
+  // are three states and the page draws three, which is the rule /system got
+  // wrong in three functions at once.
+  check("an unreported collector source is grey", N.ingressLead([], undefined, null).tone, "off");
+  check("...and says it was not measured",
+    N.ingressLead([], undefined, null).text, "the certificates are not measured");
+  check("an unwalkable store is a failure", N.ingressLead([], false, null).tone, "fail");
+  check("an empty but readable store is neither",
+    [N.ingressLead([], true, null).tone, N.ingressLead([], true, null).text],
+    ["off", "no certificates issued"]);
+  check("an unmeasured duckdns age says so rather than reading 0m",
+    N.ingressLead([], true, null).sub.includes("not measured"), true);
+}
+
 // The fold is arithmetic on the layout's own constants, not a literal.
 check("three columns need the most room", G.columnsFor(G.gridWidth(3)), 3);
 check("one pixel under drops to two", G.columnsFor(G.gridWidth(3) - 1), 2);

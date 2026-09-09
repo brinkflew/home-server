@@ -13,6 +13,7 @@ import {
   ALL_QUERIES,
   AVAILABILITY,
   CI,
+  INGRESS,
   MEDIA,
   NETWORK,
   PULSE_QUERY,
@@ -724,6 +725,47 @@ function bySeries(): Record<string, SeriesSpec[]> {
       at: constant(8265),
     },
   ];
+
+  // --- the ingress chain ----------------------------------------------------
+  //
+  // FIVE CERTIFICATES IN FOUR STATES, and the fourth is the one that earns its
+  // place. Two are renewing normally, one is INSIDE Caddy's window (grey, the
+  // system working), and one is OVERDUE WITH A COMFORTABLE DATE - 44 days left
+  // and a renewal Caddy has already missed. That last is the whole reason the
+  // tone follows Caddy's plan rather than the clock: graded on its date it
+  // would read green for another three weeks.
+  //
+  // THE FIFTH HAS AN EXPIRY AND NO RENEWAL TIME, which is the case
+  // ingress.renewal_due cannot speak for at all. A fixture where every row
+  // carries every series exercises the layout that needs the least care and
+  // hides the rule that needs the most - the argument the CI lanes below
+  // already make about a lane that never started.
+  //
+  // The dates are OFFSETS, never literals: a fixture with a fixed expiry ages
+  // into a different state every day it is not regenerated, which is a fixture
+  // that stops meaning what it was written to mean.
+  const CERTS: Record<string, { expiry: number; renewal?: number; overdue?: number }> = {
+    "watch.avanserv.com": { expiry: 61, renewal: 31 },
+    "home.avanserv.com": { expiry: 65, renewal: 35 },
+    "ntfy.avanserv.com": { expiry: 28, renewal: -1 },
+    "id.avanserv.com": { expiry: 44, renewal: -6, overdue: 1 },
+    "auth.avanserv.com": { expiry: 70 },
+  };
+  const inDays = (d: number) => (at: number) => at + d * 86_400;
+
+  table[INGRESS.expiry] = Object.entries(CERTS).map(([host, c]) => ({
+    metric: { host },
+    at: inDays(c.expiry),
+  }));
+  table[INGRESS.renewal] = Object.entries(CERTS)
+    .filter(([, c]) => c.renewal !== undefined)
+    .map(([host, c]) => ({ metric: { host }, at: inDays(c.renewal as number) }));
+  table[INGRESS.overdue] = Object.entries(CERTS)
+    .filter(([, c]) => c.renewal !== undefined)
+    .map(([host, c]) => ({ metric: { host }, at: constant(c.overdue ?? 0) }));
+  table[INGRESS.storeReadable] = [{ metric: {}, at: constant(1) }];
+  // The battery's own fact, well inside the 30-minute threshold.
+  table[INGRESS.ddnsAge] = [{ metric: {}, at: constant(180) }];
 
   // --- CI lanes -------------------------------------------------------------
   //

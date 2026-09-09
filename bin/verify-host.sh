@@ -4894,6 +4894,262 @@ if [ -z "$GREENBOOT" ]; then
 	fact storage_committed_mb "${cap_committed:-}" num
 	fact storage_capacity_mb "${cap_total:-}" num
 
+	say ingress "Ingress"
+	# --------------------------------------------------------------------------
+	# THE CHAIN EVERY PUBLIC HOSTNAME RESTS ON, AND NOTHING HERE HAD EVER READ A
+	# CERTIFICATE. Fifteen names are served over TLS on Let's Encrypt certificates
+	# Caddy issues per site block over DNS-01 against Gandi, and until 2026-09-09
+	# no check on this host named one: not `cert`, not `acme`, not `dns`. The
+	# `net` section is one check, about the LAN address.
+	#
+	# IT IS SILENT IN THREE DIRECTIONS AT ONCE, which is what makes it a section
+	# rather than a line. A failed renewal is a JOURNAL entry, and this repository
+	# deliberately does not alert on the journal - Jellyfin alone emits 2,644
+	# priority-3 lines a day. Caddy stays HEALTHY throughout, serving an expiring
+	# certificate perfectly until the second it expires; stacks/infra/caddy.container
+	# says so in its own words - "the admin API on 2019 answering means the config
+	# parsed and loaded, NOT that Caddy can still issue certificates". And the
+	# route battery reads STATUS CODES, behind --routes, so it is not in the
+	# hourly run and a 200 would prove nothing about expiry if it were.
+	#
+	# Measured 2026-09-09: ten of the fifteen expire on ONE day, because they were
+	# issued together at the migration - so the outage is not one hostname, it is
+	# all of them within hours of each other. Every certificate on disk was still
+	# its FIRST issuance, 29 days before the first renewal Caddy had scheduled:
+	# the DNS-01 path had not run since 2026-08-11 and nothing had ever exercised
+	# it. Caddy renews at about thirty days remaining, so between "the renewal
+	# started failing" and "everything is dark" there are thirty days in which
+	# nothing on this host said anything.
+	#
+	# IT ASKS CADDY RATHER THAN RE-DERIVING THE POLICY. Beside each certificate is
+	# a <name>.json carrying renewal_info._selectedTime - the moment Caddy has
+	# decided it will renew THAT certificate, chosen out of Let's Encrypt's ARI
+	# window. Reading it beats hardcoding "one third of the lifetime": it survives
+	# Caddy changing its mind, and it is the rule ci.runtime_dir already states -
+	# ask the ENGINE, do not read the policy back out of a file.
+	#
+	# WARN AND NOTE ONLY, NEVER FAIL, for the reason capacity.var_commitment gives
+	# forty lines up: bin/reboot-host.sh and bin/reboot-when-staged.sh both refuse
+	# to act on a host this battery calls unhealthy, so a certificate three weeks
+	# out would block the OS security update it has nothing to do with. The
+	# urgency is carried by the alert rule's severity, which is where it belongs.
+	#
+	# THE DNS HALF CANNOT DRIFT, WHICH DECIDES WHAT IS WORTH MEASURING. duckdns
+	# logs "Detecting IPv4 via DuckDNS" - it asks duckdns.org what source address
+	# its own request came from, so the record it sets IS this host's WAN address
+	# by construction and no external address echo is needed here. What is
+	# unmeasured is the updater dying: it serves no HTTP, so it never reports
+	# health, and its rotated logs already hold 8 DuckDNS *website HTML* replies
+	# against 4,936 successes. Those self-healed within the 5-minute retry, which
+	# is why ingress.ddns_fresh grades a SUSTAINED failure and not a single one.
+	#
+	# Overridable so every branch below can be driven without waiting for a real
+	# expiry - an untestable branch is the same shape as a check that cannot fail,
+	# and this repository has found enough of those. Read only from the
+	# environment, so nothing in the unit path can reach them.
+	# --------------------------------------------------------------------------
+	ing_cfg="${DOCKER_VOLUME_CONFIG:-/var/home-server/config}"
+	ing_certs="${HOME_SERVER_CADDY_DATA:-$ing_cfg/caddy/data}/caddy/certificates"
+	ing_ddns_log="${HOME_SERVER_DUCKDNS_LOG:-$ing_cfg/duckdns/duck.log}"
+	# The Caddyfile and .env are overridable for the same reason the store is:
+	# there is no rendered .env on a workstation, so without these two the
+	# coverage and DNS branches could only ever be exercised on the server - and
+	# a branch that can only be tested where it must not be tested is the same
+	# shape as one that is never tested at all.
+	ing_caddyfile="${HOME_SERVER_INGRESS_CADDYFILE:-$repo/apps/caddy/Caddyfile}"
+	ing_env="${HOME_SERVER_INGRESS_ENV:-$repo/.env}"
+
+	# THE FIRST FORWARD-LOOKING INTERVAL IN THIS FILE. Everything else here ages a
+	# timestamp that has already happened; these subtract now from a date in the
+	# future, so the sign is the other way round and an unparseable date has to
+	# read as "not measured" rather than as an expiry in 1970.
+	ing_now=$(date -u +%s)
+	ing_present=0 ing_meta=0 ing_overdue=0
+	ing_soon_d="" ing_soon_at="" ing_soon_host="" ing_overdue_hosts="" ing_hosts=""
+	ing_why=""
+
+	if ! command -v openssl >/dev/null 2>&1; then
+		# PATH is set at the top of this script, so this is a genuinely absent
+		# binary rather than the non-interactive-ssh trap render-env.sh documents.
+		ing_why="openssl is not installed"
+	elif [ ! -d "$ing_certs" ]; then
+		ing_why="no certificate store at $ing_certs"
+	else
+		# `find | sort` through a herestring rather than a pipe, so the counters
+		# below survive the loop - and the empty case yields ONE empty line, which
+		# is what the guard on the first line is for.
+		while IFS= read -r ing_crt; do
+			[ -n "$ing_crt" ] || continue
+			ing_present=$(( ing_present + 1 ))
+			ing_host=$(basename "$ing_crt" .crt)
+			ing_hosts="$ing_hosts$ing_host
+"
+			# THE LEAF, WHICH IS THE ONE THAT MATTERS: a .crt here holds the
+			# chain, and `openssl x509` reads the first certificate in it.
+			ing_end=$(openssl x509 -in "$ing_crt" -noout -enddate 2>/dev/null |
+				sed -n 's/^notAfter=//p')
+			ing_end_e=$(date -d "$ing_end" +%s 2>/dev/null) || ing_end_e=""
+			if [ -n "${ing_end_e:-}" ]; then
+				ing_d=$(( ( ing_end_e - ing_now ) / 86400 ))
+				if [ -z "$ing_soon_d" ] || [ "$ing_d" -lt "$ing_soon_d" ]; then
+					ing_soon_d=$ing_d
+					ing_soon_host=$ing_host
+					ing_soon_at=$(date -u -d "@$ing_end_e" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) ||
+						ing_soon_at=""
+				fi
+			fi
+
+			# CADDY'S OWN INTENT, AGAINST THE CERTIFICATE IT HAS NOT REPLACED. A
+			# renewal that HAPPENED moves notBefore past the _selectedTime it was
+			# scheduled for and writes a new one further out - so "now is past the
+			# selected time AND the certificate on disk still predates it" is the
+			# shape of a renewal that did not happen, and it is true from the
+			# moment Caddy misses its own appointment rather than weeks later.
+			ing_sel=$(jq -r '.issuer_data.renewal_info._selectedTime // empty' \
+				"${ing_crt%.crt}.json" 2>/dev/null) || ing_sel=""
+			[ -n "$ing_sel" ] && ing_meta=$(( ing_meta + 1 ))
+			ing_sel_e=$(date -d "$ing_sel" +%s 2>/dev/null) || ing_sel_e=""
+			ing_nb=$(openssl x509 -in "$ing_crt" -noout -startdate 2>/dev/null |
+				sed -n 's/^notBefore=//p')
+			ing_nb_e=$(date -d "$ing_nb" +%s 2>/dev/null) || ing_nb_e=""
+			if [ -n "${ing_sel_e:-}" ] && [ -n "${ing_nb_e:-}" ] &&
+				[ "$ing_now" -gt "$ing_sel_e" ] && [ "$ing_nb_e" -lt "$ing_sel_e" ]; then
+				ing_overdue=$(( ing_overdue + 1 ))
+				ing_overdue_hosts="$ing_overdue_hosts $ing_host"
+			fi
+		done <<< "$(find "$ing_certs" -name '*.crt' 2>/dev/null | sort)"
+	fi
+
+	# 21 and 30 are Caddy's own renewal point and nine days past it. A healthy
+	# certificate here oscillates between 90 days and about 30, so 30 is "the
+	# window has opened and Caddy should be acting" - a note, because on any
+	# ordinary day it means the renewal is in progress - and 21 is "it opened
+	# nine days ago and the certificate has not moved", which is a finding.
+	if [ -n "$ing_why" ]; then
+		note ingress.cert_expiry "$ing_why - the certificates cannot be read"
+	elif [ "$ing_present" -eq 0 ]; then
+		note ingress.cert_expiry "no certificates under $ing_certs - Caddy has issued none, or the store moved"
+	elif [ -z "$ing_soon_d" ]; then
+		note ingress.cert_expiry "$ing_present certificate(s) present and none carried a readable notAfter - not measured"
+	elif [ "$ing_soon_d" -le 21 ]; then
+		warn ingress.cert_expiry "the soonest certificate expires in ${ing_soon_d}d ($ing_soon_host, of $ing_present) - past Caddy's own renewal point by more than a week, so the renewal is not merely late. Read ingress.renewal_due first, then \`journalctl --user -u caddy\` for the ACME error; the credential is GANDI_BEARER_TOKEN and a Gandi PAT can expire"
+	elif [ "$ing_soon_d" -le 30 ]; then
+		note ingress.cert_expiry "the soonest certificate expires in ${ing_soon_d}d ($ing_soon_host, of $ing_present) - inside Caddy's renewal window, which is where a healthy certificate spends a few days a quarter"
+	else
+		ok ingress.cert_expiry "the soonest of $ing_present certificate(s) expires in ${ing_soon_d}d ($ing_soon_host)"
+	fi
+
+	if [ -n "$ing_why" ]; then
+		note ingress.renewal_due "$ing_why - Caddy's renewal intent cannot be compared against what is on disk"
+	elif [ "$ing_present" -eq 0 ]; then
+		note ingress.renewal_due "no certificates under $ing_certs - nothing to renew"
+	elif [ "$ing_meta" -eq 0 ]; then
+		note ingress.renewal_due "$ing_present certificate(s) and none carries renewal_info._selectedTime - Caddy has not polled ARI yet, or the metadata moved. ingress.cert_expiry is the backstop while this is unreadable"
+	elif [ "$ing_overdue" -gt 0 ]; then
+		warn ingress.renewal_due "Caddy said it would renew${ing_overdue_hosts} and has not - the certificate on disk still predates the time it chose. This is the renewal path failing about thirty days before anything goes dark: \`journalctl --user -u caddy\` carries the ACME error, and GANDI_BEARER_TOKEN is the credential DNS-01 needs"
+	else
+		ok ingress.renewal_due "no certificate is past the renewal time Caddy chose for it ($ing_meta of $ing_present carry one)"
+	fi
+
+	# DERIVED FROM THE CADDYFILE, NEVER A SECOND LIST. A hand-maintained copy of
+	# the site blocks is what CLAUDE.md calls the most driftable shape this
+	# repository has a name for, and the whole point of this check is to catch a
+	# block whose certificate never issued - which a list written beside it could
+	# not do. The two parenthesised SNIPPETS are not site blocks: there are 17
+	# top-level blocks and 15 sites, and matching on the {$DOMAIN} placeholder is
+	# what tells them apart.
+	ing_domain=$(sed -n 's/^DOMAIN=//p' "$ing_env" 2>/dev/null | tail -1) || ing_domain=""
+	# The placeholder is spelled [$]DOMAIN rather than \$DOMAIN because the
+	# literal is what is wanted and shellcheck cannot tell the two apart inside
+	# single quotes - SC2016 on a pattern that was already correct.
+	ing_sites=$(grep -oE '^[a-z0-9][a-z0-9.-]*\.\{[$]DOMAIN\}' "$ing_caddyfile" 2>/dev/null |
+		sed 's/\.{[$]DOMAIN}$//' | sort -u) || ing_sites=""
+	ing_sites_n=0 ing_missing=""
+	for ing_s in $ing_sites; do
+		ing_sites_n=$(( ing_sites_n + 1 ))
+		printf '%s\n' "$ing_hosts" | grep -qxF "$ing_s.$ing_domain" ||
+			ing_missing="$ing_missing $ing_s"
+	done
+
+	if [ -n "$ing_why" ]; then
+		note ingress.cert_coverage "$ing_why - the site blocks cannot be checked against the store"
+	elif [ ! -f "$ing_caddyfile" ]; then
+		note ingress.cert_coverage "no Caddyfile at $ing_caddyfile - the hostname list cannot be derived"
+	elif [ -z "$ing_domain" ]; then
+		note ingress.cert_coverage "no DOMAIN in $ing_env - the site blocks cannot be resolved to hostnames; run ./bin/render-env.sh"
+	elif [ "$ing_sites_n" -eq 0 ]; then
+		note ingress.cert_coverage "no site blocks matched in $ing_caddyfile - the extraction is out of step with the file"
+	elif [ -n "$ing_missing" ]; then
+		warn ingress.cert_coverage "site block(s) with no certificate:${ing_missing} - a hostname with no certificate fails the TLS handshake outright. Either its CNAME to the DuckDNS name is missing, so DNS-01 could not validate, or the issuance failed; \`journalctl --user -u caddy\` names which"
+	else
+		ok ingress.cert_coverage "all $ing_sites_n site block(s) have a certificate"
+	fi
+
+	# 1800s is six missed cycles. The updater runs about every five minutes and
+	# the observed gaps are three to seven, so this sits clear of the ordinary
+	# spread - and every one of the 8 historical failures healed inside one
+	# retry. Keying on the newest SUCCESS rather than on any failure shape is
+	# deliberate: DuckDNS answers a bad token with its own website HTML, so the
+	# failure has no stable spelling and absence is the finding.
+	ing_ddns_age=""
+	if [ ! -r "$ing_ddns_log" ]; then
+		note ingress.ddns_fresh "no readable DuckDNS log at $ing_ddns_log - not measured; LOG_FILE=true in stacks/infra/duckdns.container is what writes it"
+	else
+		ing_ddns_at=$(grep -a 'successful' "$ing_ddns_log" 2>/dev/null | tail -1 |
+			sed -n 's/^DuckDNS request at \(.*\) successful\..*/\1/p') || ing_ddns_at=""
+		ing_ddns_e=$(date -d "$ing_ddns_at" +%s 2>/dev/null) || ing_ddns_e=""
+		[ -n "${ing_ddns_e:-}" ] && ing_ddns_age=$(( ing_now - ing_ddns_e ))
+		if [ -z "$ing_ddns_at" ]; then
+			note ingress.ddns_fresh "the DuckDNS log carries no successful update at all - not measured"
+		elif [ -z "$ing_ddns_age" ]; then
+			note ingress.ddns_fresh "the DuckDNS log's timestamp '$ing_ddns_at' could not be parsed - not measured"
+		elif [ "$ing_ddns_age" -gt 1800 ]; then
+			warn ingress.ddns_fresh "DuckDNS last updated successfully $(( ing_ddns_age / 60 ))m ago against a ~5m cycle - every public hostname is a CNAME to that record, and it serves no HTTP so nothing else reports it. Check DDNS_TOKEN and \`journalctl --user -u duckdns\`; a bad token is answered with DuckDNS's own web page rather than an error"
+		else
+			ok ingress.ddns_fresh "DuckDNS updated successfully $(( ing_ddns_age / 60 ))m ago"
+		fi
+	fi
+
+	# THE ONE NAME LOOKUP IN THIS BATTERY, and it is here rather than in `net`
+	# because that section runs under --greenboot: a resolver hiccup at boot must
+	# never be an input to an OS rollback. It proves the CNAME chain rather than
+	# the address - the record's value cannot be wrong, per the note at the top,
+	# so what is worth asking is whether avanserv.com still points at it.
+	ing_probe=$(printf '%s\n' "$ing_sites" | head -1) || ing_probe=""
+	ing_ddns_name=$(sed -n 's/^DDNS_SUBDOMAINS=//p' "$ing_env" 2>/dev/null |
+		tail -1 | cut -d, -f1) || ing_ddns_name=""
+	ing_site_a="" ing_ddns_a=""
+	if [ -n "$ing_probe" ] && [ -n "$ing_domain" ]; then
+		ing_site_a=$(getent hosts "$ing_probe.$ing_domain" 2>/dev/null |
+			awk '{print $1; exit}') || ing_site_a=""
+	fi
+	if [ -n "$ing_ddns_name" ]; then
+		ing_ddns_a=$(getent hosts "$ing_ddns_name.duckdns.org" 2>/dev/null |
+			awk '{print $1; exit}') || ing_ddns_a=""
+	fi
+	ing_site_a="${HOME_SERVER_PUBLIC_DNS_ADDR:-$ing_site_a}"
+
+	if [ -z "$ing_probe" ] || [ -z "$ing_domain" ]; then
+		note ingress.public_dns "no site block or no DOMAIN to probe with - not measured"
+	elif [ -z "$ing_ddns_name" ]; then
+		note ingress.public_dns "no DDNS_SUBDOMAINS in $ing_env - the record to compare against is unknown"
+	elif [ -z "$ing_ddns_a" ]; then
+		note ingress.public_dns "$ing_ddns_name.duckdns.org did not resolve - not measured, and a resolver failure must not read as a broken CNAME"
+	elif [ -z "$ing_site_a" ]; then
+		warn ingress.public_dns "$ing_probe.$ing_domain does not resolve at all while $ing_ddns_name.duckdns.org answers $ing_ddns_a - the CNAME at the registrar is missing, and that hostname is unreachable from outside"
+	elif [ "$ing_site_a" != "$ing_ddns_a" ]; then
+		warn ingress.public_dns "$ing_probe.$ing_domain resolves to $ing_site_a but $ing_ddns_name.duckdns.org is $ing_ddns_a - the CNAME no longer follows the dynamic record, so the public names point somewhere this host does not control"
+	else
+		ok ingress.public_dns "$ing_probe.$ing_domain follows $ing_ddns_name.duckdns.org to $ing_ddns_a"
+	fi
+
+	fact ingress_cert_expiry_days "${ing_soon_d:-}" num
+	fact ingress_cert_earliest_expiry_at "${ing_soon_at:-}"
+	fact ingress_certs_present "${ing_present:-}" num
+	fact ingress_sites_expected "${ing_sites_n:-}" num
+	fact ingress_renewal_overdue "${ing_overdue:-}" num
+	fact ingress_ddns_age_s "${ing_ddns_age:-}" num
+
 	say verify "Self"
 	if [ "$(systemctl --user is-enabled home-server-verify.timer 2>/dev/null)" = enabled ]; then
 		ok verify.timer_enabled "home-server-verify.timer enabled"

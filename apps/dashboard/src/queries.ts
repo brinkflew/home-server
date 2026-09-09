@@ -429,6 +429,40 @@ export const NETWORK = {
 } as const;
 
 /**
+ * The ingress chain: fifteen certificates and Caddy's own plan for them.
+ *
+ * THE BATTERY KEEPS ONLY THE AGGREGATE, which is what these are for. A check
+ * message is a sentence, so ingress.cert_expiry reports the soonest of the
+ * fifteen and ingress.renewal_due a count; the band wants a row per hostname,
+ * and history, so a renewal can be watched happening rather than inferred from
+ * a number that got larger.
+ *
+ * TIMESTAMPS, NOT COUNTDOWNS, for the reason the CI lane markers are: the
+ * consumer subtracts its own clock, so a scrape that stopped shows as
+ * staleness rather than freezing at "59 days" for ever.
+ *
+ * THE OVERDUE FLAG IS THE ONE THAT MATTERS AND IT IS NOT DERIVABLE HERE.
+ * "Caddy is past the time it chose" needs the certificate's notBefore as well
+ * as its notAfter, and only the collector reads that - so it is emitted as an
+ * explicit 0 or 1 rather than left for the browser to reconstruct from two
+ * series it does not have.
+ */
+export const INGRESS = {
+  expiry: "home_server_ingress_certificate_expiry_timestamp_seconds",
+  renewal: "home_server_ingress_certificate_renewal_timestamp_seconds",
+  overdue: "home_server_ingress_certificate_renewal_overdue",
+
+  /** An explicit 0 when Caddy's store is not a directory this can walk, so an
+   *  absent STORE and an absent CERTIFICATE stay different findings. */
+  storeReadable: "home_server_ingress_store_readable",
+
+  /** From the battery's own fact, not from counting the rows above: the two
+   *  are written by different processes on different schedules, and a count
+   *  derived here would disagree with the check that grades it. */
+  ddnsAge: "home_server_ingress_ddns_age_seconds",
+} as const;
+
+/**
  * The CI lanes.
  *
  * THIS PAGE IS THE ONLY ONE THAT CAN SEE THIS FLEET AT ALL, and that is what
@@ -676,6 +710,7 @@ export const ALL_QUERIES: string[] = [
   ...Object.values(AVAILABILITY),
   ...Object.values(MEDIA),
   ...Object.values(NETWORK),
+  ...Object.values(INGRESS),
   ...Object.values(CI),
   ...Object.values(AGENTS),
   PULSE_QUERY,

@@ -791,6 +791,15 @@ export const FINDING_IDS = [
   "ci.runner_isolation",
   "metrics.container_network",
   "metrics.node_netns_scope",
+  // The ingress chain, added 2026-09-09. Same rule as the seven above: the ids
+  // are named rather than the section, and `ingress` is a section this page
+  // DOES own end to end - all five of its checks are about reaching this host
+  // from outside, which is what the page is for.
+  "ingress.cert_expiry",
+  "ingress.renewal_due",
+  "ingress.cert_coverage",
+  "ingress.ddns_fresh",
+  "ingress.public_dns",
 ];
 
 export interface LeadReading {
@@ -1035,4 +1044,181 @@ export function graphModel(segments: SegmentRow[]): GraphModel {
   );
 
   return { groups, spine };
+}
+
+// =============================================================================
+// The ingress chain
+// -----------------------------------------------------------------------------
+// FIFTEEN CERTIFICATES THAT EXPIRE TOGETHER, which is the whole reason this is
+// a band rather than a number. They were issued in one afternoon at the
+// migration, so ten of them share an expiry date: the failure is not one
+// hostname degrading, it is every public name going dark within hours of each
+// other, and a single "soonest: 61 days" hides that they are all 61 days.
+//
+// THE TONE COMES FROM CADDY'S PLAN, NOT FROM THE CLOCK. `overdue` is the
+// collector's answer to "is Caddy past the renewal time it chose for this
+// certificate, with the old one still on disk" - true about thirty days before
+// the expiry matters, and the only signal here that names the fault rather than
+// its consequence. A row is amber because the renewal is late, not because the
+// date is near; the date only takes over once the metadata is unreadable, which
+// is what `days` is for.
+//
+// ABSENCE IS NOT HEALTH, IN EITHER DIRECTION. A certificate with no expiry
+// series is grey and says so, rather than borrowing the colour of a measured
+// one - the rule checkTone() states and /system got wrong in three functions at
+// once. And an unreadable STORE is a different finding from an empty one, which
+// is why the caller passes `storeReadable` rather than inferring it from a row
+// count of zero.
+// =============================================================================
+
+export interface CertRow {
+  key: string;
+  host: string;
+  /** Whole days until expiry, or null when nothing measured it. */
+  days: number | null;
+  /** Caddy is past the renewal time it chose and the certificate has not moved. */
+  overdue: boolean;
+  /** Whether Caddy has published a renewal time for this one at all. */
+  planned: boolean;
+  tone: Tone;
+  state: string;
+}
+
+/** The thresholds are bin/verify-host.sh's own, so the band and the check that
+ *  alerts on it cannot disagree about what "soon" means. 30 is Caddy's renewal
+ *  point and 21 is nine days past it. */
+export const CERT_RENEW_DAYS = 30;
+export const CERT_LATE_DAYS = 21;
+
+const DAY = 86_400;
+
+export function certRows(
+  expiry: Map<string, number>,
+  renewal: Map<string, number>,
+  overdue: Map<string, number>,
+  nowMs: number = Date.now(),
+): CertRow[] {
+  const now = nowMs / 1000;
+  return [...expiry.keys()]
+    .sort()
+    .map((host) => {
+      const at = expiry.get(host);
+      const days = at === undefined ? null : Math.floor((at - now) / DAY);
+      const late = overdue.get(host) === 1;
+      const planned = renewal.get(host) !== undefined;
+
+      let tone: Tone = "ok";
+      let state = days === null ? "not measured" : `${days}d left`;
+      if (days === null) {
+        tone = "off";
+      } else if (days < 0) {
+        tone = "fail";
+        state = "expired";
+      } else if (late) {
+        // THE RENEWAL IS THE FINDING AND THE DATE IS THE CONSEQUENCE, so this
+        // outranks the day count: a certificate 40 days out whose renewal has
+        // already been missed is the case worth acting on, and grading it on
+        // its comfortable date would say nothing until three weeks later.
+        tone = "warn";
+        state = `renewal overdue, ${days}d left`;
+      } else if (days <= CERT_LATE_DAYS) {
+        tone = "warn";
+      } else if (days <= CERT_RENEW_DAYS) {
+        // Inside Caddy's own window is where a healthy certificate spends a few
+        // days a quarter, so it is a remark rather than a fault - grey, for the
+        // same reason a `note` is.
+        tone = "off";
+        state = `${days}d left, renewing`;
+      }
+      return { key: host, host, days, overdue: late, planned, tone, state };
+    });
+}
+
+export interface IngressReading {
+  text: string;
+  tone: Tone;
+  live: boolean;
+  sub: string;
+}
+
+/**
+ * THE HEADLINE IS THE COUNT THAT NEEDS SOMETHING DOING, which is the rule
+ * networkLead() already states one band up - and the reason it cannot simply be
+ * "15 certificates" is that a constant printed whether or not anything was
+ * measured is what this page had before 2026-09-08.
+ */
+export function ingressLead(
+  rows: CertRow[],
+  storeReadable: boolean | undefined,
+  ddnsAgeSeconds: number | null,
+): IngressReading {
+  if (storeReadable === undefined) {
+    return {
+      text: "the certificates are not measured",
+      tone: "off",
+      live: false,
+      sub: "prometheus returned no home_server_ingress_store_readable - the collector's ingress source has not reported",
+    };
+  }
+  if (!storeReadable) {
+    return {
+      text: "no certificate store",
+      tone: "fail",
+      live: true,
+      sub: "Caddy's data volume is not a directory the collector can walk, so nothing here is known",
+    };
+  }
+
+  const expired = rows.filter((r) => r.tone === "fail").length;
+  const late = rows.filter((r) => r.overdue).length;
+  const soon = rows.filter((r) => r.tone === "warn" && !r.overdue).length;
+  // The DuckDNS half is one number and belongs in the sub-line: it is the same
+  // chain, and a second headline would make the band answer two questions.
+  const ddns =
+    ddnsAgeSeconds === null
+      ? "the DuckDNS updater is not measured"
+      : `DuckDNS updated ${Math.floor(ddnsAgeSeconds / 60)}m ago`;
+
+  if (expired) {
+    return { text: `${expired} expired`, tone: "fail", live: true, sub: ddns };
+  }
+  if (late) {
+    return {
+      text: `${late} renewal${late === 1 ? "" : "s"} overdue`,
+      tone: "warn",
+      live: true,
+      sub: `Caddy is past the time it chose and the certificate has not moved - ${ddns}`,
+    };
+  }
+  if (soon) {
+    return {
+      text: `${soon} inside three weeks`,
+      tone: "warn",
+      live: true,
+      sub: ddns,
+    };
+  }
+  if (!rows.length) {
+    // THE DUCKDNS READING SURVIVES AN EMPTY STORE. This sub-line is the only
+    // place on the page that number appears, so letting the certificate branch
+    // own the whole sentence would make a readable-but-empty store hide a
+    // wedged updater - two independent halves of one chain, and the quieter
+    // one silently dropped.
+    return {
+      text: "no certificates issued",
+      tone: "off",
+      live: false,
+      sub: `the store is readable and empty - ingress.cert_coverage is what says whether that is wrong; ${ddns}`,
+    };
+  }
+  const soonest = rows.reduce(
+    (acc, r) => (r.days !== null && (acc === null || r.days < acc) ? r.days : acc),
+    null as number | null,
+  );
+  return {
+    text: `${rows.length} certificates, soonest ${soonest ?? "?"}d`,
+    tone: "ok",
+    live: true,
+    sub: ddns,
+  };
 }

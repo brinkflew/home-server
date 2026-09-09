@@ -62,7 +62,7 @@ groups:
         # started carrying forward across a failing source (which is what makes
         # a degraded collector visible at all - see collect-metrics.py's
         # four-state table) this rule would have paged `critical` for one broken
-        # source of twenty-two, over a description saying every home_server_*
+        # source of the twenty-odd, over a description saying every home_server_*
         # series is frozen. They are not: the file is still being rewritten
         # every 30 seconds. MetricsCollectorDegraded below is that case.
         #
@@ -406,6 +406,153 @@ groups:
             encoder_busy, phase_in_flight and ci_in_flight are the ones that
             recur. deploy.image_age says how far behind this has left the host.
 
+
+      # -----------------------------------------------------------------------
+      # The ingress chain. SIX TARGETED RULES AND NOT A SECTION MATCHER, which
+      # was the obvious economy and is the one OsImageLagging already refuses
+      # twenty lines up: these five checks have five different remedies - a
+      # dead Gandi PAT, a missing CNAME, a wedged updater - and an alert whose
+      # annotation names the wrong one costs more than the duplicated threshold
+      # it saves. Every ingress.* check is WARN by construction, because
+      # bin/reboot-host.sh refuses to act on a host this battery calls
+      # unhealthy and a certificate three weeks out must not block an OS
+      # security update; so without these rules the whole section would page
+      # nobody, which docs/observability.md calls the silent half of grading
+      # something WARN.
+      # -----------------------------------------------------------------------
+      - alert: TlsRenewalOverdue
+        # THE ONE THAT BUYS THE MONTH. Caddy chooses a renewal time per
+        # certificate out of Let's Encrypt's ARI window - about thirty days
+        # before expiry - and this fires when that time has passed and the
+        # certificate on disk has not moved. Everything else here reports the
+        # same failure later: TlsCertExpiringSoon sees it three weeks on, and a
+        # browser sees it at day zero, on all fifteen hostnames at once.
+        #
+        # 6h because the check is hourly and a renewal is not instantaneous:
+        # Caddy retries, and firing between its attempt and its success would
+        # page about the system working.
+        expr: home_server_check_status{id="ingress.renewal_due"} == 2
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Caddy is past the renewal time it chose and the certificate has not moved"
+          description: >-
+            The DNS-01 renewal is failing about thirty days before anything
+            goes dark. `journalctl --user -u caddy` carries the ACME error;
+            GANDI_BEARER_TOKEN is the credential it needs and a Gandi PAT can
+            expire. Counts are in status.json under facts as
+            ingress_renewal_overdue and ingress_certs_present, and
+            home_server_ingress_certificate_renewal_overdue names the hosts.
+            jq -r '.checks[]|select(.id=="{{ $labels.id }}")'
+            /var/lib/home-server/status.json
+
+      - alert: TlsCertExpiringSoon
+        # NOT A WIDER TlsRenewalOverdue. That rule reads Caddy's own intent and
+        # is silent when the metadata is unreadable; this one reads the
+        # certificate itself, so it is the backstop for exactly that case. It
+        # is deliberately late - twenty-one days is nine past Caddy's renewal
+        # point - because anything earlier would fire every quarter on the
+        # ordinary window in which a healthy certificate is being renewed.
+        expr: home_server_check_status{id="ingress.cert_expiry"} == 2
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: "A certificate is inside three weeks and past Caddy's renewal point"
+          description: >-
+            Ten of the fifteen expire on one day, so this is not one hostname -
+            it is every public name within hours of each other. Read
+            ingress.renewal_due first: if it is silent the renewal metadata is
+            unreadable rather than the renewal being late. Days remaining are
+            in status.json under facts as ingress_cert_expiry_days.
+            jq -r '.checks[]|select(.id=="{{ $labels.id }}")'
+            /var/lib/home-server/status.json
+
+      - alert: TlsCertExpiringCritical
+        # THE ONLY CRITICAL HERE, AND IT READS THE FACT RATHER THAN THE CHECK.
+        # The check cannot escalate on its own: a FAIL would block the OS
+        # security reboot, which is the argument the whole section is built on.
+        # So the severity lives here, where it costs nothing - and it keys on
+        # the number rather than the verdict because a verdict has no room left
+        # to say "seven days" once it has said "twenty-one".
+        #
+        # 1h rather than 6h: at this point the remedy window is closing and
+        # another six hours of confirmation is six hours of the margin.
+        expr: home_server_ingress_cert_expiry_days < 7
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "A certificate expires within a week and the renewal has not run"
+          description: >-
+            Every public hostname fails its TLS handshake when this reaches
+            zero, and nothing about the containers will look wrong - Caddy
+            serves an expiring certificate perfectly until the second it
+            expires. Fix the ACME path (`journalctl --user -u caddy`,
+            GANDI_BEARER_TOKEN) or issue by hand; `podman exec caddy caddy
+            reload --config /etc/caddy/Caddyfile` retries issuance without
+            downtime.
+
+      - alert: TlsCertMissing
+        # A site block whose certificate never issued. It is separate from the
+        # two above because the remedy is not the ACME path at all: the usual
+        # cause is a hostname added to the Caddyfile whose CNAME was never
+        # created, so DNS-01 had nothing to validate against.
+        expr: home_server_check_status{id="ingress.cert_coverage"} == 2
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A Caddyfile site block has no certificate"
+          description: >-
+            That hostname fails the TLS handshake outright rather than
+            degrading. Either its CNAME to the DuckDNS record is missing, so
+            DNS-01 could not validate, or the issuance failed - `journalctl
+            --user -u caddy` names which. Counts are in status.json under facts
+            as ingress_sites_expected and ingress_certs_present.
+            jq -r '.checks[]|select(.id=="{{ $labels.id }}")'
+            /var/lib/home-server/status.json
+
+      - alert: DdnsUpdateStale
+        # duckdns serves no HTTP, so it never reports health and no container
+        # signal covers it - the same blind spot unpackerr has, except that
+        # every public hostname is a CNAME to the record this updates. A bad
+        # token is answered with DuckDNS's own web page rather than an error,
+        # which is why the check keys on the newest SUCCESS and this rule keys
+        # on the check.
+        expr: home_server_check_status{id="ingress.ddns_fresh"} == 2
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DuckDNS has not accepted an update in far longer than its cycle"
+          description: >-
+            Nothing breaks until the WAN address changes, and then every public
+            hostname points at somebody else - while the LAN keeps working, so
+            it is invisible from inside the house. Check DDNS_TOKEN and
+            `journalctl --user -u duckdns`. The age is in status.json under
+            facts as ingress_ddns_age_s.
+            jq -r '.checks[]|select(.id=="{{ $labels.id }}")'
+            /var/lib/home-server/status.json
+
+      - alert: PublicDnsBroken
+        # The registrar half, which is the one thing here this host does not
+        # control. It is a separate rule because the remedy is at Gandi and
+        # nothing on the server will fix it.
+        expr: home_server_check_status{id="ingress.public_dns"} == 2
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A public hostname no longer follows the DuckDNS record"
+          description: >-
+            The CNAME at the registrar is missing or points elsewhere, so that
+            name is unreachable from outside however healthy this host is.
+            *.avanserv.com belongs to a different machine, so each name needs
+            its own CNAME - see docs/networking.md.
+            jq -r '.checks[]|select(.id=="{{ $labels.id }}")'
+            /var/lib/home-server/status.json
   # ===========================================================================
   # Units and containers
   # ===========================================================================
