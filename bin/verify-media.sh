@@ -44,6 +44,24 @@
 #   bin/verify-media.sh --library movies   one type only
 #   bin/verify-media.sh --full <file>      every keyframe, not three windows
 #   bin/verify-media.sh --min-gap 6 ...    the segment length to check against
+#   bin/verify-media.sh --marker <path>    write a machine-readable record
+#   bin/verify-media.sh --gate             exit 1 if somebody is watching
+#
+# --marker EXISTS BECAUSE THIS IS ON A TIMER NOW, and a timer needs a durable
+# record of its last success rather than a unit that exits 0. That is CLAUDE.md's
+# rule in general terms, and here it has a second job: THE EXIT CODE OF THIS
+# SCRIPT IS OVERLOADED. `exit 1` is both "one or more files will drift" and
+# "die() - there is no podman, or no jellyfin container, or DOCKER_VOLUME_MEDIA
+# is unreadable", which are opposite findings. A reader with only the exit code
+# cannot tell "the library is bad" from "the check could not run", and reading
+# green when the check never ran is the failure mode most of
+# docs/known-state.md is about.
+#
+# So the marker carries media_error, which is set on the die() path and empty on
+# every other, and media.keyframe_drift in bin/verify-host.sh grades the two
+# separately. The exit codes are deliberately UNCHANGED: this script has hand
+# callers and a timer, and moving the codes under the hand callers to help the
+# timer would be paying the wrong party.
 # ==============================================================================
 
 set -uo pipefail
@@ -55,6 +73,8 @@ FULL=""
 SWEEP=""
 SWEEP_TYPE=""
 LIMIT=0
+MARKER=""
+GATE=""
 
 usage() { sed -n '2,/^# ===/p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
@@ -68,6 +88,9 @@ while [ $# -gt 0 ]; do
 		--samples=*) SAMPLES="${1#*=}"; shift ;;
 		--limit)     LIMIT="${2:-}"; shift 2 ;;
 		--limit=*)   LIMIT="${1#*=}"; shift ;;
+		--gate)      GATE=1; shift ;;
+		--marker)    MARKER="${2:-}"; shift 2 ;;
+		--marker=*)  MARKER="${1#*=}"; shift ;;
 		--full)      FULL=1; shift ;;
 		--library)   SWEEP=1; shift
 		             case "${1:-}" in -*|'') ;; *) SWEEP_TYPE="$1"; shift ;; esac ;;
@@ -78,6 +101,44 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
+# ------------------------------------------------------------------------------
+# --gate: is anybody watching?
+# ------------------------------------------------------------------------------
+# THE SPINDLE IS THE REASON, NOT THE CPU. /mnt/media is one 7200rpm disk whose
+# throughput FALLS with concurrency - two readers cost 45% of total, and the
+# penalty is head travel - so a sweep and a stream are the worst pair of jobs
+# this host can run at once. Nice and IOWeight on the unit reduce the priority
+# of the reads; they cannot stop the head moving.
+#
+# EXIT 1 MEANS SKIP, which inverts bin/reboot-when-staged.sh's refuse() and
+# matches bin/update-when-idle.sh exactly, for the same reason: this is an
+# `ExecCondition=`, and systemd reads a non-zero exit there as "skip quietly"
+# and leaves the unit NOT failed. An `ExecStartPre=` would make an ordinary
+# deferral look like a fault.
+#
+# UNKNOWN PROCEEDS, which is the opposite of the reboot gate and the same as the
+# nightly container update. The asymmetry is priced by what the interruption
+# costs: a reboot cuts a stream dead, and this competes for disk with one. Being
+# unable to ask whether anyone is watching is not a reason to stop verifying the
+# library for a week.
+#
+# AND A DEFERRAL IS WHY media.verify_run GRADES THE MARKER RATHER THAN THE UNIT.
+# A skipped run CLEARS ExecMainExitTimestamp rather than leaving it stale, so
+# check_timer_run would report "has never run" and FAIL from the first
+# deferral - on a host that swept the library perfectly seven days earlier.
+# bin/verify-host.sh paid for that lesson on update.podman_run.
+if [ -n "$GATE" ]; then
+	watching=$("$(dirname "${BASH_SOURCE[0]}")/jellyfin-watching.sh" 2>/dev/null) || watching=""
+	case "${watching:-}" in
+		''|*[!0-9]*)
+			echo "verify-media: cannot tell whether anyone is watching - proceeding"
+			exit 0 ;;
+		0)  exit 0 ;;
+		*)  echo "verify-media: $watching session(s) in flight - deferring the sweep"
+		    exit 1 ;;
+	esac
+fi
+
 fails=0
 warns=0
 checked=0
@@ -85,7 +146,52 @@ say()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 ok()   { printf '  \033[32mPASS\033[0m  %s\n' "$*"; }
 warn() { printf '  \033[33mWARN\033[0m  %s\n' "$*"; warns=$((warns + 1)); }
 bad()  { printf '  \033[31mFAIL\033[0m  %s\n' "$*"; fails=$((fails + 1)); }
-die()  { printf '\033[31mverify-media: %s\033[0m\n' "$*" >&2; exit 1; }
+
+# ------------------------------------------------------------------------------
+# The durable record, and the one thing the exit code cannot say
+# ------------------------------------------------------------------------------
+# ONE WRITER, ONE FILE, NO CARRY-FORWARD. The shape bin/ci-artifacts-sweep.sh
+# uses, and deliberately not a key in the shared backup-state, which five
+# programs merge into and where a too-narrow `grep -vE` once nearly destroyed
+# another job's marker.
+#
+# THE NAMES ARE CAPPED AT TEN AND THAT IS NOT COSMETIC. media_files_bad carries
+# the count and this carries enough to start with; a sweep that found four
+# hundred drifting files would otherwise put four hundred paths into
+# status.json, which is read whole by the dashboard and by every consumer of
+# --json. A cap on what a check can emit is the same rule the collector applies
+# to labels.
+#
+# SPACES, NOT NEWLINES, because this is a key=value file read with `sed -n
+# 's/^k=//p'` and a value spanning lines would be silently truncated to its
+# first one.
+bad_names=""
+write_marker() {  # <error-or-empty>
+	[ -n "$MARKER" ] || return 0
+	mkdir -p "$(dirname "$MARKER")" 2>/dev/null
+	{
+		printf 'media_verified_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+		printf 'media_files_checked=%s\n' "$checked"
+		printf 'media_files_bad=%s\n' "$fails"
+		printf 'media_files_skipped=%s\n' "$warns"
+		printf 'media_min_gap=%s\n' "$MIN_GAP"
+		printf 'media_scope=%s\n' "${SWEEP_TYPE:-${SWEEP:+all}}"
+		printf 'media_bad_names=%s\n' "$(printf '%s' "$bad_names" | tr '\n' ' ' | cut -c1-400)"
+		printf 'media_error=%s\n' "${1:-}"
+	} > "$MARKER.tmp" 2>/dev/null && mv "$MARKER.tmp" "$MARKER"
+}
+
+# die() WRITES THE MARKER FIRST, and that is the whole point of having one. Every
+# path through here exits 1 - and so does a run that completed and found drift.
+# A reader with only the exit code cannot separate "the library is bad" from
+# "the check could not run at all", and the second one reading as the first is
+# how a check that has silently stopped working looks exactly like a check that
+# is working and finding nothing.
+die()  {
+	write_marker "$*"
+	printf '\033[31mverify-media: %s\033[0m\n' "$*" >&2
+	exit 1
+}
 
 case "$MIN_GAP" in ''|*[!0-9.]*) die "--min-gap takes a number of seconds, not '$MIN_GAP'" ;; esac
 case "$WINDOW"  in ''|*[!0-9]*)  die "--window takes whole seconds, not '$WINDOW'" ;; esac
@@ -197,6 +303,9 @@ check_file() {
 	local detail="min ${min}s / mean ${mean}s / max ${max}s over $n intervals"
 
 	if [ "$short" -gt 0 ]; then
+		# Ten, matching write_marker's own cap - accumulating four hundred and
+		# truncating at the end would build the whole string first.
+		[ "$fails" -lt 10 ] && bad_names="$bad_names $name"
 		bad "$name: $short of $n keyframe intervals below ${MIN_GAP}s - $detail
           Jellyfin will merge segments for this file and browser playback will drift."
 	else
@@ -226,6 +335,7 @@ else
 fi
 
 printf '\n'
+write_marker ""
 if [ "$fails" -gt 0 ]; then
 	printf '\033[31m%d of %d file(s) will drift in a browser.\033[0m ' "$fails" "$checked"
 	printf 'Re-transcode them, or watch those in a native client, which direct-plays.\n'

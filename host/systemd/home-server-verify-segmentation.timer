@@ -1,0 +1,44 @@
+# ==============================================================================
+# Weekly, on a different morning from every other long job
+# ------------------------------------------------------------------------------
+# WEEKLY BECAUSE THE THING IT GRADES CHANGES WHEN SOMEBODY EDITS A UNIT FILE,
+# not on its own. A network cannot even be modified in place - changing an
+# option means stopping the stack, `podman network rm` and starting again - so
+# the realistic rate of change here is a deploy, and a deploy is a thing a
+# person does. Daily would be six more containers a day to catch a drift that
+# arrives with a `git pull`; the hourly net.segment_isolation read already
+# covers the configuration half within the hour.
+#
+# TUESDAY 05:20 SO THAT THE THREE WEEKLY JOBS ARE ON THREE DIFFERENT MORNINGS.
+# The restore verification is Wednesday 05:30 and the library sweep Thursday
+# 05:40; putting this on Tuesday means no two of them can ever overlap, and a
+# person reading the journal after an incident is never disentangling two long
+# jobs that ran together.
+#
+# NOT SUNDAY, which is the one hard constraint rather than a preference. The
+# unattended reboot window is hourly from 05:00 to 09:00 that morning and it is
+# already a chain of refusals; six containers starting inside it is one more
+# thing to rule out on the one morning of the week that cannot be repeated.
+#
+# Persistent=true SO A HOST THAT WAS OFF DOES NOT SILENTLY SKIP A FORTNIGHT, and
+# because the deploy that would change this is exactly the kind of thing that
+# happens around a reboot.
+#
+# AND THEREFORE A ONE-TIME START IS REQUIRED, in host/systemd/README.md beside
+# the enable line. `systemctl --user enable --now` writes the stamp immediately,
+# so there is no missed elapse and the unit does NOT fire - the first probe
+# would wait a week and net.containment would report "has never been probed"
+# throughout. This repository has been caught by that trap in six places.
+# ==============================================================================
+
+[Unit]
+Description=Probe the forbidden edges between the stack's network segments, weekly
+
+[Timer]
+OnCalendar=Tue *-*-* 05:20:00
+Persistent=true
+RandomizedDelaySec=3min
+AccuracySec=5min
+
+[Install]
+WantedBy=timers.target

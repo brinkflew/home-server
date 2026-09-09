@@ -306,7 +306,7 @@ groups:
   - name: battery
     rules:
       - alert: CheckFailing
-        # ONE RULE COVERS ALL 92 CHECKS AND EVERY FUTURE ONE, because a new
+        # ONE RULE COVERS EVERY CHECK AND EVERY FUTURE ONE, because a new
         # check joins home_server_check_status automatically. The id label is
         # stable by charter - bin/verify-host.sh guarantees it and lint-repo.sh
         # asserts uniqueness - while the prose is explicitly not, which is why
@@ -406,11 +406,50 @@ groups:
             encoder_busy, phase_in_flight and ci_in_flight are the ones that
             recur. deploy.image_age says how far behind this has left the host.
 
+      - alert: BootReclaimRefused
+        # THE CAUSE OF THE RULE ABOVE, AND UNTIL 2026-09-09 IT HAD NO VOICE AT
+        # ALL. bin/reclaim-boot-slot.sh is the "after" the unattended reboot
+        # cannot take, and nineteen of its paths are refusals that wrote
+        # nothing - so deploy.boot_reclaim read the absence as "has not had to
+        # do anything yet" while the reclaim was dying at its own lock and the
+        # 2026-09-06 window was being spent five times over for want of the
+        # slot it would have freed.
+        #
+        # A SEPARATE ALERT FROM RebootWindowLost RATHER THAN A LABEL ON IT,
+        # because they are two different remedies a week apart. That one says
+        # "a window was lost and here is the tag"; this one fires on the
+        # Tuesday, while there is still time to clear the condition before the
+        # Sunday it would otherwise cost.
+        #
+        # `deploy` HAS NO SECTION-WIDE WARN MATCHER and that is deliberate -
+        # the section carries FAILs CheckFailing already delivers, and a == 2
+        # catch-all would newly page for deploy.pinned and deploy.image_tag.
+        # So this is targeted, like OsImageStale and OsImageLagging beside it.
+        #
+        # 2h ON TOP OF THE CHECK'S OWN 6h. The check notes under six hours and
+        # warns past it; the timer runs every thirty minutes, so by the time
+        # this fires the reclaim has refused for the same reason sixteen times
+        # running. Nothing transient survives that.
+        expr: home_server_check_status{id="deploy.boot_reclaim"} == 2
+        for: 2h
+        labels:
+          severity: warning
+        annotations:
+          summary: "The /boot reclaim has been refusing for hours and /boot is still short"
+          description: >-
+            /boot holds two 145.3 MiB slots and an update needs a third
+            transiently, so an unreclaimed slot is what makes the Sunday reboot
+            window refuse. The tag naming which gate refused is in status.json
+            under facts as boot_reclaim_refused_tag; lock_unavailable,
+            space_unmodelled, pending_deployment and greenboot_not_green are
+            the ones a person has to act on. It clears itself the moment /boot
+            has room. journalctl --user -u home-server-boot-reclaim.
+
 
       # -----------------------------------------------------------------------
-      # The ingress chain. SIX TARGETED RULES AND NOT A SECTION MATCHER, which
+      # The ingress chain. SEVEN TARGETED RULES AND NOT A SECTION MATCHER, which
       # was the obvious economy and is the one OsImageLagging already refuses
-      # twenty lines up: these five checks have five different remedies - a
+      # twenty lines up: these six checks have six different remedies - a
       # dead Gandi PAT, a missing CNAME, a wedged updater - and an alert whose
       # annotation names the wrong one costs more than the duplicated threshold
       # it saves. Every ingress.* check is WARN by construction, because
@@ -444,6 +483,44 @@ groups:
             expire. Counts are in status.json under facts as
             ingress_renewal_overdue and ingress_certs_present, and
             home_server_ingress_certificate_renewal_overdue names the hosts.
+            jq -r '.checks[]|select(.id=="{{ $labels.id }}")'
+            /var/lib/home-server/status.json
+
+      - alert: TlsDnsCredentialBroken
+        # THE ONE THAT ARRIVES BEFORE THE FAILURE RATHER THAN AFTER IT.
+        # TlsRenewalOverdue fires when a renewal has already failed, which is
+        # thirty days of warning and is still detection after the fact. This
+        # fires when the credential that renewal will need stops being
+        # accepted - and on this host that had never been exercised at all:
+        # every certificate on disk was its first issuance, so the DNS-01 write
+        # had not happened once between 2026-08-11 and the first renewal Caddy
+        # scheduled for 2026-10-10.
+        #
+        # A WRITE PROBE, BECAUSE A READ PROVES THE WRONG HALF. A Gandi PAT
+        # carries scopes and DNS-01 needs write; a token that can list the zone
+        # and not change it authenticates perfectly and renews nothing.
+        # bin/probe-credentials.sh creates a TXT record at a name nothing
+        # resolves and removes it again, daily.
+        #
+        # 12h RATHER THAN THE 6h EVERY OTHER RULE HERE USES. The probe is
+        # DAILY, so the check grades a marker that only moves once a day: a 6h
+        # window would fire on the first hourly battery after a failure and
+        # then again on every one until the next probe, which is the same alert
+        # twenty-three times. Twelve means one failed probe has to still be the
+        # newest answer half a day later.
+        expr: home_server_check_status{id="ingress.dns_credential"} == 2
+        for: 12h
+        labels:
+          severity: warning
+        annotations:
+          summary: "The DNS-01 credential every certificate renews through is not working"
+          description: >-
+            Fifteen public hostnames renew over DNS-01 against Gandi and ten of
+            them expire within hours of each other, so this is every public
+            name going dark together rather than one degrading. Replace the PAT
+            with `sops secrets/env.sops.env`, then ./bin/render-env.sh and
+            restart caddy. The probe's own sentence is in status.json;
+            journalctl --user -u home-server-credential-probe carries the run.
             jq -r '.checks[]|select(.id=="{{ $labels.id }}")'
             /var/lib/home-server/status.json
 
@@ -752,6 +829,80 @@ groups:
             `jq -r '.checks[]|select(.id=="containers.probe_binaries")'
             /var/lib/home-server/status.json`. Fix it before 00:00.
 
+      - alert: SegmentIsolationLost
+        # CRITICAL, AND THE SAME ARGUMENT AgentContainmentLost MAKES ONE GROUP
+        # DOWN. isolate=true is the only thing keeping FlareSolverr off net-arr,
+        # and isolation is NOT free under podman: netavark does not inherit
+        # Docker's inter-bridge isolation, so these ten networks created plain
+        # are fully routable to one another. That was measured on this host
+        # before the option was adopted - a container on net-solver reached
+        # Sonarr on net-arr by IP, and so did net-media, net-egress and
+        # net-transcode. The topology looked segmented and was flat.
+        #
+        # THE net SECTION HAS NO WARN MATCHER AND NO RULE OF ANY KIND, so before
+        # this the check could only have paged through CheckFailing at == 3 -
+        # and it never emits a FAIL, because a FAIL in that battery blocks an OS
+        # security update through bin/reboot-host.sh.
+        #
+        # 30m BECAUSE THE STACK IS RESTARTED DELIBERATELY. Changing a network
+        # means stopping every unit attached to it, `podman network rm` and
+        # starting again, and the segment is genuinely absent in between - which
+        # the check reports as a note, not a warn. Half an hour is comfortably
+        # past any hand deploy and nowhere near a week.
+        expr: home_server_check_status{id="net.segment_isolation"} == 2
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "A stack network segment is not isolated"
+          description: >-
+            Either a segment is running without isolate=true - so its bridge is
+            routable to every other one - or a unit no longer declares it, which
+            means a rebuild from the repository would create it flat. The check
+            message names which segments and which of the two it is. A network
+            cannot be modified in place: this needs the stack stopped, `podman
+            network rm`, then daemon-reload and start. See docs/networking.md.
+
+      - alert: SegmentContainmentLost
+        # THE PACKET, NOT THE OPTION. The rule above reads configuration; this
+        # reads what bin/verify-segmentation.sh found when it actually dialled a
+        # forbidden edge from a throwaway container on the source segment,
+        # weekly. Both are needed because they fail differently - the option can
+        # be set on a bridge that is not enforcing it, and a unit can be correct
+        # about a network that no longer exists.
+        #
+        # A REFUSED CONNECTION COUNTS AS OPEN HERE, which is the distinction the
+        # probe is built around: `timeout` returns 124 for a dropped packet, and
+        # a refusal returns fast because the packet ARRIVED and only the port
+        # was shut. That is not a blocked edge - it opens the moment anything
+        # listens on that port.
+        #
+        # IT ALSO FIRES WHEN THE PROBE COULD NOT PROVE ITSELF, and that is
+        # deliberate rather than noisy. Every way that script can fail makes
+        # every forbidden edge read "dropped", so it probes one edge that MUST
+        # connect and discards the run when that one does not. A silent
+        # instrument reporting perfect isolation is the failure this repository
+        # has already recorded once.
+        #
+        # 30m ON A WEEKLY INPUT, unlike the 12h the other marker-graded rules
+        # use. Those grade a degradation; this grades a boundary, and there is
+        # no version of "wait half a day" that is right for an edge which should
+        # never have been open.
+        expr: home_server_check_status{id="net.containment"} == 2
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "A forbidden edge between network segments is reachable"
+          description: >-
+            The check message names the edges. FlareSolverr reaching the *arr
+            apps is the one this exists for - it runs headless Chrome against
+            attacker-controlled pages - and the dashboard reaching Prometheus
+            directly steps around the /api/v1/admin/* refusal that guards
+            delete_series. Verify by hand from a throwaway container by IP,
+            never by name: docs/networking.md carries the command.
+            journalctl --user -u home-server-verify-segmentation.
+
   # ===========================================================================
   # Backups
   # ---------------------------------------------------------------------------
@@ -925,6 +1076,44 @@ groups:
             exists precisely because nothing else shows it. Read the Prowlarr
             log before assuming a local cause; measured on 2026-08-15 the
             causes were a dead mirror, duplicate entries and two sites down.
+
+      - alert: MediaKeyframeDrift
+        # THE ONE FAILURE ON THIS HOST A PERSON REPORTS BEFORE A CHECK DOES, and
+        # until 2026-09-09 nothing on a timer looked for it: bin/verify-media.sh
+        # existed for weeks and no unit referenced it. A file whose keyframes
+        # fall closer together than Jellyfin's 6s HLS segment makes ffmpeg merge
+        # GOPs, so segment N carries different media than playlist entry N and
+        # the error accumulates - +22.397s after twenty-five segments, measured.
+        # What somebody watching sees is the picture jumping and subtitles
+        # drifting, which names neither the cause nor the file.
+        #
+        # A NEW SECTION HAS NO MATCHER, WHICH IS WHY THIS IS HERE AT ALL. Only
+        # capacity, agents and ci carry a section-wide == 2, so a media.* WARN
+        # would page nobody - the silent half of grading something WARN that
+        # docs/observability.md names. A FAIL would be carried by CheckFailing,
+        # and this check never emits one: a drifting file is not a reason to
+        # block an OS security update, which is what a FAIL in this battery does
+        # through bin/reboot-host.sh.
+        #
+        # 12h BECAUSE THE INPUT IS WEEKLY. The check grades a marker a sweep
+        # writes once every seven days, so a shorter window would just repeat
+        # the same alert every hour until the next Thursday. Half a day is long
+        # enough that a re-transcode started on the morning it fires can settle
+        # it before it pages twice.
+        expr: home_server_check_status{id="media.keyframe_drift"} == 2
+        for: 12h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Library files will drift during browser playback"
+          description: >-
+            The check message names the files, up to ten of them, and
+            home_server_media_files_bad carries the count. Re-transcode them, or
+            watch them in a native client, which direct-plays and is unaffected.
+            ./bin/verify-media.sh --full <file> shows the whole keyframe grid.
+            This same check also fires when the sweep could NOT run - the
+            script's exit code cannot separate the two, so read media_error in
+            the message before assuming the library is at fault.
 
       - alert: FilesystemFillingUp
         expr: >-

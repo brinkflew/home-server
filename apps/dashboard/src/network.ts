@@ -800,6 +800,20 @@ export const FINDING_IDS = [
   "ingress.cert_coverage",
   "ingress.ddns_fresh",
   "ingress.public_dns",
+  // The DNS-01 credential, added 2026-09-09. Sixth of the ingress chain and the
+  // only one that fires BEFORE the failure rather than after it: the other five
+  // grade certificates that exist, and this grades whether the token that
+  // renews them still works. Every certificate on this host was its first
+  // issuance when it was written, so that path had never once run.
+  "ingress.dns_credential",
+  // The segmentation, added 2026-09-09, and this page had been ASSERTING it in
+  // static text. The drawing said "all isolate=true" and no check read the flag
+  // on a stack segment - agents.runner_isolation and ci.runner_isolation above
+  // read it only on the fleet's own networks. Two ids because they fail
+  // differently: the first reads the option, the second sends a packet at an
+  // edge that is meant to be closed and reports what came back.
+  "net.segment_isolation",
+  "net.containment",
 ];
 
 export interface LeadReading {

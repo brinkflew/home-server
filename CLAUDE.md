@@ -1914,6 +1914,68 @@ signal read green.
 - The two parenthesised SNIPPETS are not site blocks; the fixture that failed first was the fixture,
   writing `Wed  9 Sep` where duckdns writes `Wed Sep  9`.
 
+### Nineteen refusals nothing wrote down, and a check that read their silence as health
+- `reclaim-boot-slot.sh`'s `refuse()` wrote NOTHING and `write_state()` always sets
+  `boot_reclaim_at`, so `deploy.boot_reclaim` read the absent key as "has not had to do anything
+  yet" - and its `boot_reclaim_error` arm sat behind a key only a SUCCESS writes, so it was
+  unreachable.
+- **Measured**: five window refusals on 2026-09-06 for want of a /boot slot, the reclaim dying at
+  its own lock on the 7th, the check `pass` throughout, and 21 days behind a CRITICAL advisory. The
+  lock fix landed after the space was already free, so the repair arm had STILL never run for real.
+- No exclusion list, unlike `reboot-when-staged.sh`: the absence of work is the `note` at the df
+  gate, which never calls `refuse()`. **That gate also CLEARS a refusal** - /boot having room is the
+  statement that whatever it named is not costing a slot - or a transient one stands for weeks.
+- Its own temp name, because six programs write `boot-state` and the reboot window refuses on the
+  Sunday mornings this fires at :04 and :34 through. The FAIL arm stays first and unconditional, or
+  `restage_repeat` masks it.
+- Six hours is twelve consecutive refusals, set by the cadence not the harm; `BootReclaimRefused`
+  needs its own rule because `deploy` has no section matcher, refused by design.
+
+### The credential that renews everything, which nothing had ever asked
+- Two checks ended their own PASS message with "neither of which proves the token still
+  authenticates", correctly - and the third credential had never been exercised AT ALL, because
+  every certificate was its first issuance. First renewal Caddy scheduled: **2026-10-10T01:46:54Z**.
+- **A WRITE, because a read proves the wrong half**: a PAT that can list the zone and not change it
+  authenticates perfectly and renews nothing. At `_acme-challenge-probe`, never `_acme-challenge`,
+  which Caddy owns and where a probe could destroy a challenge mid-issuance.
+- **Daily is the argument and not a reversal.** `agents.publish_configured` rejected a live probe
+  over "~8,760 auths a year"; that objects to the cadence and is right. 365 is a different number,
+  and the battery still makes no external call outside `--routes`.
+- **Only 401 is a finding on the model leg** - a scoped OAuth token has already been measured
+  answering 403 to an endpoint it was not entitled to, and reading that as revoked would warn for
+  ever about a working fleet.
+- `skipped` is a different sentence from `failed`, or the marker loses the one property worth
+  having; and Windmill stores a secret variable ENCRYPTED, so the publish leg says only half of it
+  was proven rather than implying both.
+
+### The drawing asserted the segmentation and the packet was somebody's curiosity
+- Two checks read `isolate` and NEITHER read a stack segment, while the dashboard drew
+  `all isolate=true` as static text. Netavark does not inherit Docker's inter-bridge isolation, so
+  these ten networks created plain are fully routable - measured before the option was adopted.
+- Declared and live are two questions: a network cannot be modified in place, so a unit can say
+  `isolate=true` about a bridge that is not enforcing it. **`isolate` reads EMPTY rather than
+  `false`**, so absent is told from un-isolated by `podman network exists`.
+- The read is hourly and the packet weekly - a container per edge every hour is 52,560 a year for a
+  property that changes when somebody edits a unit file.
+- **The exit code is the finding, not merely its sign**: 124 is a dropped packet, and a refusal
+  returns fast because the packet ARRIVED and only the port was shut, which opens the moment
+  anything listens.
+- **A POSITIVE CONTROL, or the run is discarded** - every way the probe can fail makes every edge
+  read `dropped`. Every probe carries `io.home-server.ephemeral`, or `agents.runner_isolation` fires
+  on it as a stray.
+
+### The store was over budget on day fourteen with nothing yet evicted
+- 42,976 MB against a 40,960 MB budget derived the same morning, at **506 MB a run and 6.07 runs a
+  day** over 85 runs, so `40960 / 506 / 6.07 = 13.3` and `CI_ARTIFACT_KEEP_DAYS` went 30 -> 13.
+- **It had never evicted anything**: the store began 08-27, so the first eviction was still weeks
+  away and it was already over. Thirty days at that rate is ~92 GB on a volume with 88 GB free. The
+  comment asked for "the first real eviction observed", which assumed it would still fit by then.
+- **Better than 99% of a run is one artifact class** - two `e2e-shard-N-nyc` directories of raw
+  Playwright coverage JSON, 325 MB and 212 MB of a 536 MB run against 1 MB each for the rest.
+- That lever is deliberately NOT pulled: it breaks whole-run granularity, on an unverified
+  assumption about what reads raw `nyc`. The arrival rate is not flat either - fifteen a day for the
+  three days to 09-09 - so this warning again is the check working, not the number being wrong.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

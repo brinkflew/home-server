@@ -1,0 +1,59 @@
+# ==============================================================================
+# Send a packet at every edge that is meant to be closed
+# ------------------------------------------------------------------------------
+# THE SEGMENTATION IS THE SECURITY MODEL AND NOTHING PROVED IT ON A SCHEDULE.
+# Ten networks, one per trust boundary, and until 2026-09-09 the only evidence
+# that FlareSolverr still could not reach Sonarr was a person running a
+# throwaway container by hand. net.segment_isolation reads the isolate= option
+# hourly; this is the other half, and it is the half that is evidence rather
+# than configuration.
+#
+# WHY IT IS NOT IN THE HOURLY BATTERY. Six containers an hour is 52,560 a year
+# for a property that changes when somebody edits a unit file - and
+# bin/verify-host.sh already refused an hourly live probe for the agent fleet,
+# in as many words, for the same reason. The option read costs two `podman
+# network inspect` calls and catches the configuration drift; this catches the
+# case where the option is set and the kernel is not doing what it says.
+#
+# THE PROBES CARRY io.home-server.ephemeral. Without it the collector counts
+# them as services: one throwaway `podman run --rm` once made
+# identity_unresolved read 1, inflated two counts, and minted network series
+# under an unbounded label. bin/verify-host.sh's agents.runner_isolation would
+# also see them as strays on a stack segment, which is exactly the finding it
+# exists to raise - so an unlabelled probe here would make that check fire on
+# this one.
+#
+# EXIT 0 EVEN ON AN OPEN EDGE. net.containment grades the marker and
+# SegmentContainmentLost pages critical on it, which is louder than a failed
+# user unit; a red unit would add nothing and would leave `systemctl --user
+# list-units --failed` - the fastest health check on this host - dirty until
+# somebody cleared it by hand.
+#
+# TimeoutStartSec= AT TEN MINUTES against a worst case of about forty seconds:
+# six probes bounded at six seconds each, plus podman's own start time. The
+# ceiling is for a `podman run` that hangs before its own timeout can reach it,
+# because a Type=oneshot blocked forever sits in `activating`, which
+# host.failed_units cannot see - it is neither failed nor a container.
+#
+# NO Before= AND NO Wants= ON ANYTHING, not even on the containers it dials. A
+# Wants= would start the stack in order to ask a question about it, and the
+# script already treats an absent network or container as a SKIP rather than a
+# finding: a stack that is not running has no edges to leave open.
+#
+# Symlinked into ~/.config/systemd/user/ - see host/systemd/README.md.
+# ==============================================================================
+
+[Unit]
+Description=Probe the forbidden edges between the stack's network segments
+Documentation=file:/var/home-server/bin/verify-segmentation.sh
+
+[Service]
+Type=oneshot
+ExecStart=/var/home-server/bin/verify-segmentation.sh
+TimeoutStartSec=10min
+
+Nice=10
+CPUWeight=20
+IOWeight=20
+MemoryHigh=256M
+MemoryMax=384M

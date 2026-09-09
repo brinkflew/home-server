@@ -16,11 +16,27 @@
 # a few hundred bytes. It is backed up by bin/backup-server.sh, and this script
 # must never be the reason it needs to be restored.
 #
-# THIRTY DAYS, AND THE NUMBER IS NOT ARBITRARY. One of their consumers runs when
-# a pull request merges and reads the artifacts of that pull request's LAST CI
-# run, which may be weeks old if the branch sat - so a 7-day sweep would break
-# exactly the slow-moving pull requests and nothing else, which is the worst
-# possible distribution of a failure. Thirty is what they asked for.
+# THIRTEEN DAYS, AND IT IS THE BUDGET THAT PICKED THE NUMBER RATHER THAN A
+# PREFERENCE. One of their consumers runs when a pull request merges and reads
+# the artifacts of that pull request's LAST CI run, which may be weeks old if
+# the branch sat - so a short sweep breaks exactly the slow-moving pull requests
+# and nothing else, which is the worst possible distribution of a failure.
+# Thirty is what they asked for, and thirty does not fit on this filesystem:
+#
+#   40960 MB budget / 506 MB per run = 80.9 runs
+#   80.9 runs / 6.07 runs per day    = 13.3 days
+#
+# Measured 2026-09-09 over the 85 runs in the store, spanning 2026-08-27 to that
+# morning. ci.artifact_store's own comment in bin/verify-host.sh derives the
+# 40960 from what /var can afford and ends by naming this window as the number
+# that has to move; this is that sentence carried out.
+#
+# THE HONEST LIMITATION, BECAUSE IT WILL FIRE AGAIN. 6.07 a day is the mean over
+# fourteen days and the arrival rate is NOT flat - 2026-09-02 to 09-06 saw none
+# at all, and the three days to 09-09 ran at fifteen. At fifteen a day thirteen
+# days is 98 GB and ci.artifact_store warns again, which would be the check
+# working rather than this number being wrong. What changes the shape rather
+# than the threshold is what is IN a run, and that is recorded below.
 #
 # THE SIZING ABOVE USED TO READ "about 2.5 MB per run, against 153 GB free on
 # /var" AND IT WAS NEVER RIGHT. Measured 2026-09-09 over the 75 runs then in the
@@ -34,11 +50,23 @@
 # window NOTHING had been evicted yet and the first eviction was 2026-09-26.
 # A sweep reporting "swept 0 runs" was correct and told nobody anything.
 #
-# THE WINDOW IS DELIBERATELY UNCHANGED HERE. What it costs is now GRADED rather
-# than assumed - ci.artifact_store carries a 40960 MB budget derived from what
-# /var can afford, and capacity.var_commitment adds every ceiling on the volume
-# together once an hour. Lowering KEEP_DAYS is a decision to take with those two
-# numbers in hand and the first real eviction observed, not from this comment.
+# SO THE WINDOW MOVED ON 2026-09-09, ONE CONDITION SHORT OF WHAT THIS COMMENT
+# USED TO ASK FOR. It said to decide "with those two numbers in hand and the
+# first real eviction observed" - and the first eviction was not due until
+# 2026-09-26, because the store began on 08-27. That condition assumed the store
+# would still fit when it arrived. It did not: at day fourteen, with nothing yet
+# evicted, the store was 42976 MB against a 40960 MB budget, and thirty days at
+# the measured rate is about 92 GB on a volume with 88 GB free. Waiting for the
+# eviction meant watching it double first.
+#
+# NINETY-NINE PER CENT OF A RUN IS ONE ARTIFACT CLASS, and this is the deeper
+# lever, deliberately NOT pulled here. Of a 536 MB run measured that day, 325 MB
+# and 212 MB were the two e2e-shard-N-nyc directories - raw per-context
+# Playwright coverage JSON, about 130 files of 4 MB - while -blob and -apicov
+# were 1 MB each. Keeping nyc for a week and the rest for thirty would put the
+# store near 11 GB. It is not done because it would break the whole-run
+# granularity the next paragraph argues for, on an unverified assumption about
+# what in upskald reads raw nyc output. Answer that question first.
 #
 # THE GRANULARITY IS A WHOLE RUN. A run's artifacts are written by several jobs
 # at several times, so sweeping individual files would leave a run half-present -
@@ -58,7 +86,7 @@ set -euo pipefail
 CACHE_ROOT="${DOCKER_VOLUME_CACHE:-/var/home-server/cache}"
 FLEET_ROOT="${GITHUB_RUNNER_ROOT:-$CACHE_ROOT/github-runner}"
 ARTIFACTS="${GITHUB_RUNNER_ARTIFACTS:-$FLEET_ROOT/artifacts}"
-KEEP_DAYS="${CI_ARTIFACT_KEEP_DAYS:-30}"
+KEEP_DAYS="${CI_ARTIFACT_KEEP_DAYS:-13}"
 MARKER="${HOME_SERVER_CI_ARTIFACT_STATE:-${HOME:-/var/home/core}/.cache/home-server/ci-artifacts-state}"
 
 DRY_RUN=0

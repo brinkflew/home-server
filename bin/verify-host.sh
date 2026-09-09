@@ -163,6 +163,34 @@ boot_state="${HOME_SERVER_BOOT_STATE:-/var/lib/home-server/boot-state}"
 CENSUS="${HOME_SERVER_STORAGE_STATE:-$HOME/.cache/home-server/storage-census}"
 census_get() { sed -n "s/^$1=//p" "$CENSUS" 2>/dev/null | tail -1; }
 
+# THE SAME SHAPE FOR bin/probe-credentials.sh, and it is read from TWO sections
+# a couple of thousand lines apart - the ingress family for the Gandi token, the
+# agents family for the model and publish ones. Spelled once here for the reason
+# CENSUS is: a path repeated in two places is a path that drifts in one.
+#
+# NOT A SHARED GRADING HELPER, THOUGH, AND THAT IS DELIBERATE. The obvious
+# economy is one check_credential() taking an id and a key prefix, and it costs
+# two things this repository has already priced. The remedies differ - a refused
+# Gandi token is `sops secrets/env.sops.env` and a new PAT, a refused push key
+# is host/systemd/README.md, a refused model token is a re-run of `claude
+# setup-token` - and the ingress family rejected a shared matcher in as many
+# words for exactly that. And a helper calling `ok "$id"` puts no literal id in
+# this file, so bin/lint-repo.sh's check-id leg stops seeing them; check_backup_age
+# is the one place that trade was worth making and it says so.
+CRED_STATE="${HOME_SERVER_CREDENTIAL_STATE:-$HOME/.cache/home-server/credential-state}"
+cred_get() { sed -n "s/^$1=//p" "$CRED_STATE" 2>/dev/null | tail -1; }
+
+# Hours since a probe leg last ran, or empty if it never has. The legs are
+# independent by construction in that script, so each carries its own stamp and
+# one going quiet does not age the others.
+cred_age_h() {  # <leg>
+	local at e
+	at=$(cred_get "$1_probe_at")
+	[ -n "$at" ] || return 0
+	e=$(date -d "$at" +%s 2>/dev/null) || return 0
+	echo $(( ( $(date +%s) - e ) / 3600 ))
+}
+
 # the timer's period.
 check_timer_run() {  # <id> <label> <period-seconds> <unit> [--user]
 	local id="$1" label="$2" period="$3" unit="$4"
@@ -236,6 +264,143 @@ if ip -4 -o addr show scope global | grep -q '192\.168\.0\.100/24'; then
 	ok net.lan_address "192.168.0.100/24 held"
 else
 	bad net.lan_address "the LAN address moved - the router's port forward now points nowhere"
+fi
+
+# ------------------------------------------------------------------------------
+# The segmentation, which was asserted in prose and graded nowhere
+# ------------------------------------------------------------------------------
+# TWO CHECKS READ isolate= AND NEITHER OF THEM READS A STACK SEGMENT.
+# agents.runner_isolation reads it on net-conduct-*, ci.runner_isolation on
+# net-ci-*, and the ten networks in stacks/common/ - the ones that decide
+# whether FlareSolverr can reach Sonarr - were graded by nothing at all. The
+# dashboard drew "all isolate=true" as STATIC TEXT in the bundle until
+# 2026-09-09, which is an assertion about the host made by a file that never
+# asked it.
+#
+# ISOLATION IS NOT FREE UNDER PODMAN AND THAT IS THE WHOLE POINT. Docker put
+# every bridge in DOCKER-ISOLATION-STAGE-2; netavark does not, so these networks
+# created plain are fully routable to one another - measured, not assumed, on
+# this host before the option was adopted. The topology would look segmented and
+# be flat, and every unit file would read identically either way.
+#
+# DECLARED AND LIVE ARE TWO DIFFERENT QUESTIONS AND BOTH ARE ASKED. A network
+# cannot be modified in place: changing an option means stopping the stack,
+# `podman network rm` and starting again. So a segment whose unit says
+# isolate=true can be running WITHOUT it - created before the line was added, or
+# recreated by hand - and nothing about the unit file would say so. The mirror
+# case matters too: a live network that git does not declare loses the option
+# the next time the host is rebuilt from this repository.
+#
+# EMPTY IS NOT false. `podman network inspect --format '{{index .Options
+# "isolate"}}'` returns an EMPTY STRING for a network created without the
+# option, never the word false - which is why the comparison is against `true`
+# and why only a segment stacks/ declares may be graded at all.
+#
+# stacks/common/*.network IS THE AUTHORITY, not a list here - the same one
+# agents.runner_isolation, containers.units_active and update.policy_count use.
+#
+# A READ, AND THE PROBE IS SOMEWHERE ELSE. "Do the networks still carry the
+# option?" is this, and it costs two `podman network inspect` calls a segment.
+# "Is the isolation enforced by the kernel?" is a packet, and it lives in
+# bin/verify-segmentation.sh on a weekly timer, because a container per
+# forbidden edge every hour is 8,760 containers a year for a property that
+# changes when somebody edits a unit file. The same split agents.runner_isolation
+# already draws, arrived at for the same reason.
+#
+# GUARDED ON --greenboot INLINE, like deploy.boot_reclaim_run. That run is as
+# ROOT at boot, and rootless podman's networks belong to `core`: asking there
+# would find none of them and report every segment missing, on the one code path
+# whose exit status decides an OS rollback.
+if [ -z "$GREENBOOT" ]; then
+	seg_undeclared="" seg_unisolated="" seg_absent="" seg_n=0
+	for seg_f in "$repo"/stacks/common/*.network; do
+		[ -e "$seg_f" ] || continue
+		seg_name=$(basename "$seg_f" .network)
+		seg_n=$(( seg_n + 1 ))
+		if ! grep -q '^Options=isolate=true' "$seg_f"; then
+			seg_undeclared="$seg_undeclared $seg_name"
+			continue
+		fi
+		seg_live=$(podman network inspect "$seg_name" --format '{{index .Options "isolate"}}' 2>/dev/null)
+		case "$seg_live" in
+			true) ;;
+			"")   # Absent and un-isolated are told apart by whether podman knows
+			      # the network at all - an unstarted stack is not a breach.
+			      if podman network exists "$seg_name" 2>/dev/null; then
+				      seg_unisolated="$seg_unisolated $seg_name"
+			      else
+				      seg_absent="$seg_absent $seg_name"
+			      fi ;;
+			*)    seg_unisolated="$seg_unisolated $seg_name" ;;
+		esac
+	done
+	fact net_segments_declared "$seg_n" num
+	fact net_segments_unisolated "$(printf '%s' "$seg_unisolated" | wc -w)" num
+	if [ "$seg_n" -eq 0 ]; then
+		note net.segment_isolation "no .network units under $repo/stacks/common - the segmentation cannot be read from this checkout"
+	elif [ -n "$seg_unisolated" ]; then
+		warn net.segment_isolation "stack segment(s) running WITHOUT isolate=true:$seg_unisolated - their units declare it, so these bridges are live and fully routable to every other one. Netavark does not inherit Docker's inter-bridge isolation, and a network cannot be modified in place: this needs the stack stopped, 'podman network rm', then daemon-reload and start"
+	elif [ -n "$seg_undeclared" ]; then
+		warn net.segment_isolation "stack segment(s) whose unit does NOT declare Options=isolate=true:$seg_undeclared - whatever they are doing now, a rebuild from this repository would create them flat"
+	elif [ -n "$seg_absent" ]; then
+		note net.segment_isolation "$seg_n segment(s) declare isolate=true and$seg_absent do not exist yet - the stack has not been started, so there is nothing to grade"
+	else
+		ok net.segment_isolation "all $seg_n stack segment(s) declare isolate=true and carry it live"
+	fi
+
+	# --------------------------------------------------------------------------
+	# And whether the kernel actually drops the packet
+	# --------------------------------------------------------------------------
+	# THE OTHER HALF OF THE QUESTION ABOVE, AND THE ONLY ONE THAT IS EVIDENCE.
+	# `isolate=true` being set is a statement about configuration; a forbidden
+	# edge being dropped is a statement about the host. The second used to be
+	# established solely by somebody running `podman run --rm --network
+	# net-solver busybox` by hand, so between one person's curiosity and the
+	# next the segmentation was an assertion.
+	#
+	# WEEKLY AND NOT HOURLY, WHICH IS WHY THIS GRADES A MARKER. A container per
+	# forbidden edge every hour is 8,760 of them a year for a property that
+	# changes when somebody edits a unit file - and the isolation option itself
+	# is already read hourly one check up. bin/verify-segmentation.sh does the
+	# packets; this reads what it left behind.
+	#
+	# `unproven` IS NOT `ok`, AND THAT IS THE WHOLE DESIGN OF THAT SCRIPT. Every
+	# way the probe can fail - a missing image, a podman that will not start a
+	# container, a renamed network - makes every forbidden edge read "dropped",
+	# which is the answer it hopes for. So it probes one edge that MUST connect,
+	# and discards the run when that one does not. A check reading "0 open
+	# edges" off a run that proved nothing would be the instrument-with-no-
+	# control failure this repository has already recorded once.
+	seg_state="${HOME_SERVER_SEGMENT_STATE:-${HOME:-/root}/.cache/home-server/segment-state}"
+	seg_at=$(sed -n 's/^segments_verified_at=//p' "$seg_state" 2>/dev/null | tail -1)
+	seg_open=$(sed -n 's/^segments_edges_open=//p' "$seg_state" 2>/dev/null | tail -1)
+	seg_blocked=$(sed -n 's/^segments_edges_blocked=//p' "$seg_state" 2>/dev/null | tail -1)
+	seg_ctl=$(sed -n 's/^segments_control=//p' "$seg_state" 2>/dev/null | tail -1)
+	seg_names=$(sed -n 's/^segments_open_edges=//p' "$seg_state" 2>/dev/null | tail -1)
+	seg_age_d=""
+	if [ -n "$seg_at" ]; then
+		seg_e=$(date -d "$seg_at" +%s 2>/dev/null) || seg_e=""
+		[ -n "${seg_e:-}" ] && seg_age_d=$(( ( $(date +%s) - seg_e ) / 86400 ))
+	fi
+	fact net_containment_at "${seg_at:-}"
+	fact net_edges_open "${seg_open:-}" num
+	fact net_edges_blocked "${seg_blocked:-}" num
+
+	if [ -z "$seg_at" ]; then
+		if [ "$uptime_s" -lt 604800 ]; then
+			ok net.containment "no forbidden-edge probe recorded yet (up $((uptime_s / 3600))h) - the timer is weekly, so this is not yet due"
+		else
+			warn net.containment "the forbidden edges have NEVER been probed, and this machine has been up $((uptime_s / 86400))d - so the segmentation is a claim about unit files and nothing has sent a packet at it. Check home-server-verify-segmentation.timer; host/systemd/README.md carries the one-time start"
+		fi
+	elif [ -n "$seg_open" ] && [ "$seg_open" -gt 0 ]; then
+		warn net.containment "$seg_open forbidden edge(s) are reachable:${seg_names:+ $seg_names} - the segmentation is not in force where it says it is. A REFUSED connection counts here as well as an open one: the packet arrived and only the port was shut, so that edge opens the moment anything listens. See docs/networking.md"
+	elif [ "$seg_ctl" != proven ]; then
+		warn net.containment "the last forbidden-edge probe could not prove itself ($seg_ctl) - the control edge that must connect did not, so every 'dropped' result on that run is indistinguishable from a probe that never ran. journalctl --user -u home-server-verify-segmentation"
+	elif [ -n "$seg_age_d" ] && [ "$seg_age_d" -gt 17 ]; then
+		warn net.containment "the forbidden edges were last probed ${seg_age_d}d ago against a weekly timer - two missed runs, so the timer has stopped firing"
+	else
+		ok net.containment "${seg_blocked:-0} forbidden edge(s) dropped ${seg_age_d:-?}d ago, proved against a control that connected"
+	fi
 fi
 
 # ------------------------------------------------------------------------------
@@ -756,19 +921,68 @@ fi
 # staged update and not put one back: that converts a loud condition into a
 # quiet one, and the only other thing that would ever notice is
 # deploy.image_digest, as a WARN, six hours later.
+#
+# AND "IT REFUSED" IS NOT THE SAME SENTENCE AS "IT HAD NOTHING TO DO", which is
+# what this check said for the first eight days of its life. write_state() was
+# the only writer in that script and it always sets boot_reclaim_at, so every
+# one of its nineteen refusals was invisible and the absent key read as "has not
+# had to do anything yet" - true on a quiet week, and false in exactly the state
+# the script exists for. Measured: on 2026-09-06 the reboot window refused five
+# times for want of a /boot slot, the reclaim was dying at its own lock on the
+# 7th, and this check reported `pass` throughout while the host went 21 days
+# behind a CRITICAL advisory.
+#
+# SIX HOURS, AND THE NUMBER IS SET BY THE CADENCE RATHER THAN BY THE HARM. The
+# timer runs every thirty minutes, so six hours is twelve consecutive refusals -
+# past any of the transient shapes (a backup running, an rpm-ostree transaction,
+# the nightly update check) and into the structural ones. It also leaves the
+# best part of a week's notice before the Sunday window this protects.
+#
+# THE RECORD CANNOT GO STALE, which is what makes grading it on age honest:
+# bin/reclaim-boot-slot.sh clears it both on a successful reclaim and at its own
+# df gate the moment /boot is found to have room. So a tag standing here means
+# the condition is standing too, not that something once went wrong.
 reclaim_at=$(sed -n 's/^boot_reclaim_at=//p' "$boot_state" 2>/dev/null | tail -1)
 reclaim_err=$(sed -n 's/^boot_reclaim_error=//p' "$boot_state" 2>/dev/null | tail -1)
 reclaim_ref=$(sed -n 's/^boot_reclaim_rollback_ref=//p' "$boot_state" 2>/dev/null | tail -1)
 reclaim_freed=$(sed -n 's/^boot_reclaim_freed_mb=//p' "$boot_state" 2>/dev/null | tail -1)
 reclaim_gone=$(sed -n 's/^boot_reclaim_destroyed_digest=//p' "$boot_state" 2>/dev/null | tail -1)
 reclaim_back=$(sed -n 's/^boot_reclaim_restaged_digest=//p' "$boot_state" 2>/dev/null | tail -1)
+reclaim_rej_at=$(sed -n 's/^boot_reclaim_refused_at=//p' "$boot_state" 2>/dev/null | tail -1)
+reclaim_rej_tag=$(sed -n 's/^boot_reclaim_refused_tag=//p' "$boot_state" 2>/dev/null | tail -1)
 fact boot_reclaim_at         "${reclaim_at:-}"
 fact boot_reclaim_freed_mb   "${reclaim_freed:-}" num
 fact boot_reclaim_rollback_ref "${reclaim_ref:-}"
-if [ -z "${reclaim_at:-}" ]; then
-	ok deploy.boot_reclaim "the /boot reclaim has not had to do anything yet"
-elif [ -n "${reclaim_gone:-}" ] && [ -z "${reclaim_back:-}" ]; then
+fact boot_reclaim_refused_at  "${reclaim_rej_at:-}"
+fact boot_reclaim_refused_tag "${reclaim_rej_tag:-}"
+
+# OUTSTANDING MEANS NEWER THAN THE LAST SUCCESS, and the comparison is belt and
+# braces rather than the mechanism: write_state() drops the refusal keys, so a
+# record that is present is already after the last reclaim. It is kept because
+# this reads a file five other programs write and one of them is a greenboot
+# hook running as root at boot - an ordering this check should not have to
+# assume.
+reclaim_rej_age_h=""
+if [ -n "${reclaim_rej_at:-}" ]; then
+	reclaim_rej_e=$(date -d "$reclaim_rej_at" +%s 2>/dev/null) || reclaim_rej_e=""
+	reclaim_ok_e=$(date -d "${reclaim_at:-@0}" +%s 2>/dev/null) || reclaim_ok_e=0
+	if [ -n "${reclaim_rej_e:-}" ] && [ "$reclaim_rej_e" -ge "${reclaim_ok_e:-0}" ]; then
+		reclaim_rej_age_h=$(( ( $(date +%s) - reclaim_rej_e ) / 3600 ))
+	fi
+fi
+
+# THE FAIL ARM IS FIRST AND UNCONDITIONAL. A destroyed-and-not-restaged update
+# can coexist with a later refusal - the repair arm's own restage_repeat is
+# exactly that shape - and putting the refusal ahead of it would mask the only
+# FAIL this check has behind a warning.
+if [ -n "${reclaim_gone:-}" ] && [ -z "${reclaim_back:-}" ]; then
 	bad deploy.boot_reclaim "the /boot reclaim destroyed a staged update at $reclaim_at and did not put one back - 'sudo rpm-ostree upgrade' re-stages it, and it does NOT happen on its own"
+elif [ -n "${reclaim_rej_age_h:-}" ] && [ "$reclaim_rej_age_h" -ge 6 ]; then
+	warn deploy.boot_reclaim "the /boot reclaim has been refusing for ${reclaim_rej_age_h}h ($reclaim_rej_tag, since $reclaim_rej_at) and /boot still has no room - that is $(( reclaim_rej_age_h * 2 )) consecutive refusals, so it is structural rather than something in its way. The unattended reboot window needs the slot this would free; 'journalctl --user -u home-server-boot-reclaim' carries the full sentence"
+elif [ -n "${reclaim_rej_age_h:-}" ]; then
+	note deploy.boot_reclaim "the /boot reclaim refused ${reclaim_rej_age_h}h ago ($reclaim_rej_tag) and /boot is still short - most refusals here clear on the next run, and this clears itself the moment /boot has room"
+elif [ -z "${reclaim_at:-}" ]; then
+	ok deploy.boot_reclaim "the /boot reclaim has not had to do anything yet, and has not refused"
 elif [ -n "${reclaim_err:-}" ]; then
 	warn deploy.boot_reclaim "the last /boot reclaim ($reclaim_at) reported: $reclaim_err"
 elif [ -n "${reclaim_ref:-}" ]; then
@@ -1275,7 +1489,14 @@ if [ -z "$GREENBOOT" ]; then
 	wref_at=$(sed -n 's/^window_refused_at=//p' "$boot_state" 2>/dev/null | tail -1)
 	wref_tag=$(sed -n 's/^window_refused_tag=//p' "$boot_state" 2>/dev/null | tail -1)
 	if [ -z "$wref_at" ]; then
-		ok reboot.window_refused "no reboot window has refused a staged deployment"
+		# NAMES THE LIMIT OF WHAT IT CAN SEE. The recorder went in on 2026-09-06 and
+	# the five refusals that prompted it are not in this file, so an absent key
+	# means "nothing has refused since something started writing them down" and
+	# not "nothing has ever refused". The distinction stops mattering once a
+	# window has passed, and until then a reader deserves to know which sentence
+	# they are being told - the same reason deploy.boot_reclaim now separates a
+	# refusal from an absence rather than reading both as health.
+	ok reboot.window_refused "no reboot window has refused a staged deployment since the refusals started being recorded"
 	else
 		wref_epoch=$(date -d "$wref_at" +%s 2>/dev/null || echo 0)
 		wref_age_d=$(( ( $(date +%s) - wref_epoch ) / 86400 ))
@@ -3073,9 +3294,51 @@ if [ -z "$GREENBOOT" ]; then
 			warn agents.model_credential "the podman secret predates the last .env render by $(( (cred_env_epoch - cred_secret_epoch) / 60 ))m - phases would authenticate with the old token while conduct paces with the new one, and nothing else here would say so; run ./bin/sync-podman-secrets.sh"
 			fact agents_model_credential 0 num
 		else
-			ok agents.model_credential "a model credential in .env and a podman secret no older than it - neither of which proves the token still authenticates"
+			ok agents.model_credential "a model credential in .env and a podman secret no older than it - presence and freshness only; agents.model_credential_valid is the one that asks whether it still authenticates"
 			fact agents_model_credential 1 num
 		fi
+	fi
+
+	# --------------------------------------------------------------------------
+	# And whether that credential is still accepted
+	# --------------------------------------------------------------------------
+	# THE CHECK ABOVE ENDS ITS OWN PASS MESSAGE BY SAYING THIS IS UNMEASURED, and
+	# it was right to: a read of the filesystem establishes presence and
+	# freshness and can establish nothing else. A revoked token then reads green
+	# here, green in the podman secret, and fails twenty minutes into a phase -
+	# with the fleet still taking work, because nothing upstream knows.
+	#
+	# ONLY 401 IS THE FINDING, AND THAT IS A DELIBERATE NARROWING. This is a
+	# `claude setup-token` OAuth credential with scopes, and one of them has
+	# already been measured answering 403 `user:profile` to an endpoint it was
+	# not entitled to - a scope refusal from a token that authenticates
+	# perfectly. So bin/probe-credentials.sh treats 401 as rejection and every
+	# other answer as "it got past authentication", which is the only question
+	# being asked. Reading 403 as revoked would warn for ever about a working
+	# fleet, which is the shape docs/known-state.md's memoryTone entry is about.
+	#
+	# WARN RATHER THAN FAIL, and covered by AgentCheckWarning with no new rule -
+	# every agents.* warn pages through that matcher. It must NOT join
+	# AgentContainmentLost's regex: that rule is critical and is about a boundary,
+	# and this is work not starting.
+	cred_model_res=$(cred_get model_probe_result)
+	cred_model_det=$(cred_get model_probe_detail)
+	cred_model_age=$(cred_age_h model)
+	fact agents_model_credential_probed_at "$(cred_get model_probe_at)"
+	if [ -z "$cred_model_res" ]; then
+		if [ "$uptime_s" -lt 86400 ]; then
+			ok agents.model_credential_valid "no model credential probe recorded yet (up $((uptime_s / 60))m) - not yet due"
+		else
+			warn agents.model_credential_valid "the model credential has NEVER been probed, and this machine has been up $((uptime_s / 3600))h - check home-server-credential-probe.timer; host/systemd/README.md carries the one-time start"
+		fi
+	elif [ "$cred_model_res" = failed ]; then
+		warn agents.model_credential_valid "the model credential is no longer accepted: $cred_model_det. Every phase will fail at its first model call and the fleet will keep taking work; re-run 'claude setup-token', put it in secrets/env.sops.env, then ./bin/render-env.sh and ./bin/sync-podman-secrets.sh"
+	elif [ -n "$cred_model_age" ] && [ "$cred_model_age" -gt 48 ]; then
+		warn agents.model_credential_valid "the model credential was last probed ${cred_model_age}h ago against a daily timer - the last answer was '$cred_model_res', and it is now old enough that it is not evidence about today"
+	elif [ "$cred_model_res" = skipped ]; then
+		note agents.model_credential_valid "the model credential was not probed ${cred_model_age:-?}h ago: $cred_model_det"
+	else
+		ok agents.model_credential_valid "the model API accepted the token ${cred_model_age:-?}h ago"
 	fi
 
 	fact agents_quota_rank "${q_rank:-}" num
@@ -3419,7 +3682,49 @@ if [ -z "$GREENBOOT" ]; then
 		warn agents.publish_configured "the push key is present but f/agents/github_pr_token is absent from the Windmill workspace - the kill switch is pulled, so an approved run errors instead of opening a pull request. Deliberate is fine; forgotten is not"
 	else
 		fact agents_publish_configured 1 num
-		ok agents.publish_configured "a push key at mode $pk_mode with no passphrase, and a pull-request token in the workspace - neither of which proves either one still authenticates"
+		ok agents.publish_configured "a push key at mode $pk_mode with no passphrase, and a pull-request token in the workspace - presence only; agents.publish_credential_valid is the one that asks whether either still authenticates"
+	fi
+
+	# --------------------------------------------------------------------------
+	# And whether either of them is still accepted
+	# --------------------------------------------------------------------------
+	# THE MOST EXPENSIVE PLACE IN THE PIPELINE TO FIND OUT. Publishing is the
+	# LAST step: a round has planned, changed, gated and paid for three model
+	# phases before it reaches the push, so a refused key costs the whole run
+	# rather than the minute it would have cost at the start.
+	#
+	# A DAILY `git ls-remote`, NOT AN HOURLY ONE, and the distinction is the
+	# whole reason this is a check over a marker rather than a call from here.
+	# The comment on agents.publish_configured rejected a live probe on the
+	# explicit grounds of "~8,760 GitHub auths a year for a credential that
+	# almost never changes" - which is an objection to the cadence, and a correct
+	# one. 365 is a different number. It also does not replace the
+	# github-authentication-token-expiration header the publish flow already
+	# reads; that is the exact answer at the exact moment, and this is the one
+	# that arrives before the round starts.
+	#
+	# HALF-PROVEN IS A REAL ANSWER HERE. Windmill stores a secret workspace
+	# variable encrypted, so what the probe can read back is not usable as a
+	# bearer token - it says so and grades the push key alone rather than
+	# implying it proved both.
+	cred_pub_res=$(cred_get publish_probe_result)
+	cred_pub_det=$(cred_get publish_probe_detail)
+	cred_pub_age=$(cred_age_h publish)
+	fact agents_publish_probed_at "$(cred_get publish_probe_at)"
+	if [ -z "$cred_pub_res" ]; then
+		if [ "$uptime_s" -lt 86400 ]; then
+			ok agents.publish_credential_valid "no publish credential probe recorded yet (up $((uptime_s / 60))m) - not yet due"
+		else
+			warn agents.publish_credential_valid "the publish credentials have NEVER been probed, and this machine has been up $((uptime_s / 3600))h - check home-server-credential-probe.timer; host/systemd/README.md carries the one-time start"
+		fi
+	elif [ "$cred_pub_res" = failed ]; then
+		warn agents.publish_credential_valid "a publish credential is no longer accepted: $cred_pub_det. A round would plan, change and gate green, then fail at the one step that leaves the host; see host/systemd/README.md for the key and docs/agents.md for the token"
+	elif [ -n "$cred_pub_age" ] && [ "$cred_pub_age" -gt 48 ]; then
+		warn agents.publish_credential_valid "the publish credentials were last probed ${cred_pub_age}h ago against a daily timer - the last answer was '$cred_pub_res', and it is now old enough that it is not evidence about today"
+	elif [ "$cred_pub_res" = skipped ]; then
+		note agents.publish_credential_valid "the publish credentials were not probed ${cred_pub_age:-?}h ago: $cred_pub_det"
+	else
+		ok agents.publish_credential_valid "$cred_pub_det (${cred_pub_age:-?}h ago)"
 	fi
 
 	# --------------------------------------------------------------------------
@@ -4001,7 +4306,7 @@ if [ -z "$GREENBOOT" ]; then
 	#
 	# AND IT CLOSES ON THE RETENTION WINDOW, WHICH IS THE NUMBER THAT HAS TO
 	# MOVE. At the measured 5.8 runs/day and 506 MB/run, 40960 MB is 14 days;
-	# bin/ci-artifacts-sweep.sh keeps 30 and refuses below 7 for a reason it
+	# bin/ci-artifacts-sweep.sh keeps 13 and refuses below 7 for a reason it
 	# states at length. So this check reaching its budget is not a fault in
 	# the store - it is the sentence "30 days at 506 MB/run does not fit this
 	# filesystem", said by a check rather than by a person with an ssh
@@ -4068,7 +4373,7 @@ if [ -z "$GREENBOOT" ]; then
 		elif [ -n "$ci_swept_age" ] && [ "$ci_swept_age" -gt 3 ]; then
 			warn ci.artifact_store "the artifact store holds ${ci_state_bytes} bytes of baseline and ${ci_runs_mb:-?}MB of run scratch, but the sweep last ran ${ci_swept_age} days ago against a daily timer - check home-server-ci-artifacts-sweep.timer"
 		elif [ -n "$ci_runs_mb" ] && [ "$ci_runs_mb" -gt "$ci_artifact_budget_mb" ]; then
-			warn ci.artifact_store "the artifact store holds ${ci_runs_mb}MB of run scratch, over its ${ci_artifact_budget_mb}MB budget - unlike a CI lane nothing clears this on its own, and the sweep is working: it takes whole runs at 30 days and the store simply arrives faster than that. The lever is CI_ARTIFACT_KEEP_DAYS in bin/ci-artifacts-sweep.sh, which must not go below 7; see docs/ci.md and capacity.var_commitment"
+			warn ci.artifact_store "the artifact store holds ${ci_runs_mb}MB of run scratch, over its ${ci_artifact_budget_mb}MB budget - unlike a CI lane nothing clears this on its own, and the sweep is working: it takes whole runs at CI_ARTIFACT_KEEP_DAYS and the store simply arrives faster than that. That window was cut from 30 to 13 on 2026-09-09 to fit this budget at 6.07 runs a day; if it is breaching again the arrival rate has risen and the lever is what is IN a run, not the window - it must not go below 7. See bin/ci-artifacts-sweep.sh, docs/ci.md and capacity.var_commitment"
 		elif [ -z "$ci_swept_at" ]; then
 			note ci.artifact_store "the artifact store holds ${ci_state_bytes} bytes of baseline and ${ci_runs_mb:-?}MB of run scratch; the sweep has never recorded a run, which on a fresh install means the one-time start in host/systemd/README.md was skipped"
 		else
@@ -4241,6 +4546,71 @@ if [ -z "$GREENBOOT" ]; then
 	fact search_episodes_missing "$(sed -n 's/^episodes_missing=//p' "$search_state" 2>/dev/null | tail -1)" num
 	fact search_episodes_searchable "$(sed -n 's/^episodes_searchable=//p' "$search_state" 2>/dev/null | tail -1)" num
 	fact search_stalled "${ss_stalled:-}" num
+
+	# --------------------------------------------------------------------------
+	# The library itself. Whether what Tdarr wrote will actually play.
+	# --------------------------------------------------------------------------
+	# THE ONLY FAILURE ON THIS HOST THAT A PERSON REPORTS BEFORE A CHECK DOES.
+	# A file whose keyframes fall closer together than Jellyfin's 6s HLS segment
+	# makes ffmpeg merge GOPs until it has six seconds, so segment N carries
+	# different media than playlist entry N and the error ACCUMULATES - +3.838s
+	# after one segment, +22.397s after twenty-five, measured. What it looks
+	# like is the picture jumping and subtitles drifting, and the symptom names
+	# neither the cause nor the file.
+	#
+	# bin/verify-media.sh HAS EXISTED FOR WEEKS AND NO UNIT REFERENCED IT. It is
+	# on home-server-verify-media.timer now, weekly; this grades what it left
+	# behind.
+	#
+	# IT GRADES THE MARKER AND NOT THE UNIT, WHICH IS THE WHOLE REASON THERE IS
+	# NO check_timer_run CALL HERE. That service carries an ExecCondition= that
+	# defers while somebody is watching - the spindle loses 45% of its
+	# throughput to two readers - and A SKIPPED RUN CLEARS
+	# ExecMainExitTimestamp RATHER THAN LEAVING IT STALE. check_timer_run would
+	# report "has never run" and FAIL from the first deferral, on a host that
+	# swept the library perfectly six days earlier. update.podman_run paid for
+	# that lesson and reads its own state file first for the same reason.
+	#
+	# 17 DAYS, NOT 14. The timer is weekly and the gate can defer a week, so two
+	# missed sweeps is the first honestly abnormal number; 17 gives that a few
+	# days of margin rather than firing on the Thursday a stream happened to be
+	# running.
+	say media "Media library"
+
+	media_state="${HOME_SERVER_MEDIA_STATE:-${HOME:-/root}/.cache/home-server/media-state}"
+	media_at=$(sed -n 's/^media_verified_at=//p' "$media_state" 2>/dev/null | tail -1)
+	media_bad=$(sed -n 's/^media_files_bad=//p' "$media_state" 2>/dev/null | tail -1)
+	media_checked=$(sed -n 's/^media_files_checked=//p' "$media_state" 2>/dev/null | tail -1)
+	media_names=$(sed -n 's/^media_bad_names=//p' "$media_state" 2>/dev/null | tail -1)
+	media_err=$(sed -n 's/^media_error=//p' "$media_state" 2>/dev/null | tail -1)
+	media_age_d=""
+	if [ -n "$media_at" ]; then
+		media_e=$(date -d "$media_at" +%s 2>/dev/null) || media_e=""
+		[ -n "${media_e:-}" ] && media_age_d=$(( ( $(date +%s) - media_e ) / 86400 ))
+	fi
+	fact media_verified_at    "${media_at:-}"
+	fact media_files_checked  "${media_checked:-}" num
+	fact media_files_bad      "${media_bad:-}" num
+
+	if [ -z "$media_at" ]; then
+		if [ "$uptime_s" -lt 604800 ]; then
+			ok media.keyframe_drift "no library keyframe sweep recorded yet (up $((uptime_s / 3600))h) - the timer is weekly, so this is not yet due"
+		else
+			warn media.keyframe_drift "the library's keyframe grid has NEVER been swept, and this machine has been up $((uptime_s / 86400))d - check home-server-verify-media.timer; host/systemd/README.md carries the one-time start"
+		fi
+	elif [ -n "$media_err" ]; then
+		# THE OVERLOADED EXIT CODE, SEPARATED. `exit 1` from that script is both
+		# "files will drift" and "there is no jellyfin container", which are
+		# opposite findings. This arm is the second one, and it must not read as
+		# the library being fine.
+		warn media.keyframe_drift "the last library sweep could not run: $media_err - so the ${media_checked:-0} file(s) it reports say nothing about the library. journalctl --user -u home-server-verify-media"
+	elif [ -n "$media_age_d" ] && [ "$media_age_d" -gt 17 ]; then
+		warn media.keyframe_drift "the library's keyframe grid was last swept ${media_age_d}d ago against a weekly timer - two missed sweeps is more than the playback gate explains, so the timer or its ExecCondition has stopped letting it through"
+	elif [ -n "$media_bad" ] && [ "$media_bad" -gt 0 ]; then
+		warn media.keyframe_drift "$media_bad of ${media_checked:-?} library file(s) have keyframes closer than the 6s HLS segment and WILL drift in a browser:${media_names:+ $media_names} - re-transcode them, or watch them in a native client, which direct-plays. ./bin/verify-media.sh --full <file> shows the grid"
+	else
+		ok media.keyframe_drift "${media_checked:-0} library file(s) swept ${media_age_d:-?}d ago, none with keyframes closer than the HLS segment"
+	fi
 
 	# --------------------------------------------------------------------------
 	# Logs. The policy, and whether it is actually in force.
@@ -5049,6 +5419,50 @@ if [ -z "$GREENBOOT" ]; then
 		warn ingress.renewal_due "Caddy said it would renew${ing_overdue_hosts} and has not - the certificate on disk still predates the time it chose. This is the renewal path failing about thirty days before anything goes dark: \`journalctl --user -u caddy\` carries the ACME error, and GANDI_BEARER_TOKEN is the credential DNS-01 needs"
 	else
 		ok ingress.renewal_due "no certificate is past the renewal time Caddy chose for it ($ing_meta of $ing_present carry one)"
+	fi
+
+	# --------------------------------------------------------------------------
+	# The credential the renewal will need, before the renewal needs it
+	# --------------------------------------------------------------------------
+	# ingress.renewal_due IS A BACKSTOP AND NOT A PROOF, which is the whole
+	# reason this exists beside it. It fires when Caddy said it would renew and
+	# has not - about thirty days before anything goes dark, which is a great
+	# deal better than nothing and is still detection AFTER the path has broken.
+	# Nothing exercised GANDI_BEARER_TOKEN at all: every certificate on disk is
+	# its first issuance, so the DNS-01 write has not happened once since the
+	# host was built, and the first renewal Caddy scheduled is 2026-10-10T01:46Z.
+	# Ten of the fifteen expire within hours of each other on 2026-11-09.
+	#
+	# A WRITE, BECAUSE A READ PROVES THE WRONG HALF. A Gandi PAT carries scopes
+	# and DNS-01 needs write: a token that can list the zone and not change it
+	# authenticates perfectly and renews nothing. bin/probe-credentials.sh
+	# creates a TXT record at a name nothing resolves and removes it again.
+	#
+	# WARN AND NEVER FAIL, for the same reason ingress.renewal_due is: this
+	# script's exit code decides an OS rollback under --greenboot, and a Gandi
+	# outage must not be able to block a security update. There are thirty days
+	# of warning behind this and none of them are worth that.
+	cred_gandi_res=$(cred_get gandi_probe_result)
+	cred_gandi_det=$(cred_get gandi_probe_detail)
+	cred_gandi_age=$(cred_age_h gandi)
+	fact ingress_dns_credential_at "$(cred_get gandi_probe_at)"
+	if [ -z "$cred_gandi_res" ]; then
+		# The same "not yet due" shape check_backup_age uses: a host that came
+		# up twenty minutes ago has not missed a daily probe, and saying it has
+		# would make every reboot produce a finding.
+		if [ "$uptime_s" -lt 86400 ]; then
+			ok ingress.dns_credential "no DNS-01 credential probe recorded yet (up $((uptime_s / 60))m) - not yet due"
+		else
+			warn ingress.dns_credential "the DNS-01 credential has NEVER been probed, and this machine has been up $((uptime_s / 3600))h - so nothing has established that GANDI_BEARER_TOKEN can still write the TXT record every renewal needs. Check home-server-credential-probe.timer; host/systemd/README.md carries the one-time start"
+		fi
+	elif [ "$cred_gandi_res" = failed ]; then
+		warn ingress.dns_credential "the DNS-01 credential probe FAILED: $cred_gandi_det. Every certificate here renews over DNS-01 against Gandi, so this is every public hostname going dark together about thirty days from now unless the token is replaced - 'sops secrets/env.sops.env', then ./bin/render-env.sh and restart caddy"
+	elif [ -n "$cred_gandi_age" ] && [ "$cred_gandi_age" -gt 48 ]; then
+		warn ingress.dns_credential "the DNS-01 credential was last probed ${cred_gandi_age}h ago against a daily timer - the last answer was '$cred_gandi_res', and it is now old enough that it is not evidence about today"
+	elif [ "$cred_gandi_res" = skipped ]; then
+		note ingress.dns_credential "the DNS-01 credential was not probed ${cred_gandi_age:-?}h ago: $cred_gandi_det"
+	else
+		ok ingress.dns_credential "the DNS-01 credential wrote and removed a TXT record ${cred_gandi_age:-?}h ago - the renewal path's own credential, exercised rather than assumed"
 	fi
 
 	# DERIVED FROM THE CADDYFILE, NEVER A SECOND LIST. A hand-maintained copy of

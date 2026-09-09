@@ -200,6 +200,38 @@ Things in it that are not obvious and cost time to find:
   B frames it displaces, so dropping the adaptive ones more than pays for having no keyframe exactly
   on a cut. The expectation going in was a small loss; measure this sort of thing rather than
   reasoning about it.
+
+  **And nothing checked it on a schedule until 2026-09-09.** `bin/verify-media.sh` existed for
+  weeks, was the only check for a failure mode this host has actually had, and was referenced by no
+  unit anywhere - so its coverage fell every day, because Tdarr writes into `library/transcoded`
+  continuously and the population it grades grows while the last hand run recedes. 725 files at the
+  time it was put on a timer, 63 films and 662 episodes.
+
+  `home-server-verify-media.timer` sweeps weekly, sampled: three 120s windows a file, reading packet
+  keyframe FLAGS, which is pure demux - `-skip_frame nokey` would decode, and on this spindle that
+  difference is the whole cost of the script. `media.keyframe_drift` grades what it leaves behind.
+
+  **It is throttled and it defers, and the reason is the disk rather than the CPU.** `/mnt/media` is
+  one 7200rpm spindle whose throughput FALLS with concurrency - two readers cost 45% of the total and
+  the penalty is head travel - so a sweep and a stream are the worst pair of jobs this host can run
+  together. `Nice`/`CPUWeight`/`IOWeight` lower the priority of the reads; they cannot stop the head
+  moving, which is why the unit also carries an `ExecCondition=` on `bin/verify-media.sh --gate`.
+  Unknown PROCEEDS there, the opposite of the reboot gate and the same as the nightly container
+  update: being unable to ask whether anyone is watching is not a reason to stop verifying the
+  library for a week.
+
+  **Which is exactly why `media.keyframe_drift` grades the MARKER and not the unit.** A skipped run
+  CLEARS `ExecMainExitTimestamp` rather than leaving it stale, so `check_timer_run` would report
+  "has never run" and FAIL from the first deferral, on a host that swept the library perfectly six
+  days earlier. `update.podman_run` paid for that lesson first.
+
+  **`exit 1` from that script means two opposite things**, which is the second job the marker does.
+  It is both "one or more files will drift" and "there is no jellyfin container, so nothing could be
+  measured" - and a reader with only the exit code cannot tell the library being bad from the check
+  being broken. `media_error` is set on the `die()` path and empty on every other, and the check
+  reports them as different sentences. The exit codes themselves are deliberately unchanged: this
+  script has hand callers, and moving the codes under them to help a timer would be paying the wrong
+  party.
 - **10-bit is done with `-vf scale_cuda=format=p010le`, NOT `-pix_fmt p010le`.** With
   `-hwaccel_output_format cuda` the frames never leave GPU memory, so a pixel-format conversion has
   nowhere to happen and ffmpeg fails with *"Impossible to convert between the formats supported by

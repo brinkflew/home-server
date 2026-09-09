@@ -75,7 +75,67 @@ esac
 
 if [ "$(id -u)" = 0 ]; then priv() { "$@"; }; else priv() { sudo -n "$@"; }; fi
 
-refuse() { printf 'reclaim-boot-slot: NOT reclaiming - %s\n' "$1"; exit 0; }
+# ------------------------------------------------------------------------------
+# A refusal that leaves no record is a refusal no check can see
+# ------------------------------------------------------------------------------
+# EVERY REFUSAL IN THIS FILE WAS INVISIBLE UNTIL 2026-09-09, AND THE COST WAS A
+# WHOLE REBOOT WINDOW. write_state() below was the only writer and it always
+# sets boot_reclaim_at, so deploy.boot_reclaim read the ABSENCE of that key as
+# "the reclaim has not had to do anything yet" - which is true on a quiet week
+# and false in exactly the state this script exists for.
+#
+# Measured, and this is why the sentence above is not hypothetical: on
+# 2026-09-06 bin/reboot-when-staged.sh refused five times for "/boot has only
+# 26M free (want 160M) and 44.20260817.3.2 is STAGED". This script ran every
+# thirty minutes throughout, and on 2026-09-07 at 23:01:21 it was dying at its
+# own lock with "Permission denied". deploy.boot_reclaim reported `pass` for all
+# of it, and the host spent 21 days behind a CRITICAL advisory.
+#
+# THE TAG IS A BARE WORD AND NOT THE MESSAGE, for the reason a check id is: the
+# prose is written for a person reading the journal and gets reworded freely,
+# and a reader keying on it is a check that stops firing the first time somebody
+# improves a sentence. Lifted from bin/reboot-when-staged.sh, which paid for
+# this lesson first and whose refusals have been on the record since.
+#
+# NO EXCLUSION LIST, AND THAT IS THE ONE WAY THIS DIFFERS FROM THAT FILE. Its
+# refuse() must skip `nothing_staged`, because the absence of work reaches it as
+# a refusal and recording that would overwrite the last real refusal on every
+# quiet night. Here the absence of work is the `note` at the df gate below,
+# which exits without ever calling this - so every call that DOES reach here had
+# work in front of it. The flock loser exits 0 on its own path for the same
+# reason.
+#
+# WHAT CLEARS A RECORD IS THEREFORE TWO THINGS, NOT ONE: write_state() below,
+# when the reclaim actually happens, and that same df gate, when /boot turns out
+# to have room. Most refusals here are transient - a backup running, a
+# transaction in progress - and without the second clause one of those would
+# leave a tag standing until the next real reclaim, which may be never. The gate
+# says why it is sound evidence.
+#
+# ITS OWN TEMP NAME, NOT THE BARE "$STATE.tmp". This file has five other writers
+# and bin/reboot-when-staged.sh is one of them, refusing on Sunday mornings
+# between 05:00 and 09:00 - which is when a reclaim refusing for want of a slot
+# is at its most likely, and its timer fires at :04 and :34 through exactly that
+# window. Two writers sharing one temp path can truncate each other's work;
+# bin/verify-restore.sh records that in as many words and takes the same way
+# out. Losing a refusal record to a race would be this change failing at the one
+# moment it was written for.
+#
+# NOT under --dry-run, which must change nothing.
+refuse() {  # <tag> <message>
+	local tag="$1" tmp="$STATE.reclaim.$$"
+	if [ -z "$DRY" ]; then
+		priv mkdir -p "$(dirname "$STATE")" 2>/dev/null
+		{
+			grep -vE '^boot_reclaim_refused_(at|tag)=' "$STATE" 2>/dev/null
+			echo "boot_reclaim_refused_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+			echo "boot_reclaim_refused_tag=$tag"
+		} | priv tee "$tmp" >/dev/null
+		priv mv "$tmp" "$STATE"
+	fi
+	printf 'reclaim-boot-slot: NOT reclaiming - %s\n' "$2"
+	exit 0
+}
 note()   { printf 'reclaim-boot-slot: %s\n' "$1"; }
 
 # EVERY rpm-ostree CALL IS TIMEOUT-WRAPPED, because none of them is a local
@@ -113,7 +173,7 @@ ro() { timeout 60 rpm-ostree "$@"; }
 # wants.
 mkdir -p "$(dirname "$LOCK")" 2>/dev/null || true
 if ! touch "$LOCK" 2>/dev/null; then
-	refuse "could not create the lock at $LOCK - refusing rather than running 'rpm-ostree cleanup -r' unguarded"
+	refuse lock_unavailable "could not create the lock at $LOCK - refusing rather than running 'rpm-ostree cleanup -r' unguarded"
 fi
 exec 9>"$LOCK"
 # Exit 0 and silently when somebody else holds it: a second copy of a no-op is
@@ -146,10 +206,37 @@ fi
 # script walks on into a branch that runs `rpm-ostree cleanup -r`.
 # bin/verify-host.sh has the same guard on the same number and says why.
 case "${boot_free:-}" in
-	''|*[!0-9]*) refuse "/boot free space could not be read ('${boot_free:-}') - and unknown is not room" ;;
+	''|*[!0-9]*) refuse boot_free_unknown "/boot free space could not be read ('${boot_free:-}') - and unknown is not room" ;;
 esac
 
 if [ "$boot_free" -ge "$BOOT_MIN_MB" ]; then
+	# AND THIS IS WHERE A REFUSAL STOPS BEING TRUE, which is the half that makes
+	# recording them usable rather than a permanent amber light. Only a
+	# successful reclaim clears the record in write_state(), and most refusals
+	# here are transient - the backup is running, rpm-ostreed has a transaction,
+	# the nightly update check is awake. Any of those leaves a tag standing, and
+	# if nothing ever needs reclaiming again nothing ever clears it, so
+	# deploy.boot_reclaim would warn for weeks about a condition that resolved
+	# itself in half an hour.
+	#
+	# /boot having room is exactly the statement "whatever that refusal was
+	# about, it is not costing a slot now" - the same evidence a successful
+	# reclaim provides, arriving by a different route. So it clears the same
+	# keys, and nothing else.
+	#
+	# GUARDED ON THE RECORD EXISTING, so the ordinary path still writes nothing.
+	# This runs 48 times a day and does nothing on 47 of them; a whole-file
+	# rewrite on each would be this script's own contribution to the write
+	# volume it is meant to be cheap about. One grep of a file measured in
+	# hundreds of bytes is the price instead, and the write happens once per
+	# resolution.
+	if [ -z "$DRY" ] && grep -q '^boot_reclaim_refused_at=' "$STATE" 2>/dev/null; then
+		tmp="$STATE.reclaim.$$"
+		grep -vE '^boot_reclaim_refused_(at|tag)=' "$STATE" 2>/dev/null \
+			| priv tee "$tmp" >/dev/null
+		priv mv "$tmp" "$STATE"
+		note "cleared a standing refusal - /boot has room, so whatever it named is no longer costing a slot"
+	fi
 	note "/boot has ${boot_free}M free (want ${BOOT_MIN_MB}M) - nothing to reclaim"
 	exit 0
 fi
@@ -162,10 +249,10 @@ if [ -n "${HOME_SERVER_STATUS_JSON:-}" ]; then
 else
 	status_json=$(ro status --json 2>/dev/null)
 fi
-[ -n "$status_json" ] || refuse "rpm-ostree status returned nothing - it may be mid-transaction, or the daemon may be unwell"
+[ -n "$status_json" ] || refuse status_unreadable "rpm-ostree status returned nothing - it may be mid-transaction, or the daemon may be unwell"
 
 txn=$(jq -r '.transaction // empty' <<<"$status_json" 2>/dev/null)
-[ -z "$txn" ] || refuse "rpm-ostree has a transaction in progress ($txn)"
+[ -z "$txn" ] || refuse transaction_in_progress "rpm-ostree has a transaction in progress ($txn)"
 
 # NEVER ASSUME INDEX 0 IS THE BOOTED ONE. It is not, whenever anything is staged
 # or pending - which is precisely when this script has work to do. The same
@@ -173,7 +260,7 @@ txn=$(jq -r '.transaction // empty' <<<"$status_json" 2>/dev/null)
 booted_idx=$(jq '[.deployments[]] | map(.booted) | index(true)' <<<"$status_json" 2>/dev/null)
 depl_count=$(jq '.deployments | length' <<<"$status_json" 2>/dev/null)
 case "${booted_idx:-null}" in
-	''|null|*[!0-9]*) refuse "could not determine which deployment is booted" ;;
+	''|null|*[!0-9]*) refuse booted_unknown "could not determine which deployment is booted" ;;
 esac
 
 # `.staged` CAN BE null, NOT false, so it is tested the way bin/verify-host.sh
@@ -191,18 +278,18 @@ boot_entries=$(jq '[.deployments[] | select(.staged | not)] | length' <<<"$statu
 # The refusals
 # ------------------------------------------------------------------------------
 pinned=$(jq '[.deployments[] | select(.pinned)] | length' <<<"$status_json" 2>/dev/null)
-[ "${pinned:-0}" -eq 0 ] || refuse "${pinned} deployment(s) pinned - a pin is a deliberate human act and dropping what it protects is not this script's call"
+[ "${pinned:-0}" -eq 0 ] || refuse deployment_pinned "${pinned} deployment(s) pinned - a pin is a deliberate human act and dropping what it protects is not this script's call"
 
 # GRUB IS ARMED TO TAKE THE FALLBACK, so the rollback is the escape hatch and
 # this is the worst possible moment to remove it. Read directly rather than
 # inferred from the verdict below: it is the sharper test and it costs one
 # grub2-editenv. Same source bin/reboot-when-staged.sh reads.
 grub_counter=$(priv grub2-editenv "$GRUBENV" list 2>/dev/null | sed -n 's/^boot_counter=//p' | tail -1)
-[ -z "$grub_counter" ] || refuse "GRUB is armed to boot the FALLBACK (boot_counter=$grub_counter) - the rollback is the only thing that would catch it.
+[ -z "$grub_counter" ] || refuse grub_fallback_armed "GRUB is armed to boot the FALLBACK (boot_counter=$grub_counter) - the rollback is the only thing that would catch it.
   Understand why, then:  sudo $REPO/bin/clear-red-boot.sh"
 
 red_at=$(sed -n 's/^red_boot_at=//p' "$STATE" 2>/dev/null | tail -1)
-[ -z "$red_at" ] || refuse "a deployment was rejected at $red_at and nobody has cleared it - the rollback stays until somebody knows why"
+[ -z "$red_at" ] || refuse red_boot_uncleared "a deployment was rejected at $red_at and nobody has cleared it - the rollback stays until somebody knows why"
 
 # THE VERDICT MUST BE THIS BOOT'S. greenboot writes it about two minutes in;
 # this timer first fires at five. A verdict from a PREVIOUS boot would let the
@@ -216,13 +303,13 @@ red_at=$(sed -n 's/^red_boot_at=//p' "$STATE" 2>/dev/null | tail -1)
 # the boot, and the gap is not always small.
 gb_result=$(sed -n 's/^greenboot_result=//p' "$STATE" 2>/dev/null | tail -1)
 gb_at=$(sed -n 's/^greenboot_checked_at=//p' "$STATE" 2>/dev/null | tail -1)
-[ "${gb_result:-}" = green ] || refuse "greenboot's verdict for this host is '${gb_result:-none recorded}' - only a green boot gives up its rollback"
+[ "${gb_result:-}" = green ] || refuse greenboot_not_green "greenboot's verdict for this host is '${gb_result:-none recorded}' - only a green boot gives up its rollback"
 
 now_epoch=$(date +%s)
 uptime_s=$(cut -d. -f1 /proc/uptime)
 boot_epoch=$(( now_epoch - uptime_s ))
 gb_epoch=$(date -d "${gb_at:-}" +%s 2>/dev/null || echo 0)
-[ "${gb_epoch:-0}" -ge "$boot_epoch" ] || refuse "the green verdict is from ${gb_at:-an unknown time}, before this boot began - greenboot has not judged the deployment that is running now"
+[ "${gb_epoch:-0}" -ge "$boot_epoch" ] || refuse greenboot_stale "the green verdict is from ${gb_at:-an unknown time}, before this boot began - greenboot has not judged the deployment that is running now"
 
 # THE OTHER WRITERS OF THIS HOST'S STATE, allowlisted rather than denylisted.
 # `is-active` is the wrong question for a oneshot - home-server-backup is
@@ -230,16 +317,24 @@ gb_epoch=$(date -d "${gb_at:-}" +%s 2>/dev/null || echo 0)
 # this does not recognise reads as busy, which is the direction that fails safe.
 # bin/reboot-when-staged.sh found that one by starting a real backup and
 # watching the obvious spelling pass.
-for pair in "--user:home-server-reboot.service:the unattended reboot window is running" \
-            "--user:home-server-backup.service:the backup is running" \
-            ":rpm-ostreed-automatic.service:the nightly OS update check is running"; do
-	scope="${pair%%:*}"; rest="${pair#*:}"
+# THE TAG IS THE FIRST FIELD RATHER THAN DERIVED FROM THE UNIT NAME, because a
+# tag built by mangling "home-server-reboot.service" is a name nothing greps for
+# and one nobody can predict from reading deploy.boot_reclaim's message. Three
+# refusals share this loop and they are three different situations: the second
+# is a refusal the next run clears, the third is one that clears itself in
+# minutes, and the first means the reboot window and this script are both awake
+# and neither can proceed.
+for pair in "busy_reboot_window:--user:home-server-reboot.service:the unattended reboot window is running" \
+            "busy_backup:--user:home-server-backup.service:the backup is running" \
+            "busy_os_update::rpm-ostreed-automatic.service:the nightly OS update check is running"; do
+	tag="${pair%%:*}"; rest="${pair#*:}"
+	scope="${rest%%:*}"; rest="${rest#*:}"
 	unit="${rest%%:*}"; why="${rest#*:}"
 	# shellcheck disable=SC2086  # $scope is deliberately an unquoted empty-or---user
 	st=$(systemctl $scope show "$unit" -p ActiveState --value 2>/dev/null)
 	case "$st" in
 		inactive|failed|"") ;;
-		*) refuse "$why ($unit is $st)" ;;
+		*) refuse "$tag" "$why ($unit is $st)" ;;
 	esac
 done
 
@@ -262,7 +357,7 @@ if [ "${boot_entries:-0}" -lt 2 ]; then
 	# [staged, booted] a two-slot shape and gone looking for a rollback to drop
 	# that does not exist - the same error greenboot.armed was making one file
 	# over.
-	refuse "there is ${boot_entries:-0} /boot entry and only ${boot_free}M free - no deployment is holding a second slot, so the space is held by something this script does not model. Start with 'sudo du -sh /boot/*'."
+	refuse space_unmodelled "there is ${boot_entries:-0} /boot entry and only ${boot_free}M free - no deployment is holding a second slot, so the space is held by something this script does not model. Start with 'sudo du -sh /boot/*'."
 elif [ "$booted_idx" -eq 0 ] && [ "$depl_count" -eq 2 ]; then
 	# [booted, rollback]. The ordinary case, and the one the timer exists for:
 	# this is what every applied deployment leaves behind.
@@ -278,10 +373,10 @@ elif [ -z "$top_booted" ] && [ -z "$top_staged" ]; then
 	# unchanged", because a pending deployment is not a rollback. Booting it is
 	# the remedy, and it is the reboot that a free-space gate would refuse.
 	pending_ver=$(jq -r '.deployments[0].version // "?"' <<<"$status_json" 2>/dev/null)
-	refuse "$pending_ver is PENDING - finalized, holding a /boot slot, and not booted. 'cleanup -r' cannot reclaim that slot; booting it is what turns it into a rollback.
+	refuse pending_deployment "$pending_ver is PENDING - finalized, holding a /boot slot, and not booted. 'cleanup -r' cannot reclaim that slot; booting it is what turns it into a rollback.
   The window applies it on Sunday, or:  sudo systemctl reboot"
 else
-	refuse "an unrecognised shape: booted at index ${booted_idx} of ${depl_count} deployment(s), index 0 $( [ -n "$top_staged" ] && echo staged || echo finalized). Nothing destructive runs in a shape this script cannot name."
+	refuse shape_unrecognised "an unrecognised shape: booted at index ${booted_idx} of ${depl_count} deployment(s), index 0 $( [ -n "$top_staged" ] && echo staged || echo finalized). Nothing destructive runs in a shape this script cannot name."
 fi
 
 # ------------------------------------------------------------------------------
@@ -290,16 +385,24 @@ fi
 out_csum=$(jq -r --argjson i "$out_idx" '.deployments[$i].checksum // empty' <<<"$status_json" 2>/dev/null)
 out_ver=$(jq -r --argjson i "$out_idx" '.deployments[$i].version // "unknown"' <<<"$status_json" 2>/dev/null)
 out_dig=$(jq -r --argjson i "$out_idx" '.deployments[$i]["container-image-reference-digest"] // empty' <<<"$status_json" 2>/dev/null)
-[ -n "$out_csum" ] || refuse "could not read the outgoing deployment's checksum"
+[ -n "$out_csum" ] || refuse checksum_unreadable "could not read the outgoing deployment's checksum"
 
 pin_ref="$PIN_PREFIX/${out_ver}-$(printf '%s' "$out_csum" | cut -c1-12)"
 
 # ONE MERGE, SO A KEY THIS SCRIPT DOES NOT OWN IS NEVER LOST. Same contract as
 # host/greenboot/40-home-server.sh's record(), which did the opposite until
 # 2026-09-08 and silently killed two checks by it.
+#
+# AND IT CLEARS THE REFUSAL KEYS, which is what makes a success and a refusal
+# tell one story rather than two. Without this a reclaim that refused at 04:34
+# and succeeded at 05:04 would leave both records standing, and
+# deploy.boot_reclaim compares their timestamps - so the stale refusal would
+# outrank the success for as long as nothing refused again. The refusal is
+# history the moment the thing it refused has been done.
 write_state() {  # <action> <freed_mb> <rollback_ref> <destroyed_digest> <restaged_digest> <error>
+	local tmp="$STATE.reclaim.$$"
 	{
-		grep -vE '^boot_reclaim_(at|action|freed_mb|rollback_ref|destroyed_digest|restaged_digest|error)=' "$STATE" 2>/dev/null
+		grep -vE '^boot_reclaim_(at|action|freed_mb|rollback_ref|destroyed_digest|restaged_digest|error|refused_at|refused_tag)=' "$STATE" 2>/dev/null
 		echo "boot_reclaim_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 		echo "boot_reclaim_action=$1"
 		echo "boot_reclaim_freed_mb=$2"
@@ -307,8 +410,8 @@ write_state() {  # <action> <freed_mb> <rollback_ref> <destroyed_digest> <restag
 		echo "boot_reclaim_destroyed_digest=$4"
 		echo "boot_reclaim_restaged_digest=$5"
 		echo "boot_reclaim_error=$6"
-	} | priv tee "$STATE.tmp" >/dev/null
-	priv mv "$STATE.tmp" "$STATE"
+	} | priv tee "$tmp" >/dev/null
+	priv mv "$tmp" "$STATE"
 }
 
 # THE OBJECT CHECKSUMS OF A DEPLOYMENT'S KERNEL AND INITRAMFS, read out of the
@@ -363,7 +466,7 @@ if [ "$mode" = repair ]; then
 	if [ -n "$prev_gone" ] && [ "$prev_gone" = "$staged_dig" ]; then
 		prev_epoch=$(date -d "${prev_at:-}" +%s 2>/dev/null || echo 0)
 		if [ "$(( now_epoch - prev_epoch ))" -lt 604800 ]; then
-			refuse "this same image was already destroyed and re-staged at ${prev_at:-an unknown time} and /boot is short again - something other than the rollback is taking the space, and re-pulling it weekly will not find out what"
+			refuse restage_repeat "this same image was already destroyed and re-staged at ${prev_at:-an unknown time} and /boot is short again - something other than the rollback is taking the space, and re-pulling it weekly will not find out what"
 		fi
 	fi
 	# DOES IT ACTUALLY NEED A SLOT? If the staged deployment carries the same
@@ -373,10 +476,10 @@ if [ "$mode" = repair ]; then
 	# comparison refuses, rather than defaulting to the destructive branch.
 	sk=$(kern_id "$staged_csum") bk=$(kern_id "$booted_csum")
 	if [ -z "$sk" ] || [ -z "$bk" ]; then
-		refuse "could not compare the staged and booted kernels - this arm must not destroy an update it cannot prove needs the space"
+		refuse kernel_compare_failed "could not compare the staged and booted kernels - this arm must not destroy an update it cannot prove needs the space"
 	fi
 	if [ "$sk" = "$bk" ]; then
-		refuse "the staged $(jq -r '.deployments[0].version' <<<"$status_json") carries the same kernel and initramfs as the booted deployment, so it needs no new /boot slot - whatever is short here, it is not that"
+		refuse kernel_identical "the staged $(jq -r '.deployments[0].version' <<<"$status_json") carries the same kernel and initramfs as the booted deployment, so it needs no new /boot slot - whatever is short here, it is not that"
 	fi
 
 	# IS THE REGISTRY REACHABLE RIGHT NOW? Ordering matters more than the check:
@@ -389,7 +492,7 @@ if [ "$mode" = repair ]; then
 	probe_ref=${probe_ref#*:}; probe_ref=${probe_ref#docker://}
 	if [ -n "$probe_ref" ]; then
 		timeout 20 skopeo inspect --raw "docker://$probe_ref" >/dev/null 2>&1 \
-			|| refuse "cannot reach the registry for $probe_ref - refusing to destroy a staged update that might not come back"
+			|| refuse registry_unreachable "cannot reach the registry for $probe_ref - refusing to destroy a staged update that might not come back"
 	fi
 
 fi

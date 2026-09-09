@@ -1,0 +1,49 @@
+# ==============================================================================
+# Weekly, on the quietest morning that is not already busy
+# ------------------------------------------------------------------------------
+# WEEKLY RATHER THAN NIGHTLY, BECAUSE THE POPULATION MOVES SLOWLY AND THE READ
+# DOES NOT. 725 files at three demux windows each is a real amount of head
+# travel on the one spindle every stream is served from, and what it grades
+# changes at the rate Tdarr finishes transcodes - a handful a day. Nightly would
+# multiply the cost by seven and the coverage by nothing.
+#
+# THURSDAY 05:40 BECAUSE EVERY OTHER SLOT IS SPOKEN FOR. podman-auto-update is
+# ~00:00, the backup 03:00, the CI sweep 04:00, the search sweep 04:30, the
+# mirror 04:42, the agents update 04:59, the credential probe 02:40, and the
+# restore verification Wednesday 05:30. Thursday is the day after that one, so
+# the two longest-running jobs on this host never share a morning.
+#
+# NOT SUNDAY, and that is the one hard constraint rather than a preference. The
+# unattended reboot window is hourly from 05:00 to 09:00 on Sundays and it
+# refuses while a transcode is running; a ninety-minute sweep of the media disk
+# landing in the middle of it is one more thing to rule out when a window is
+# refused, on the one morning of the week that cannot be repeated.
+#
+# Persistent=true SO A HOST THAT WAS OFF DOES NOT SILENTLY SKIP A FORTNIGHT.
+# Weekly is already the longest period on this host outside the restore
+# verifications, and missing one doubles it.
+#
+# AND THEREFORE A ONE-TIME START IS REQUIRED, in host/systemd/README.md beside
+# the enable line. `systemctl --user enable --now` writes the stamp immediately,
+# so there is no missed elapse and the unit does NOT fire - the first sweep
+# would wait a week, and media.keyframe_drift would report "has never run"
+# throughout. Six units have been caught by that; this is the seventh place the
+# README has to name.
+#
+# RandomizedDelaySec= is deliberately SMALL here where every other timer takes
+# ten minutes. The point of those is to stop jobs colliding; this one's slot was
+# chosen to be alone, and a wide jitter would walk it into the 05:30 restore
+# verification on the one week they share a morning.
+# ==============================================================================
+
+[Unit]
+Description=Verify the transcoded library's keyframe grid, weekly
+
+[Timer]
+OnCalendar=Thu *-*-* 05:40:00
+Persistent=true
+RandomizedDelaySec=3min
+AccuracySec=5min
+
+[Install]
+WantedBy=timers.target

@@ -73,6 +73,40 @@ podman run --rm --network net-solver docker.io/library/busybox nc -w3 -z <sonarr
 Distinguish *refused* from *timeout* when reading the result. Connection-refused means the packet
 arrived and only the port was shut - that is not a blocked edge.
 
+**That was the whole of the evidence until 2026-09-09, and it depended on somebody being curious.**
+Between one hand-run probe and the next, the segmentation was an assertion - and the dashboard's own
+drawing said `all isolate=true` in **static text**, which is a claim about the host made by a file
+that never asked it. Two checks read `isolate` and neither read a stack segment:
+`agents.runner_isolation` reads it on `net-conduct-*`, `ci.runner_isolation` on `net-ci-*`. The ten
+networks that decide whether FlareSolverr can reach Sonarr were graded by nothing.
+
+**Two checks now, because the two halves fail differently.** `net.segment_isolation` is hourly and
+is a read: it enumerates `stacks/common/*.network` - the same authority `containers.units_active`
+and `update.policy_count` use - and asserts each segment both *declares* `Options=isolate=true` and
+*reports* it live. Those come apart in both directions. A network cannot be modified in place, so a
+segment whose unit says `isolate=true` can be running without it, created before the line was added
+or recreated by hand; and a live network git does not declare loses the option the next time this
+host is rebuilt. **`isolate` reads EMPTY rather than `false`** for a network created without it,
+which is why only a segment `stacks/` declares can be graded at all.
+
+`net.containment` is the packet, weekly, from `bin/verify-segmentation.sh`. Six edges: the four in
+the table above plus the control, plus Caddy's host publish reached at the LAN address. **The exit
+code is the finding and not merely its sign** - `timeout` returns 124 for a dropped packet, and a
+refusal returns fast for a completely different reason.
+
+**It carries a positive control and throws the run away without one.** Every way that script can
+fail - a missing image, a podman that will not start a container, a renamed network - makes every
+forbidden edge read *dropped*, which is exactly the answer it hopes for. So one edge that MUST
+connect is probed alongside them, and when it does not, the blocked count is discarded and the
+marker says the run proved nothing. An instrument with no control is a failure this repository has
+already recorded once, in the CI post-mortem that had never been printed on a succeeding start.
+
+**Every probe container carries `io.home-server.ephemeral`.** Without it the collector counts it as a
+service - one throwaway `podman run --rm` once made `identity_unresolved` read 1, inflated two counts
+and minted network series under an unbounded label - and `agents.runner_isolation` would see it as a
+stray on a stack segment, which is the exact finding that check exists to raise. An unlabelled probe
+here would make that check fire on this one.
+
 `net-solver` and `net-media` carry most of the value. FlareSolverr exists to run headless Chrome
 against attacker-controlled indexer pages, so it is the likeliest thing here to be compromised;
 Prowlarr is now all it can see. Jellyfin is the inverse - the most exposed service, LAN and public
@@ -184,6 +218,26 @@ of which healed inside the five-minute retry and none of which anything noticed.
 `ingress.ddns_fresh` keys on the age of the newest **success** and grades a sustained failure at
 thirty minutes, six missed cycles clear of the ordinary three-to-seven-minute spread; enumerating
 failure shapes would be chasing a format DuckDNS does not promise.
+
+**And the credential itself is probed rather than assumed, from 2026-09-09.** Everything above
+grades certificates that exist; `ingress.dns_credential` grades whether the token that renews them
+still works, which is the only one of the six that fires BEFORE the failure rather than after it.
+`ingress.renewal_due` is thirty days of warning and is still detection after the path has broken -
+and on this host the path had never run at all, so there was nothing to detect a change in.
+
+**A write, because a read proves the wrong half.** A Gandi PAT carries scopes and DNS-01 needs
+write: a token that can list the zone and not change it authenticates perfectly and renews nothing.
+`bin/probe-credentials.sh` PUTs a TXT rrset at `_acme-challenge-probe` and DELETEs it on a trap -
+deliberately not `_acme-challenge`, which Caddy owns for every hostname it holds and where a probe
+could destroy a challenge mid-issuance.
+
+**Daily, on its own timer, and that is the argument rather than an implementation detail.**
+`agents.publish_configured` had already refused a live credential probe in as many words, on the
+grounds of "~8,760 GitHub auths a year for a credential that almost never changes". That objection
+is to the cadence and it is correct; 365 is a different number. The battery makes no external call
+outside `--routes`, which is manual, so the probe writes a marker and the hourly run grades it -
+the same split the backups and the restore verifications already use. WARN and never FAIL, like the
+rest of the section, or a Gandi outage could block an OS security update.
 
 `ingress.public_dns` is the registrar half, and the only thing in this chain the host does not
 control: it resolves a site block's hostname and asserts it still follows the DuckDNS record. A

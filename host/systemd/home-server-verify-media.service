@@ -1,0 +1,76 @@
+# ==============================================================================
+# Does the library still survive Jellyfin's HLS stream-copy path?
+# ------------------------------------------------------------------------------
+# THE ONE CHECK FOR A FAILURE THAT HAS ACTUALLY HAPPENED, AND IT RAN BY HAND
+# ONLY. bin/verify-media.sh existed for weeks and no unit anywhere referenced
+# it. What it catches is a file whose keyframes are closer together than the 6s
+# HLS segment length: ffmpeg merges consecutive short GOPs until it has six
+# seconds, so segment N holds different media than playlist entry N from the
+# second segment onward and the error ACCUMULATES - measured on one film at
+# +3.838s after one segment and +22.397s after twenty-five. What somebody
+# watching sees is the picture jumping forward and then subtitles that no longer
+# match, and the symptom names neither the cause nor the file.
+#
+# AND THE POPULATION GROWS EVERY DAY. Tdarr writes into library/transcoded
+# continuously - 725 files at the time this was written, 63 films and 662
+# episodes - so a check that runs when somebody remembers it is a check whose
+# coverage falls every week.
+#
+# SAMPLED, NOT --full. Three 120s windows per file, reading packet keyframe
+# FLAGS, which is pure demux: `-skip_frame nokey` would decode, and on a spindle
+# that difference is the whole cost of the script. Reading every library file
+# end to end is the operation that took this host down once already.
+#
+# THROTTLED BECAUSE THE SPINDLE GETS SLOWER WITH CONCURRENCY. /mnt/media is one
+# 7200rpm disk where two readers cost 45% of total throughput and the penalty is
+# head travel rather than layout - so the answer to contention here is fewer
+# jobs, never more bandwidth. Nice, CPUWeight and IOWeight are the same trio
+# home-server-verify-restore.service and the CI sweep carry, and `io` IS
+# delegated to the user manager on this host - host.io_delegated asserts it,
+# because every IOWeight in stacks/ was inert until it was.
+#
+# ExecCondition= AND NOT ExecStartPre=, which is the whole reason the gate lives
+# in the script under --gate. A non-zero ExecCondition is "skip quietly" and
+# leaves the unit NOT failed; an ExecStartPre failure turns an ordinary
+# deferral into a red unit. bin/update-when-idle.sh made exactly this choice for
+# exactly this reason.
+#
+# A DEFERRAL IS WHY media.verify_run GRADES THE MARKER AND NOT THIS UNIT. A
+# skipped run CLEARS ExecMainExitTimestamp rather than leaving it stale, so
+# check_timer_run would report "has never run" and FAIL from the first
+# deferral, on a host that swept the library perfectly a week earlier.
+#
+# TimeoutStartSec= AT NINETY MINUTES. 725 files at three demux windows each,
+# serialised, on a disk that is also serving whatever else wants it. The
+# observed run is well inside that; the ceiling exists because a Type=oneshot
+# blocked forever sits in `activating`, which host.failed_units cannot see - it
+# is neither failed nor a container.
+#
+# EXIT 1 MEANS TWO THINGS and the marker is what separates them: a completed
+# sweep that found drift, and a die() that could not run at all. The script's
+# header says so; media.keyframe_drift reads media_error rather than the code.
+#
+# NO Before= AND NO Wants= ON ANYTHING - not even on jellyfin, which this
+# reaches into. A Wants= would start the container to run a check about it, and
+# the 2026-08-30 outage was an ordering cycle systemd broke by deleting a job
+# with every container healthy and nothing failed.
+#
+# Symlinked into ~/.config/systemd/user/ - see host/systemd/README.md.
+# ==============================================================================
+
+[Unit]
+Description=Verify the transcoded library's keyframe grid
+Documentation=file:/var/home-server/bin/verify-media.sh
+
+[Service]
+Type=oneshot
+ExecCondition=/var/home-server/bin/verify-media.sh --gate
+ExecStart=/var/home-server/bin/verify-media.sh --library \
+          --marker %h/.cache/home-server/media-state
+TimeoutStartSec=90min
+
+Nice=10
+CPUWeight=20
+IOWeight=20
+MemoryHigh=256M
+MemoryMax=384M

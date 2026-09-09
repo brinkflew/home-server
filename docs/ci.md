@@ -585,10 +585,34 @@ turns their pull requests red rather than quietly passing every surface at once.
 set-but-absent case cannot arise from the mount itself, because podman does not create a missing
 bind-mount source - it refuses to start the container.
 
-**Thirty days on `runs/`, and seven would have failed in the worst possible distribution.** One of
+**Thirteen days on `runs/`, and seven would fail in the worst possible distribution.** One of
 their consumers runs when a pull request merges and reads the artifacts of that pull request's LAST
 CI run, which may be weeks old if the branch sat. A 7-day sweep would break exactly the slow-moving
-pull requests and nothing else. Sizing: about 2.5 MB per run against 153 GB free on `/var`.
+pull requests and nothing else, which is why the floor is seven and the refusal below it is hard.
+
+**Thirty is what they asked for and thirty does not fit, which was settled by measurement on
+2026-09-09.** The sizing in this paragraph used to read "about 2.5 MB per run against 153 GB free"
+and was never right. Measured over the 85 runs then in the store, spanning 2026-08-27 to that
+morning: a mean of **506 MB a run at 6.07 runs a day**. So `40960 / 506 / 6.07 = 13.3 days`, and
+the window is thirteen.
+
+**The store had never reached steady state when that was found, which is why nothing looked
+wrong.** It began on 2026-08-27, so at day fourteen of a thirty-day window *nothing had yet been
+evicted* - and it was already 42,976 MB against a 40,960 MB budget. Thirty days at that rate is
+about 92 GB on a volume with 88 GB free. A sweep reporting "swept 0 runs" was correct and told
+nobody anything.
+
+**Better than 99% of a run is one artifact class, and that is the lever this did not pull.** Of a
+536 MB run: 325 MB and 212 MB in the two `e2e-shard-N-nyc` directories - raw per-context Playwright
+coverage JSON, about 130 files of 4 MB - against 1 MB each for `-blob` and `-apicov`. Keeping
+`nyc` for a week and the rest for thirty would put the store near 11 GB. It is **not** done,
+because it breaks the whole-run granularity the next paragraph argues for, on an unverified
+assumption about what in upskald reads raw `nyc` output. Answer that question before taking it.
+
+**The arrival rate is not flat, so `ci.artifact_store` warning again is not this number being
+wrong.** 2026-09-02 to 09-06 saw no runs at all; the three days to 09-09 ran at fifteen a day. At
+fifteen, thirteen days is 98 GB. If it breaches again the answer is the paragraph above, not a
+smaller window.
 
 **The sweep is `bin/ci-artifacts-sweep.sh` on its own daily timer, not part of `gc_lane`.** Every
 other reclaim in `bin/github-runner.sh` operates on a `$LANE_ROOT` exactly one process owns; this

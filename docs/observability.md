@@ -435,8 +435,11 @@ next - and `ImageMajorJumped` beside it is the event half, which does page.
 
 **Four more targeted rules landed on 2026-09-09, and the section-wide alternative was rejected.**
 Only `capacity`, `agents` and `ci` carry a `home_server_check_status{section=...} == 2` matcher, so
-**twenty of the twenty-three sections can WARN and page nobody** - `deploy`, `update` and `metrics`
-among them. `OsImageLagging`, `RebootWindowLost`, `MetricsSeriesBudget` and `ImageMajorJumped` are
+**every other section can WARN and page nobody** - `deploy`, `update` and `metrics` among them, and
+`media` and `net` are the two most recent to need a targeted rule each for exactly this reason. The
+count of sections used to be written here and is not any more: it was "twenty of the twenty-three"
+until `media` made it twenty-four, and a fraction that has to be edited whenever a section is added
+is the same trap as the check count two headings down. `OsImageLagging`, `RebootWindowLost`, `MetricsSeriesBudget` and `ImageMajorJumped` are
 targeted for the same reason `OsImageStale` is. A `deploy` section matcher was considered and
 refused: unlike capacity, agents and ci, that section legitimately carries FAILs which
 `CheckFailing` already delivers, so a `== 2` catch-all would newly page for `deploy.pinned` and
@@ -545,13 +548,16 @@ rules running - safe, but not what you asked for:
 ```bash
 ## The agent fleet
 
-**Nineteen checks, two collector sources and one alert group.** The count has been wrong in this
-paragraph three times now - it said fourteen until 2026-08-28, when `source_fleet` became the
-second source and the Agents page needed the section counted to render it. The count has been wrong
-in this paragraph twice before that - it said twelve when `agents.mirror_fresh` had already made it thirteen - which is
-the ordinary fate of a number written in prose next to a list that grows. It is corrected rather
-than removed because the section's shape is the thing worth stating; if it drifts again, count
-`say agents` to the next `say` in `bin/verify-host.sh`.
+**Two collector sources and one alert group.** There was a check count here and it is gone, which
+is the fourth time this sentence has been touched and the first time it has been made unable to
+drift. It said twelve when `agents.mirror_fresh` had already made it thirteen; fourteen until
+2026-08-28, when `source_fleet` became the second source; nineteen after that, against a section
+that was already 22 by 2026-09-09 and became 24 the same day. Each correction was right and each
+was wrong again within a fortnight, because a number in prose beside a list that grows has only one
+future. `CheckFailing`'s own description had the identical problem and was fixed by DELETING its
+count rather than correcting it a second time; this is that precedent applied. **Count `say agents`
+to the next `say` in `bin/verify-host.sh`** - the number is one command away and always current,
+which is worth more than a stale one written down.
 
 **They were written before the thing they measure**, which was deliberate rather than premature: a
 fleet that spends quota before anything reads the quota is the failure the whole of this file exists

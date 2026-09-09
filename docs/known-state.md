@@ -5720,3 +5720,144 @@ service on the rack read **memory starved**. Nothing on the host was.
   rather than by remembering. The DuckDNS half is deliberately absent from the collector for the
   same reason: the battery's fact already reaches that file, and a second reading on a different
   schedule is the shape this repository has recorded going wrong twice.
+
+## Nineteen refusals nothing wrote down, and a check that read their silence as health
+
+- **`bin/reclaim-boot-slot.sh`'s `refuse()` was `printf; exit 0` and wrote NOTHING**, while
+  `write_state()` - the only writer - always set `boot_reclaim_at`. So `deploy.boot_reclaim` read
+  the ABSENCE of that key as "the reclaim has not had to do anything yet", which is true on a quiet
+  week and false in exactly the state the script exists for. Its own `boot_reclaim_error` arm was
+  unreachable: it sits behind a non-empty `boot_reclaim_at` that only a SUCCESSFUL reclaim writes.
+- **Measured, and this is what it cost.** On 2026-09-06 `bin/reboot-when-staged.sh` refused five
+  times for `/boot has only 26M free (want 160M) and 44.20260817.3.2 is STAGED`. This script ran
+  every thirty minutes throughout and on 2026-09-07 at 23:01:21 was dying at its own lock with
+  `Permission denied`. `deploy.boot_reclaim` reported `pass` for all of it, and the host spent 21
+  days behind a CRITICAL advisory. The lock bug was fixed the same evening and the space was already
+  free by then, so **the repair arm had still never run against the real condition**.
+- `bin/reboot-when-staged.sh` had learned this first: its `refuse()` takes a tag as `$1` and records
+  `window_refused_(at|tag)`. The reclaim never got the same treatment, and the two files sit beside
+  each other.
+- **NO EXCLUSION LIST HERE, which is the one way it differs.** That file must skip `nothing_staged`
+  because the absence of work reaches its `refuse()`; here the absence of work is the `note` at the
+  df gate, which exits without calling it. Every call that reaches `refuse()` had work in front of
+  it.
+- **A refusal is cleared by TWO things and only one of them was obvious.** `write_state()` clears it
+  on a successful reclaim; the df gate clears it the moment `/boot` is found to have room. Without
+  the second, a transient refusal - a backup running, an rpm-ostree transaction - would leave a tag
+  standing until the next real reclaim, which may be never, and the check would warn for weeks about
+  a condition that resolved itself in half an hour. `/boot` having room IS the statement "whatever
+  that refusal was about, it is not costing a slot now".
+- **The clear is guarded on the record existing**, because that path runs 48 times a day and does
+  nothing on 47 of them. One `grep` of a file measured in hundreds of bytes, and the write happens
+  once per resolution.
+- **Its own temp name, not the bare `$STATE.tmp`.** Six programs write `boot-state` and
+  `bin/reboot-when-staged.sh` is one of them, refusing on Sunday mornings between 05:00 and 09:00 -
+  which is when a reclaim refusing for want of a slot is at its most likely, and its timer fires at
+  :04 and :34 through exactly that window. `bin/verify-restore.sh` records the same hazard.
+- **The FAIL arm had to stay first and unconditional.** A destroyed-and-not-restaged update can
+  coexist with a later refusal - the repair arm's own `restage_repeat` is that shape - so putting
+  the refusal ahead of it would mask the only FAIL this check has behind a warning.
+- Six hours, and the number is set by the CADENCE rather than by the harm: the timer runs every
+  thirty minutes, so six hours is twelve consecutive refusals, past every transient shape and into
+  the structural ones. `BootReclaimRefused` needs its own rule because `deploy` has no section-wide
+  warn matcher, refused by design.
+- **`reboot.window_refused` says what it can see now.** Its recorder landed on 2026-09-06, so an
+  absent key means "nothing has refused since something started writing them down" and not "nothing
+  has ever refused" - the same distinction, one file over.
+
+## The credential that renews everything, which nothing had ever asked
+
+- **Two checks ended their own PASS message admitting this.** `agents.model_credential` closed with
+  "neither of which proves the token still authenticates" and `agents.publish_configured` with the
+  same sentence about two credentials - correctly, because a read of the filesystem establishes
+  presence and freshness and can establish nothing else. A revoked token then reads green in both,
+  green in the podman secret, and fails twenty minutes into a phase.
+- **The third was worse because it had never been exercised at all.** Every certificate on this host
+  was its FIRST issuance, so `GANDI_BEARER_TOKEN` had not answered a DNS-01 challenge since the
+  migration. Measured 2026-09-09: the first renewal Caddy had scheduled was **2026-10-10T01:46:54Z**,
+  and ten of the fifteen certificates were issued within seven seconds of each other on 2026-08-11
+  and expire together on 2026-11-09.
+- **A WRITE, because a read proves the wrong half.** A Gandi PAT carries scopes and DNS-01 needs
+  write: a token that can list the zone and not change it authenticates perfectly and renews
+  nothing. The probe PUTs a TXT rrset and DELETEs it on a trap, at `_acme-challenge-probe` -
+  deliberately not `_acme-challenge`, which Caddy owns for every hostname and where a probe could
+  destroy a challenge mid-issuance.
+- **DAILY IS THE WHOLE ARGUMENT, AND IT IS NOT A REVERSAL.** `agents.publish_configured` rejected a
+  live probe on the explicit grounds of "~8,760 GitHub auths a year for a credential that almost
+  never changes". That is an objection to the cadence and it is right. 365 is a different number,
+  and the battery still makes no external call outside `--routes` - the probe writes a marker and
+  the hourly run grades it, the split the backups already use.
+- **Only 401 is a finding on the model leg, and the narrowing is deliberate.** This is a
+  `claude setup-token` OAuth credential with scopes, and one has already been measured answering
+  **403 `user:profile`** to an endpoint it was not entitled to - a scope refusal from a token that
+  authenticates perfectly. Reading 403 as revoked would warn for ever about a working fleet.
+- **`skipped` is a different sentence from `failed`, and conflating them would have been the whole
+  bug.** A missing token is already reported by two other checks and a network that could not be
+  reached says nothing about a credential. Recording either as a rejection would destroy the one
+  property that makes the marker worth having: that `failed` means one thing.
+- **Half-proven is a real answer.** Windmill stores a secret workspace variable ENCRYPTED, so what
+  the probe reads back is not usable as a bearer token and must not be sent as one. The publish leg
+  says the push key authenticates and that only half of it was proven, rather than implying both.
+- `ingress.dns_credential` is WARN and never FAIL, like the rest of its section: this battery's exit
+  code decides an OS rollback under `--greenboot`, and a Gandi outage must not block a security
+  update. It needs a targeted rule because that section refused a section-wide matcher on the record.
+
+## The drawing asserted the segmentation and the packet was somebody's curiosity
+
+- **Two checks read `isolate` and neither read a stack segment.**
+  `agents.runner_isolation` reads it on `net-conduct-*` and `ci.runner_isolation` on `net-ci-*`; the
+  ten networks in `stacks/common/` - the ones deciding whether FlareSolverr can reach Sonarr - were
+  graded by nothing, while the dashboard drew `all isolate=true` as **static text in the bundle**.
+- **Isolation is not free under podman and that is why it matters.** Netavark does not inherit
+  Docker's inter-bridge isolation, so these networks created plain are fully routable - measured on
+  this host before the option was adopted, with `net-solver`, `net-media`, `net-egress` and
+  `net-transcode` all reaching Sonarr by IP. The topology looked segmented and was flat, and every
+  unit file read identically either way.
+- **Declared and live are two questions and both are asked.** A network cannot be modified in place,
+  so a segment whose unit says `isolate=true` can be running without it; and a live network git does
+  not declare loses the option at the next rebuild. **`isolate` reads EMPTY rather than `false`**,
+  which is why only a segment `stacks/` declares can be graded at all, and why absent is told from
+  un-isolated by `podman network exists` rather than by the empty string.
+- **The read is hourly and the packet is weekly, and the split is the one this repository already
+  drew.** "Do the networks still carry it?" costs two `podman network inspect` calls a segment; "is
+  it enforced by the kernel?" costs a container per edge, which hourly is 52,560 a year for a
+  property that changes when somebody edits a unit file.
+- **The exit code is the finding, not merely its sign.** `timeout` returns 124 for a silently dropped
+  packet, which is a blocked edge; a refusal returns fast and non-zero because the packet ARRIVED
+  and only the port was shut. That is not isolation - it opens the moment anything listens there -
+  so `net.containment` counts a refusal alongside an open connection.
+- **THERE IS A POSITIVE CONTROL AND THE RUN IS DISCARDED WITHOUT IT.** Every way the probe can fail -
+  a missing image, a podman that will not start a container, a renamed network - makes every
+  forbidden edge read `dropped`, which is the answer it hopes for. One edge that must connect is
+  probed alongside them, and when it does not the blocked count is thrown away and the marker says
+  the run proved nothing. The instrument-with-no-control failure, avoided in advance this time.
+- **Every probe carries `io.home-server.ephemeral`, and without it this check would fire another
+  one.** The collector would count the probe as a service, and `agents.runner_isolation` would see
+  it as a stray on a stack segment - which is precisely the finding that check exists to raise.
+- Both ids are `critical` rather than `warning`, matching `AgentContainmentLost`: `net` had no
+  section matcher and no rule of any kind, so before this they could only have paged through
+  `CheckFailing` at `== 3`, which neither ever emits.
+
+## The store was over budget on day fourteen with nothing yet evicted
+
+- **`ci.artifact_store` was breaching a budget derived the same morning, and the budget was right.**
+  40,960 MB comes from what `/var` can afford; the check's own comment ended by naming the retention
+  window as the number that has to move. This is that sentence carried out.
+- **Measured 2026-09-09 over the 85 runs then in the store**, spanning 2026-08-27 to that morning:
+  42,976 MB at **506 MB a run and 6.07 runs a day**. So `40960 / 506 / 6.07 = 13.3 days`, and
+  `CI_ARTIFACT_KEEP_DAYS` moved from 30 to 13.
+- **THE STORE HAD NEVER EVICTED ANYTHING.** It began on 08-27, so at day fourteen of a thirty-day
+  window the first eviction was still 2026-09-26 away - and it was already over budget. Thirty days
+  at that rate is about 92 GB on a volume with 88 GB free. The comment being replaced asked for this
+  decision to be taken "with the first real eviction observed"; that condition assumed the store
+  would still fit when it arrived, and waiting for it meant watching the store double first.
+- **Better than 99% of a run is ONE artifact class.** Of a 536 MB run: 325 MB and 212 MB in the two
+  `e2e-shard-N-nyc` directories - raw per-context Playwright coverage JSON, about 130 files of 4 MB -
+  against 1 MB each for `-blob` and `-apicov`. Keeping `nyc` for a week and the rest for thirty would
+  put the store near 11 GB.
+- **That lever was deliberately NOT pulled.** It breaks the sweep's whole-run granularity, which
+  exists because a half-swept run reads to a consumer as "never uploaded" rather than "expired" - on
+  an unverified assumption about what in upskald reads raw `nyc` output. Answer that question first.
+- **The arrival rate is not flat, so this warning again is not the number being wrong.** 2026-09-02
+  to 09-06 saw no runs at all; the three days to 09-09 ran at fifteen a day. At fifteen, thirteen
+  days is 98 GB.
