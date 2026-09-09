@@ -59,19 +59,51 @@ const notices = computed<Notice[]>(() => {
       });
     }
 
+    // FIVE STATES, AND EACH SENTENCE IS TRUE ONLY IN ITS OWN. There were two,
+    // and "has never reported" was shown for a collector that had run two
+    // seconds earlier and written 1,876 series - because a single failing
+    // source made it omit its success stamp, and an absent series read as
+    // never. The state machine is host.collectorState; only the wording is
+    // here.
     const collector = host.collectorFreshness;
-    if (collector.missing) {
-      out.push({
-        tone: "warn",
-        title: "metrics collector has never reported",
-        detail: "bin/collect-metrics.py writes the host series. Check home-server-metrics.timer.",
-      });
-    } else if (collector.stale) {
-      out.push({
-        tone: "fail",
-        title: `metrics collector last ran ${duration(collector.age)} ago`,
-        detail: "filesystems, container memory, GPU, disks and the check mirror are all frozen.",
-      });
+    const ran = host.collectorRunFreshness;
+    switch (host.collectorState) {
+      case "never":
+        out.push({
+          tone: "warn",
+          title: "metrics collector has never reported",
+          detail: "bin/collect-metrics.py writes the host series. Check home-server-metrics.timer.",
+        });
+        break;
+      case "frozen":
+        out.push({
+          tone: "fail",
+          title: `metrics collector last ran ${duration(ran.age)} ago`,
+          detail: "filesystems, container memory, GPU, disks and the check mirror are all frozen.",
+        });
+        break;
+      case "starting":
+        out.push({
+          tone: "warn",
+          title: "metrics collector has not completed a full pass",
+          detail:
+            "it is running, but no run has yet finished every source, so parts of these pages " +
+            "are still empty rather than zero.",
+        });
+        break;
+      case "degraded":
+        out.push({
+          tone: "warn",
+          // NOT "last ran": it ran seconds ago. What is old is the last
+          // COMPLETE pass, and saying otherwise sends somebody to look at a
+          // timer that is working perfectly.
+          title: `metrics collector degraded for ${duration(collector.age)}`,
+          detail: host.failedSources.length
+            ? `${host.failedSources.join(", ")} ${host.failedSources.length === 1 ? "is" : "are"} ` +
+              "failing; everything else on these pages is current."
+            : "a source or a file write is failing; everything else on these pages is current.",
+        });
+        break;
     }
   }
 

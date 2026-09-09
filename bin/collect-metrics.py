@@ -70,6 +70,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import unicodedata
 import urllib.request
 from urllib.parse import urlparse
 
@@ -1898,6 +1899,64 @@ CLIENT_UNAVAILABLE = object()
 MISSING_CLIENT = set()
 
 
+def fold_ascii(value):
+    """Strip accents so a place name cannot cost the whole exposition file.
+
+    write_textfile() refuses a file outright on any non-ASCII byte, and it is
+    RIGHT to: this repository's rule is that media titles never reach a label,
+    because a 400-day history of who watched what is surveillance of the
+    household rather than monitoring of a machine. That guard stays absolute.
+
+    But gluetun answered `Zurich` with an umlaut on 2026-09-01, and the guard
+    fired 278 times in three days - dropping ~40 unrelated slow-tier series
+    (disks, SMART) every time, and reporting it as "a title has reached a
+    label", which was a misdiagnosis. A city is not a title.
+
+    FOLDED HERE AND NOT IN Metrics.add(), deliberately. Folding every label
+    value everywhere would launder `Amelie` through the exact guard that exists
+    to catch it. This is applied only to the three vpn_info labels, which are
+    place and company names from a VPN exit list - `Zurich` and the umlauted
+    spelling are the same exit, and the question the series answers is "where is
+    the tunnel landing".
+    """
+    return unicodedata.normalize("NFKD", str(value)) \
+        .encode("ascii", "ignore").decode("ascii")
+
+
+def jellyfin_auth(key):
+    r"""The one Jellyfin credential header, in the one spelling that survives
+    every transport here.
+
+    JELLYFIN 12 REMOVED BOTH OF THE SHORTHANDS. `X-Emby-Token:` and the
+    `?api_key=` query parameter answer 401 from 12.0.0 onward, and the upgrade
+    arrived overnight through `:latest` on 2026-09-09 - the container started
+    healthy, so nothing rolled back and nothing failed. Only the callers broke.
+
+    THE TOKEN IS DELIBERATELY NOT QUOTED, and that is the whole reason this
+    function exists rather than a literal at each call site. api_get() below
+    builds a `curl -K` config whose values are ALREADY double-quoted
+    (`header = "%s"`), so a quoted token embeds quotes in that value - and
+    curl's config parser does not unescape `\"` the way a shell does. Measured,
+    reading the header off the wire with `curl -v`:
+
+        header = "...Token="KEY""      sends  Token="KEY"   200, by luck
+        header = "...Token=\"KEY\""    sends  Token=\        401, TRUNCATED
+        header = "...Token=KEY"        sends  Token=KEY     200
+
+    The obvious escaping is the one that breaks it, and it fails as a 401 that
+    names nothing. Unquoted carries no quote character at all, so it is safe
+    through the `curl -K` config, through the wget fallback's `--header="$h"`,
+    through the heredoc in bin/jellyfin-watching.sh, and on argv in
+    bin/promote-transcoded.py.
+
+    THE SAME HEADER IS BUILT IN TWO OTHER FILES that cannot import this one:
+    bin/jellyfin-watching.sh and bin/promote-transcoded.py. There is no shared
+    module between a shell script and two standalone programs, so those two name
+    this function and this function names them. Change one, change all three.
+    """
+    return ["Authorization: MediaBrowser Token=" + key]
+
+
 def api_get(container, url, headers=None, timeout=12):
     """A GET inside a container, with the credential passed on STDIN not argv.
 
@@ -2119,9 +2178,19 @@ def source_jellyfin(m):
     # config restore can do silently.
     encoding = api_get("jellyfin",
                        "http://localhost:8096/System/Configuration/encoding",
-                       ["X-Emby-Token: " + key])
+                       jellyfin_auth(key))
     system = api_get("jellyfin", "http://localhost:8096/System/Configuration",
-                     ["X-Emby-Token: " + key])
+                     jellyfin_auth(key))
+    # A REFUSAL MUST RAISE, or this source reports success having emitted
+    # nothing. Every read below is guarded with `if isinstance(...)` / `is not
+    # None`, which is right for a field that is legitimately absent and WRONG
+    # for a server that refused the whole call: when Jellyfin 12 stopped
+    # accepting the old header, all four hwaccel switches simply vanished from
+    # the TSDB while home_server_collector_source_up{source="jellyfin"} stayed
+    # 1. Same shape as the vpn_info absence that CollectorClientUnavailable was
+    # written for, and the reason source_torrent raises on the same condition.
+    if not isinstance(encoding, dict) or not isinstance(system, dict):
+        raise RuntimeError("jellyfin did not answer /System/Configuration")
     trickplay = (system or {}).get("TrickplayOptions") or {}
     for feature, value in (
             ("playback_encode", (encoding or {}).get("EnableHardwareEncoding")),
@@ -2213,10 +2282,12 @@ def source_torrent(m):
         # reconnect, so it would mint a new series a day for ever. The region
         # does not, and answers the question actually being asked - is the
         # tunnel up, and is it landing where it should.
+        # fold_ascii, because gluetun answers real place names: `Zurich` with
+        # an umlaut cost the whole slow-tier file 278 times in three days.
         m.add("home_server_vpn_info", 1,
-              {"country": str(location.get("country", "")),
-               "city": str(location.get("city", "")),
-               "organization": str(location.get("organization", ""))},
+              {"country": fold_ascii(location.get("country", "")),
+               "city": fold_ascii(location.get("city", "")),
+               "organization": fold_ascii(location.get("organization", ""))},
               "Where the VPN is currently exiting. The tunnel being up at all "
               "is home_server_container_health{container=\"gluetun\"}, which "
               "has a 5s interval because it is the kill-switch.")
@@ -2339,7 +2410,7 @@ def source_playback(m, doc):
         doc.set("sessions", [])
         raise RuntimeError("JELLYFIN_API_KEY is not set")
     sessions = api_get("jellyfin", "http://localhost:8096/Sessions",
-                       ["X-Emby-Token: " + key])
+                       jellyfin_auth(key))
     if not isinstance(sessions, list):
         doc.note("jellyfin", False, "sessions did not answer")
         doc.set("sessions", [])
@@ -2813,7 +2884,7 @@ def source_catalogue(m, doc):
     env = load_env()
     key = env.get("JELLYFIN_API_KEY", "")
     if key:
-        hdr = ["X-Emby-Token: " + key]
+        hdr = jellyfin_auth(key)
         counts = api_get("jellyfin", "http://localhost:8096/Items/Counts", hdr)
         if isinstance(counts, dict):
             for field, kind in (("MovieCount", "movies"),
@@ -2845,12 +2916,31 @@ def source_catalogue(m, doc):
                   "Items Jellyfin first saw in the last seven days.")
         else:
             doc.note("jellyfin", False, "item list did not answer")
+        refused = ("jellyfin did not answer the catalogue queries"
+                   if not isinstance(counts, dict) or not isinstance(items, list)
+                   else "")
     else:
         doc.note("jellyfin", False, "JELLYFIN_API_KEY is not set")
+        refused = "JELLYFIN_API_KEY is not set"
 
+    # HALF THIS SOURCE DOES NOT NEED JELLYFIN AT ALL, so the refusal is raised
+    # at the END rather than where it is discovered. _library_sizes walks the
+    # disk and _attention_rows reads what is already in `m`; failing early would
+    # blank a Library page for an upstream neither of them talks to.
+    #
+    # BUT IT MUST STILL RAISE. Every Jellyfin read above is guarded, which is
+    # right for a legitimately absent field and wrong for a server that refused:
+    # under Jellyfin 12 home_server_library_items simply stopped existing while
+    # this source went on reporting source_up 1, and nothing anywhere noticed.
+    # doc.note(..., False) has already recorded WHICH upstream was refused, so
+    # the document half stays honest either way - the contract source_playback
+    # follows, and the reason main() still writes a document for a source that
+    # raised.
     _library_sizes(m, env, doc)
     doc.set("attention", _attention_rows(m, doc))
     doc.set("totals", _subtitle_totals(m, env, doc))
+    if refused:
+        raise RuntimeError(refused)
 
 
 def _subtitle_totals(m, env, doc):
@@ -5424,11 +5514,13 @@ def write_document(path, body):
         return False
 
 
-def write_marker(ok, started, duration, failed, series):
-    """key=value, ISO-8601 UTC, tmp+mv - the backup-state convention exactly.
+def read_marker():
+    """The previous run's marker as a dict, empty when there is not one yet.
 
-    last_ok_at only advances on a successful run, so "failing since Tuesday" and
-    "has never once run" do not look alike.
+    TWO CALLERS, WHICH IS WHY IT IS A FUNCTION. write_marker() needs the old
+    last_ok_at to carry it forward, and main() needs the same value BEFORE it
+    renders, to stamp the series a failing run must still emit. Those two must
+    never disagree about what the last success was.
     """
     previous = {}
     try:
@@ -5438,6 +5530,63 @@ def write_marker(ok, started, duration, failed, series):
                 previous[key] = value
     except OSError:
         pass
+    return previous
+
+
+def degraded_sources(failed, ran, previous):
+    """Which sources are currently broken - THIS RUN'S FAILURES PLUS THE ONES A
+    SKIPPED SOURCE IS STILL CARRYING.
+
+    CARRY-FORWARD ALONE SAWTOOTHS, AND WOULD HAVE MADE THE WHOLE FIX
+    DECORATIVE. The slow tier runs one tick in ten, and `jellyfin`, `catalogue`
+    and `torrent` are all slow. On the nine ticks a slow source is SKIPPED it is
+    not in `failed`, so the run reads clean and the success timestamp is stamped
+    `now` again - the series jumps back to fresh, `for: 5m` never holds, and an
+    alert on a broken slow source can never fire. That is the same shape as the
+    restart counter that reset on every restart.
+
+    So a source that did not run keeps the verdict it had. That is not a
+    heuristic: it is exactly what the slow .prom does on disk, where its
+    source_up 0 is left in place between slow ticks rather than blinking out.
+
+    SELF-LIMITING BY CONSTRUCTION, which is the trap this would otherwise be in
+    six months: only a name still in SOURCES can be carried, so deleting a
+    source drops its verdict rather than leaving the fleet degraded for ever.
+    The write pseudo-names (`write`, `write_slow`, `write_<doc>`) are never in
+    `skipped` either, and correctly so - a write is attempted on every run, so
+    it always has a fresh verdict of its own.
+    """
+    known = {name for name, _fn, _slow, _doc in SOURCES}
+    skipped = known - ran
+    carried = [name for name in previous.get("sources_failed", "").split(",")
+               if name in skipped]
+    return sorted(set(failed) | set(carried))
+
+
+def marker_last_ok_epoch(previous):
+    """The marker's last_ok_at as epoch seconds, or None when there is none.
+
+    None means "this collector has never once succeeded", which is a REAL state
+    and must stay distinguishable from "it succeeded and then started failing" -
+    see the four-state table in main().
+    """
+    stamp = previous.get("last_ok_at", "")
+    if not stamp:
+        return None
+    try:
+        return calendar.timegm(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ"))
+    except ValueError:
+        return None
+
+
+def write_marker(ok, started, duration, failed, series, previous=None):
+    """key=value, ISO-8601 UTC, tmp+mv - the backup-state convention exactly.
+
+    last_ok_at only advances on a successful run, so "failing since Tuesday" and
+    "has never once run" do not look alike.
+    """
+    if previous is None:
+        previous = read_marker()
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started))
     state = {
         "last_run_at": stamp,
@@ -5483,16 +5632,23 @@ def main():
     slow_due = ("--slow" in sys.argv or only is not None
                 or int(started) % 300 < 30)
 
+    # Read BEFORE the sources run, because a failing run still has to publish
+    # when it last succeeded and write_marker() is what would otherwise be the
+    # only reader - and it runs at the end, after the render.
+    previous = read_marker()
+
     m = Metrics()
     slow = Metrics()
     docs = {key: Document() for key in _DOC_PATHS}
     wrote_doc = set()
     failed = []
+    ran = set()
     for name, fn, is_slow, doc_key in SOURCES:
         if only and name != only:
             continue
         if is_slow and not slow_due:
             continue
+        ran.add(name)
         target = slow if is_slow else m
         t0 = now()
         try:
@@ -5521,12 +5677,83 @@ def main():
                    "%.4f" % (now() - t0), {"source": name},
                    "Wall time for this source.")
 
+    # THE SLOW TIER AND THE DOCUMENTS ARE WRITTEN FIRST, and the fast textfile
+    # last. The order is load-bearing rather than tidy: a write failure is
+    # appended to `failed`, and until this moved, every one of them happened
+    # AFTER the success timestamp had already been computed - so a slow-tier
+    # write that failed could never affect it. That is how a Zurich run (see
+    # write_textfile) left this file, and therefore the dashboard, looking
+    # perfectly healthy while write_marker recorded a failure and
+    # bin/verify-host.sh warned. One truth, two readers, opposite answers.
+    #
+    # The FAST file's own write failure is deliberately still not folded back
+    # in, and cannot be: this file is what would have to carry the correction,
+    # so a failure to write it leaves the previous file - with the previous
+    # timestamp - in place, which already reads as frozen.
+    #
+    # A scrape landing mid-run now sees old-fast plus new-slow rather than
+    # new-fast plus old-slow. That is no worse: the two files share no
+    # metric-and-label pair, which is the invariant source_jellyfin's docstring
+    # already depends on.
+    #
+    # A FAILED SLOW WRITE NO LONGER ALSO APPENDS "write". It used to append
+    # both, and now that the fast write is the last thing to run, "write" means
+    # specifically that THIS file could not be replaced - a different fault with
+    # a different remedy. bin/verify-host.sh's metrics.collector_fresh is the
+    # only reader of the list and prints it verbatim.
+    if not to_stdout:
+        # Only rewritten when the slow tier actually ran. Left alone otherwise,
+        # so node-exporter keeps serving the previous values instead of the
+        # series blinking out for nine ticks in ten.
+        if slow.count and not write_textfile(TEXTFILE_SLOW, slow.render()):
+            failed.append("write_slow")
+        # Same rule for the documents, and for the same reason: the slow one is
+        # left alone on a fast-only tick rather than rewritten empty. Its own
+        # generated_at is what tells the page how old it is, so a carried-forward
+        # file cannot read as current.
+        for key in sorted(wrote_doc):
+            if not write_document(_doc_path(key), docs[key].render(started)):
+                failed.append("write_%s" % key)
+
     duration = now() - started
+    degraded = degraded_sources(failed, ran, previous)
+
+    # WHEN THIS COLLECTOR LAST COMPLETED EVERY SOURCE. Four states, and the
+    # whole point is that they stay four:
+    #
+    #   every source ok      -> this run's start
+    #   alive but DEGRADED   -> the previous success, so the age grows
+    #   the collector died   -> stops advancing, so the age grows
+    #   never once succeeded -> NO SAMPLE, which is the honest "never"
+    #
+    # THE SECOND ROW USED TO BE THE FOURTH. Writing None on any failure omitted
+    # the sample, so one failing source of twenty-two made this series vanish -
+    # and an absent series is not a large age, it is nothing at all. The
+    # dashboard's banner read `missing` and said "the metrics collector has
+    # never reported" about a collector that had run two seconds earlier and
+    # written 1,876 series, while MetricsCollectorStale could not fire AT ALL,
+    # because `time() - <absent>` is an empty vector rather than a big number.
+    # A source was broken for two hours and nothing anywhere said so.
+    #
+    # write_marker() below had this right the whole time - it carries
+    # last_ok_at forward - which is why bin/verify-host.sh's
+    # metrics.collector_fresh reported the age correctly while the dashboard
+    # claimed "never". One truth, two readers, and only one of them carried it.
+    #
+    # IT IS `degraded` AND NOT `failed`, because a skipped slow source has no
+    # verdict of its own this tick - see degraded_sources(), which is the half
+    # that stops this sawtoothing back to fresh nine ticks in ten.
+    #
+    # A TIMESTAMP, NOT AN AGE, still: an age gauge freezes at its last value
+    # and reads '30 seconds old' for ever after the collector dies.
+    last_ok = started if not degraded else marker_last_ok_epoch(previous)
     m.add("home_server_collector_last_success_timestamp_seconds",
-          "%.3f" % started if not failed else None, None,
+          "%.3f" % last_ok if last_ok is not None else None, None,
           "When this collector last completed every source. A TIMESTAMP, not "
           "an age: an age gauge freezes at its last value and reads '30 seconds "
-          "old' for ever after the collector dies.")
+          "old' for ever after the collector dies. Held at the last success "
+          "while a source is failing, and absent only when there has never "
+          "been one.")
     m.add("home_server_collector_duration_seconds", "%.4f" % duration, None,
           "Wall time for the whole run.")
     # Zero is written explicitly rather than omitted, because this series exists
@@ -5549,24 +5776,23 @@ def main():
         for key in sorted(wrote_doc):
             sys.stdout.write("# %s\n%s" % (os.path.basename(_doc_path(key)),
                                            docs[key].render(started)))
-    else:
-        if not write_textfile(TEXTFILE, m.render()):
-            failed.append("write")
-        # Only rewritten when the slow tier actually ran. Left alone otherwise,
-        # so node-exporter keeps serving the previous values instead of the
-        # series blinking out for nine ticks in ten.
-        if slow.count and not write_textfile(TEXTFILE_SLOW, slow.render()):
-            failed.append("write_slow")
-            failed.append("write")
-        # Same rule for the documents, and for the same reason: the slow one is
-        # left alone on a fast-only tick rather than rewritten empty. Its own
-        # generated_at is what tells the page how old it is, so a carried-forward
-        # file cannot read as current.
-        for key in sorted(wrote_doc):
-            if not write_document(_doc_path(key), docs[key].render(started)):
-                failed.append("write_%s" % key)
+        # --print WRITES NOTHING, AND THAT HAS TO INCLUDE THE MARKER. It used
+        # to fall through to write_marker below, so the by-hand debugging path -
+        # the one used to check whether a source is fixed - stamped a success
+        # into the file bin/verify-host.sh reads, and handed metrics.collector_fresh
+        # a false all-clear. A diagnostic must not be able to answer the check.
+        return 1 if failed else 0
 
-    write_marker(not failed, started, duration, failed, m.count)
+    if not write_textfile(TEXTFILE, m.render()):
+        failed.append("write")
+        degraded = degraded_sources(failed, ran, previous)
+
+    write_marker(not degraded, started, duration, degraded, m.count, previous)
+    # THE EXIT CODE IS THIS INVOCATION'S OWN WORK, not the sticky verdict: a
+    # tick that did everything asked of it exits 0 even while a slow source it
+    # did not run is still carrying a failure. The timestamp above is what says
+    # the exposition is incomplete. home-server-metrics.service carries
+    # SuccessExitStatus=0 1 either way, so this cannot park the unit failed.
     return 1 if failed else 0
 
 

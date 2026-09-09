@@ -4023,6 +4023,16 @@ if [ -z "$GREENBOOT" ]; then
 	# a minute ago has legitimately not collected anything yet.
 	m_ok=$(sed -n 's/^last_ok_at=//p' \
 		"$HOME/.cache/home-server/metrics-state" 2>/dev/null | tail -1)
+	# WHICH SOURCE, which this check could not say for the two hours it spent
+	# correctly reporting an age nobody could act on. The marker's list is
+	# STICKY - a slow source that did not run this tick keeps its verdict, see
+	# degraded_sources() - so an hourly battery can sample it at all; before
+	# that it was empty on nine ticks in ten and this would have read clean
+	# ~90% of the time it was asked.
+	m_failed=$(sed -n 's/^sources_failed=//p' \
+		"$HOME/.cache/home-server/metrics-state" 2>/dev/null | tail -1)
+	m_why=
+	[ -z "$m_failed" ] || m_why=" - $(printf '%s' "$m_failed" | tr ',' ' ') failing"
 	m_age=
 	if [ -n "$m_ok" ]; then
 		m_epoch=$(date -d "$m_ok" +%s 2>/dev/null)
@@ -4031,13 +4041,17 @@ if [ -z "$GREENBOOT" ]; then
 	if [ -n "$m_age" ] && [ "$m_age" -le 300 ]; then
 		ok metrics.collector_fresh "metrics collected ${m_age}s ago"
 	elif [ -n "$m_age" ]; then
-		warn metrics.collector_fresh "the last successful collection was ${m_age}s ago, limit 300s - those graphs are showing a gap, not a healthy host"
+		warn metrics.collector_fresh "the last successful collection was ${m_age}s ago, limit 300s${m_why} - those graphs are showing a gap, not a healthy host"
 	elif [ "${uptime_s:-0}" -lt 120 ]; then
 		ok metrics.collector_fresh "nothing collected in the ${uptime_s}s since boot - not yet due"
 	else
-		warn metrics.collector_fresh "the collector has no record of a successful run"
+		warn metrics.collector_fresh "the collector has no record of a successful run${m_why}"
 	fi
 	fact metrics_last_ok_at "${m_ok:-}"
+	# A STRING, so source_status mints no home_server_metrics_sources_failed
+	# from it - only bool and numeric facts become series, which is what keeps
+	# this clear of bin/lint-repo.sh's fact/metric collision leg.
+	fact metrics_sources_failed "${m_failed:-}"
 	fact metrics_collect_age_s "${m_age:-}" num
 
 	# Endpoints that need no URL encoding are chosen deliberately. The

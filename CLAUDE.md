@@ -1701,6 +1701,39 @@ signal read green.
   so `network.ts` and `services.ts` did not change and every `smoke.mjs` assertion is the regression
   test for the move.
 
+### A major version arrived through `:latest` and only the callers broke
+- Jellyfin 10.11 -> **12.0.0** overnight; `X-Emby-Token:` and `?api_key=` both **401**, and
+  `Authorization: MediaBrowser Token=<key>` is what is left. Every response SHAPE is unchanged, so
+  it was auth only - and the container started healthy, so the rollback had nothing to act on.
+- **The escaping that looks right is the one that breaks it**: curl's `-K` config does not unescape
+  `\"`, so a quoted token is sent truncated and 401s. Unquoted is the only spelling safe through
+  all four transports at once.
+- Two of the three collector sources GUARDED rather than raised, so `source_up` stayed 1 while their
+  series simply stopped existing. The two playback gates then behaved exactly as designed, which is
+  the whole cost: the Sunday reboot window starved and the nightly update stopped checking.
+
+### An omitted sample is not an old one, and it silenced the alert written for it
+- The collector OMITTED its success stamp on any failure, so one source of twenty-two made the
+  series vanish - the banner said "has never reported" about a collector that had run two seconds
+  earlier, and `MetricsCollectorStale` could not fire at all, because `time() - <absent>` is an
+  empty vector. `write_marker` had carried it forward correctly the whole time.
+- **Carry-forward alone would have been decorative**: a broken SLOW source is absent from `failed`
+  on nine ticks in ten, so the stamp sawtooths back to fresh and no `for:` window holds. The verdict
+  is sticky, the writes moved above the stamp, and `--print` no longer writes the marker.
+- `home_server_collector_source_up` had never had a consumer. `MetricsCollectorStale` now reads
+  `node_textfile_mtime_seconds`, because a thing cannot grade its own liveness.
+
+### A guard that was right about the byte and wrong about the reason
+- A non-ASCII city cost the whole slow tier 278 times in three days and was reported as "a title has
+  reached a label". Folded at the call site and never in `Metrics.add()`, which would launder a real
+  title through the guard that exists to catch it.
+
+### The banner had two states for a thing with five
+- `degraded` and `frozen` were one state and it reported the wrong one. `if up ... else` silently
+  meant "everything else is the timestamp"; `PULSE_QUERY` was outside `ALL_QUERIES` so nothing could
+  see the fixture drift; and no fixture carries `degraded` deliberately, so the state machine is a
+  pure function `smoke.mjs` drives through all five.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless
@@ -1752,7 +1785,7 @@ Remaining, in order:
    "one more service" a number rather than a shrug.
 
    **The notification path is done too, 2026-08-15**, which closes this item. Prometheus rules ->
-   Alertmanager -> ntfy-alertmanager -> ntfy -> phone, 30 rules in six groups, at
+   Alertmanager -> ntfy-alertmanager -> ntfy -> phone, 37 rules in seven groups, at
    `ntfy.avanserv.com`. See `docs/observability.md`. Prometheus having alerting rules built in is part of why it
    was chosen over a store needing a second container for them, and that paid off exactly as
    expected.

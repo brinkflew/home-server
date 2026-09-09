@@ -5052,3 +5052,97 @@ service on the rack read **memory starved**. Nothing on the host was.
 - `fixtures/shoot.mjs`'s `routes` array is the only enumeration of routes in this repository, and
   its comment named `/system` alone. Baseline 43 problems, all the one expected poster 404; after,
   52 - three new routes times three viewports of the same 404, and nothing else.
+
+### A major version arrived through `:latest` and only the callers broke
+- **Jellyfin auto-updated 10.11 -> 12.0.0 overnight on 2026-09-09** and 12 REMOVED both shorthands:
+  `X-Emby-Token:` and `?api_key=` answer **401**, and `Authorization: MediaBrowser Token=<key>` is
+  what is left. Every response SHAPE is unchanged - `/Sessions`, `/Items/Counts`,
+  `/System/Configuration{,/encoding}` and the `/Items?...` list all re-read under 12.0.0 - so this
+  was auth only, which is the reason the fix was small and the reason nothing looked like a schema
+  break. The four hwaccel switches survived the upgrade.
+- **The rollback could not have caught it**: the container started healthy and stayed healthy, so
+  `Notify=healthy` had nothing to act on. What broke was five call sites in this repository. The tag
+  is deliberately still `:latest`.
+- **THE ESCAPING THAT LOOKS RIGHT IS THE ONE THAT BREAKS IT.** `api_get` builds a `curl -K` config
+  whose values are already double-quoted, so a quoted token embeds quotes in that value - and
+  curl's config parser does NOT unescape `\"` the way a shell does. Read off the wire with `curl -v`:
+  raw inner quotes send `Token="KEY"` and work by luck, `\"` sends `Token=\` and **401s, truncated**,
+  unquoted sends `Token=KEY` and works. Unquoted is the only spelling with no quote character in it,
+  so it is the only one safe through the config file, the wget fallback, the heredoc in
+  `bin/jellyfin-watching.sh` and argv in `bin/promote-transcoded.py` at once.
+- **Two of the three collector sources did not raise, so two thirds of it was invisible.**
+  `source_jellyfin` and `source_catalogue` guard every read with `if isinstance(...)`, which is
+  right for a legitimately absent field and wrong for a refusal: the series simply stopped existing
+  while `home_server_collector_source_up` stayed 1. Same shape as the `vpn_info` absence
+  `CollectorClientUnavailable` was written for. `source_torrent` had the right shape all along.
+- `source_catalogue` raises at the END, not where the refusal is found: half of it walks the disk
+  and needs no Jellyfin, and failing early would blank a Library page for an upstream neither half
+  talks to.
+- **The two gates behaved exactly as designed and that was the whole cost.**
+  `bin/jellyfin-watching.sh` exits 2, so `reboot-when-staged.sh` refuses ("unknown is not idle") and
+  `update-when-idle.sh` allows ("a gate that cannot answer must not become a gate that never
+  opens"). One would have starved the Sunday window indefinitely; the other let the nightly update
+  run without checking for a live stream. `promote-transcoded.py` printed `library scan requested`
+  whatever happened, so promoted files stopped reaching Jellyfin and the job reported success.
+
+### An omitted sample is not an old one, and it silenced the alert written for it
+- **`home_server_collector_last_success_timestamp_seconds` was OMITTED on any failure**, not held.
+  So one failing source of twenty-two made the series vanish, and the dashboard's
+  `freshness()` read the absence as `missing` and said **"the metrics collector has never
+  reported"** about a collector that had run two seconds earlier and written 1,876 series.
+- **`MetricsCollectorStale` could not fire AT ALL**, because `time() - <absent>` is an empty vector
+  rather than a large number. The one rule watching for a broken collector went silent exactly when
+  it broke. Same family as `ContainerRestartLoop` reading a counter that resets on every restart.
+- **`write_marker` had it right the whole time** - it carries `last_ok_at` forward - which is why
+  `bin/verify-host.sh`'s `metrics.collector_fresh` reported a correct 3827s age while the dashboard
+  claimed never. One truth, two readers, and only one of them carried it.
+- **CARRY-FORWARD ALONE WOULD HAVE BEEN DECORATIVE.** The slow tier runs one tick in ten and
+  `jellyfin`, `catalogue` and `torrent` are all slow, so on the nine ticks a broken slow source is
+  SKIPPED it is not in `failed`, the stamp is set to `now`, and the series sawtooths back to fresh -
+  no `for:` window could ever hold. The verdict is sticky now: a source that did not run keeps the
+  one it had, which is exactly what the slow `.prom` does on disk. Self-limiting on `SOURCES`, so a
+  deleted source cannot degrade the fleet for ever.
+- **The writes had to move above the timestamp.** `write`/`write_slow` were appended to `failed`
+  AFTER it was computed, so a slow-tier write failure could never affect it - which is how a
+  non-ASCII city (below) left the fast file and the dashboard looking perfectly healthy while
+  `write_marker` recorded a failure and the battery warned. The same two readers, disagreeing in the
+  opposite direction.
+- **`--print` wrote the marker**, sitting outside the `if to_stdout:` branch - so the by-hand
+  debugging path stamped a success into the file `bin/verify-host.sh` reads. A diagnostic must not
+  be able to answer the check.
+- **`home_server_collector_source_up` had existed since the collector did and had NO CONSUMER** - no
+  rule, no check - which is why a source failing every 30 seconds for two hours produced no
+  notification of any kind. `CollectorSourceFailing` is the rule; 15m because a slow source's
+  verdict only refreshes every five minutes.
+- **`MetricsCollectorStale` now reads a clock the collector does not own.**
+  `node_textfile_mtime_seconds` is dated by node-exporter from outside, because a thing cannot grade
+  its own liveness - and once the stamp carries forward, `last_success` would have paged `critical`
+  for one broken source under a description saying every series was frozen. `MetricsCollectorDegraded`
+  is that case, at `warning`, and its `and on(instance)` is required rather than stylistic: the two
+  metrics carry different label sets, so a bare `and` matches nothing.
+
+### A guard that was right about the byte and wrong about the reason
+- `write_textfile` refuses a whole file on any non-ASCII byte, and it should - titles must never
+  reach a label. But gluetun answered `Zurich` with an umlaut, and the guard fired **278 times in
+  three days**, dropping ~40 unrelated slow-tier series (disks, SMART) each time and reporting it as
+  "a title has reached a label". A city is not a title.
+- **Folded at the call site, NOT in `Metrics.add()`.** Folding every label value everywhere would
+  launder `Amelie` through the exact guard that exists to catch it. Only the three `vpn_info` labels
+  are folded, and they are place and company names from a VPN exit list.
+
+### The banner had two states for a thing with five
+- `degraded` and `frozen` were one state, and the collapsed version reported the wrong one: the
+  detail line claimed filesystems, GPU, disks and the check mirror were all frozen when they were
+  current to the second. Five now, each sentence true only in its own case, and `frozen` outranks
+  `degraded` because both clauses are true and only the first is useful.
+- **`if up ... else` meant "everything that is not up is the timestamp"**, written when the pulse
+  named exactly two metrics. Adding a third would have assigned `source_up` values to `collectorAt`,
+  making the freshness of the whole page whatever the last source in the response happened to be.
+- **`PULSE_QUERY` was a private const in the store with a hand-copied twin in the fixture**, so it
+  was outside `ALL_QUERIES` and `uncovered()` could not cover it - and an empty pulse response reads
+  as zero scrape targets and a collector that has never reported, which is indistinguishable from
+  the fault the query exists to detect. It is catalogued now, and `uncovered()` is a smoke assertion
+  rather than a dev-server warning printed once into a log nobody reads.
+- **No fixture carries `degraded` deliberately** - a permanent warning strip on every screenshot is
+  worse - so `collectorState` is a pure function in `src/health.ts` that `smoke.mjs` drives through
+  all five, rather than a computed in the store that nothing without a browser can reach.

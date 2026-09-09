@@ -545,6 +545,34 @@ export const AGENTS = {
   conductAge: "home_server_agents_conduct_age_seconds",
 } as const;
 
+/**
+ * The store's own heartbeat query, covering all three freshness primitives in
+ * one round trip: the scrape targets, whether the collector RAN, and whether it
+ * completed every source.
+ *
+ * IT LIVES HERE RATHER THAN IN stores/host.ts BECAUSE OF THE LINE BELOW. The
+ * fixtures key their table by the exact query string, and uncovered() only ever
+ * looked at ALL_QUERIES - so while this string was a private const in the store,
+ * editing it broke the dev fixtures silently: an empty vector reads as zero
+ * targets and a collector that has never reported, which is indistinguishable
+ * from the bug this query exists to detect. Catalogued, it fails loudly instead.
+ *
+ * THREE CLOCKS, NOT ONE, and the third is deliberate:
+ *
+ *   node_textfile_mtime_seconds  did it RUN - dated from outside the collector,
+ *                                because a check cannot grade its own liveness
+ *   ..._last_success_timestamp   did it COMPLETE every source
+ *   ..._source_up                WHICH source is failing
+ *
+ * A collector that is running but degraded and one that has stopped are
+ * different faults with different remedies, and until these were told apart the
+ * banner said "has never reported" about a collector writing 1,876 series every
+ * thirty seconds.
+ */
+export const PULSE_QUERY =
+  '{__name__=~"up|home_server_collector_last_success_timestamp_seconds' +
+  '|home_server_collector_source_up|node_textfile_mtime_seconds"}';
+
 /** Flattened, so the fixtures can assert they cover every one of them. */
 export const ALL_QUERIES: string[] = [
   ...Object.values(SYSTEM),
@@ -553,4 +581,5 @@ export const ALL_QUERIES: string[] = [
   ...Object.values(NETWORK),
   ...Object.values(CI),
   ...Object.values(AGENTS),
+  PULSE_QUERY,
 ];

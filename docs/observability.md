@@ -352,7 +352,19 @@ arrives through node-exporter's textfile collector, and **a rule whose expressio
 does not fire** - so if the collector or the scrape stops, the whole battery goes silent, and silence
 is exactly what healthy looks like. Same trap `verify-host.sh` documents about its own timer, and the
 same reason there is deliberately no `home_server_collector_up 1`. `TargetDown`,
-`MetricsCollectorStale`, `VerifyBatteryStale` and `AlertDeliveryFailing` cover it.
+`MetricsCollectorStale`, `MetricsCollectorDegraded`, `CollectorSourceFailing`,
+`VerifyBatteryStale` and `AlertDeliveryFailing` cover it.
+
+**THREE OF THOSE ARE ONE FAULT TOLD APART, and the split was paid for.**
+`MetricsCollectorStale` asks whether the collector RAN, and reads
+`node_textfile_mtime_seconds` - a clock node-exporter keeps from outside, because the paragraph
+above is exactly the argument against letting it grade its own liveness.
+`MetricsCollectorDegraded` asks whether the run COMPLETED every source, and
+`CollectorSourceFailing` names which one did not. Until 2026-09-09 there was one rule reading one
+clock, and the collector OMITTED that clock's sample whenever any source failed - so
+`time() - <absent>` was an empty vector, the rule could not fire at all, and the dashboard said "the
+metrics collector has never reported" about a collector writing 1,876 series every thirty seconds.
+An absent series is not an old one.
 
 **Nothing can notify you that the notifier is down**, and the design says so rather than pretending
 otherwise. `AlertDeliveryFailing` fires so that it is recorded and arrives when delivery recovers;

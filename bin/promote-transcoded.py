@@ -299,9 +299,25 @@ def main():
         if not jkey:
             print("== jellyfin: JELLYFIN_API_KEY not set, leaving the scan to its schedule")
         else:
-            exec_curl("jellyfin", ["-X", "POST", "-H", "X-Emby-Token: %s" % jkey,
-                                   "http://localhost:8096/Library/Refresh"])
-            print("== jellyfin: library scan requested")
+            # THE TOKEN IS DELIBERATELY NOT QUOTED, and Jellyfin 12 no longer
+            # accepts `X-Emby-Token:` or `?api_key=` at all - both answer 401.
+            # jellyfin_auth() in bin/collect-metrics.py carries the measurement
+            # behind both halves of that; bin/jellyfin-watching.sh builds the
+            # same header a third time. Change one, change all three.
+            #
+            # AND THE RESULT IS READ. This printed "library scan requested"
+            # whatever happened, so when the header stopped working the scan
+            # stopped happening and this job went on reporting success - the
+            # promoted file simply never appeared in Jellyfin.
+            out = exec_curl("jellyfin",
+                            ["-X", "POST",
+                             "-H", "Authorization: MediaBrowser Token=%s" % jkey,
+                             "http://localhost:8096/Library/Refresh"])
+            if out is None:
+                print("== jellyfin: library scan REFUSED - the scan did not "
+                      "happen; check JELLYFIN_API_KEY and the jellyfin container")
+            else:
+                print("== jellyfin: library scan requested")
 
 
 if __name__ == "__main__":

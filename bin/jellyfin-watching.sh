@@ -127,9 +127,17 @@ fi
 # ------------------------------------------------------------------------------
 # THE CREDENTIAL GOES ON STDIN, NEVER ARGV. `curl -K -` reads its whole
 # configuration from stdin, so the key never appears in the host's process list;
-# `podman exec ... -H "X-Emby-Token: ..."` cannot avoid that. Lifted from
+# `podman exec ... -H "Authorization: ..."` cannot avoid that. Lifted from
 # api_get() in bin/collect-metrics.py, which makes the same call 288 times a day
 # for the same reason.
+#
+# THE TOKEN IS DELIBERATELY NOT QUOTED. Jellyfin 12 removed `X-Emby-Token:` and
+# `?api_key=` - both answer 401 - and the replacement is this Authorization
+# header. Its value must carry no quote character, because the config line below
+# is ALREADY quoted and curl does not unescape `\"` inside it: a quoted token is
+# sent truncated at the backslash and refused. jellyfin_auth() in
+# bin/collect-metrics.py carries the measurement; bin/promote-transcoded.py
+# builds the same header a third time. Change one, change all three.
 #
 # podman exec rather than the published LAN port, which Jellyfin does have. The
 # rule is in host/systemd/README.md: a host-side unit reaches into any container
@@ -137,7 +145,7 @@ fi
 # publish. Using it would make this the first script that does.
 sessions=$(podman exec -i jellyfin curl -K - <<-EOF 2>/dev/null
 	url = "http://localhost:8096/Sessions"
-	header = "X-Emby-Token: $key"
+	header = "Authorization: MediaBrowser Token=$key"
 	silent
 	fail
 	max-time = 8

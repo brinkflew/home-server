@@ -8,7 +8,16 @@
 // dev server says so on the first request.
 // =============================================================================
 
-import { AGENTS, ALL_QUERIES, AVAILABILITY, CI, NETWORK, SERVICES, SYSTEM } from "../src/queries";
+import {
+  AGENTS,
+  ALL_QUERIES,
+  AVAILABILITY,
+  CI,
+  NETWORK,
+  PULSE_QUERY,
+  SERVICES,
+  SYSTEM,
+} from "../src/queries";
 import { CONTAINERS, UNITS, wave } from "./model";
 import { NODES } from "../src/topology";
 
@@ -344,13 +353,38 @@ function bySeries(): Record<string, SeriesSpec[]> {
   }));
 
   // --- the store's own pulse query ----------------------------------------
-  table['{__name__=~"up|home_server_collector_last_success_timestamp_seconds"}'] = [
+  // KEYED OFF THE IMPORT, NEVER A COPIED LITERAL. This table answers by exact
+  // query string, so while PULSE_QUERY was a private const in stores/host.ts
+  // and this key was a hand-copied twin, editing the query broke dev silently:
+  // an empty vector reads as zero scrape targets and a collector that has never
+  // reported - indistinguishable from the fault the query exists to detect, and
+  // uncovered() could not see it because it only walks ALL_QUERIES.
+  table[PULSE_QUERY] = [
     { metric: { __name__: "up", job: "prometheus", instance: "127.0.0.1:9090" }, at: constant(1) },
     { metric: { __name__: "up", job: "node", instance: "node-exporter:9100" }, at: constant(1) },
     {
       metric: { __name__: "home_server_collector_last_success_timestamp_seconds" },
       at: (t) => t - 12,
     },
+    // DID IT RUN, dated from outside the collector. Both files are present
+    // because both are in the real response; only the fast one is a liveness
+    // signal, and the store filtering for it is the behaviour under test.
+    {
+      metric: { __name__: "node_textfile_mtime_seconds", file: "/textfile/home-server.prom" },
+      at: (t) => t - 12,
+    },
+    {
+      metric: { __name__: "node_textfile_mtime_seconds", file: "/textfile/home-server-slow.prom" },
+      at: (t) => t - 190,
+    },
+    // A source per row, all healthy. The DEGRADED banner is deliberately not
+    // the default state - it would put a warning strip on every screenshot -
+    // so fixtures/smoke.mjs drives collectorState() directly instead, which is
+    // why that function is pure and lives in src/health.ts.
+    ...["filesystems", "containers", "playback", "jellyfin", "catalogue"].map((source) => ({
+      metric: { __name__: "home_server_collector_source_up", source },
+      at: constant(1),
+    })),
   ];
 
 

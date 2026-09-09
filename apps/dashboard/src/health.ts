@@ -18,6 +18,7 @@
 // emits no series.
 // =============================================================================
 
+import type { Freshness } from "@/freshness";
 import type { CheckStatus, Tone } from "@/types";
 
 export interface ContainerHealth {
@@ -162,4 +163,49 @@ export function heartbeatTone(age: number, threshold: number): ContainerHealth {
   if (!Number.isFinite(age)) return { tone: "off", state: "never run" };
   if (age > threshold) return { tone: "warn", state: "stale" };
   return { tone: "ok", state: "fresh" };
+}
+
+
+/**
+ * What the collector is doing, as five distinct states rather than one boolean.
+ *
+ *   ok        every source completed on the last run
+ *   degraded  running, but at least one source or file write is failing
+ *   starting  running, and has not yet completed a full pass
+ *   frozen    has not run recently; every home_server_* series is holding its
+ *             last value
+ *   never     has never run here at all
+ *
+ * `degraded` AND `frozen` WERE ONE STATE UNTIL 2026-09-09, and the collapsed
+ * version reported the wrong one. bin/collect-metrics.py OMITTED its success
+ * stamp whenever any source failed, and an absent series is not an old one - so
+ * one broken source of twenty-two read as `missing`, and the banner said "the
+ * metrics collector has never reported" about a collector that had run two
+ * seconds earlier and written 1,876 series. Its detail line then claimed
+ * filesystems, GPU and disks were frozen, when they were current to the second.
+ *
+ * TWO CLOCKS, WHICH IS WHY THIS TAKES TWO ARGUMENTS. `ran` is
+ * node_textfile_mtime_seconds - the file dated by node-exporter from OUTSIDE
+ * the collector, because a thing cannot grade its own liveness. `completed` is
+ * the collector's own stamp, which it holds at the last COMPLETE pass. Only the
+ * pair can tell "stopped" from "running but not finishing", and those have
+ * different remedies.
+ *
+ * A PURE FUNCTION RATHER THAN A COMPUTED IN THE STORE, so fixtures/smoke.mjs
+ * can drive all five states without a browser. The store's computed is a call
+ * to this, and the banner and useStaleness both read that - one decision, three
+ * phrasings.
+ */
+export type CollectorState = "ok" | "degraded" | "starting" | "frozen" | "never";
+
+export function collectorState(ran: Freshness, completed: Freshness): CollectorState {
+  // Never run at all. NOT the same as "running and has never completed a pass"
+  // below - a fresh host and a broken one must not look alike.
+  if (ran.missing) return "never";
+  if (ran.stale) return "frozen";
+  // Running. The success stamp is absent in exactly one case now: no run has
+  // ever finished every source.
+  if (completed.missing) return "starting";
+  if (completed.stale) return "degraded";
+  return "ok";
 }

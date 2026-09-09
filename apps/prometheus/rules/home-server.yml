@@ -52,9 +52,19 @@ groups:
             `systemctl --user status node-exporter prometheus`.
 
       - alert: MetricsCollectorStale
-        # The collector runs every 30s and stamps its own success into the
-        # textfile it produces, so the last value present is by construction
-        # the last success. 10 minutes is twenty missed runs.
+        # DID IT RUN AT ALL. node-exporter dates the file from OUTSIDE the
+        # collector, which is the only reason this can be trusted: a check
+        # cannot grade its own liveness, and a self-asserted "last run" series
+        # would be a third timestamp on top of the two below.
+        #
+        # THIS USED TO READ last_success AND THAT CONFLATED TWO FAULTS. The
+        # collector holds that stamp at its last COMPLETE pass, so once it
+        # started carrying forward across a failing source (which is what makes
+        # a degraded collector visible at all - see collect-metrics.py's
+        # four-state table) this rule would have paged `critical` for one broken
+        # source of twenty-two, over a description saying every home_server_*
+        # series is frozen. They are not: the file is still being rewritten
+        # every 30 seconds. MetricsCollectorDegraded below is that case.
         #
         # NOT home_server_metrics_last_ok_timestamp_seconds, WHICH IS A
         # DIFFERENT CLOCK. That one is a fact lifted out of status.json, so it
@@ -63,16 +73,90 @@ groups:
         # four times in its first hour before the names were told apart. Two
         # metrics, both plausibly named, one of them measuring the wrong thing:
         # the same trap as badges.providers under "providers currently usable".
-        expr: time() - home_server_collector_last_success_timestamp_seconds > 600
+        #
+        # The FAST file only. The slow one is deliberately left in place on nine
+        # ticks in ten, so its mtime is not a liveness signal.
+        expr: >-
+          time() - node_textfile_mtime_seconds{file="/textfile/home-server.prom"}
+          > 600
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: "bin/collect-metrics.py has not succeeded for 10 minutes"
+          summary: "bin/collect-metrics.py has not run for 10 minutes"
           description: >-
             node-exporter is still up, so host vitals continue - but every
             home_server_* series is frozen at its last value, which on a graph
             is indistinguishable from a stable system.
+            `journalctl --user -u home-server-metrics -n 50`.
+
+      - alert: MetricsCollectorDegraded
+        # RUNNING, BUT HAS NOT COMPLETED A FULL PASS. This is the state that
+        # went unreported for two hours on 2026-09-09 while the dashboard said
+        # "the metrics collector has never reported" about a collector that was
+        # writing 1,876 series every 30 seconds.
+        #
+        # IT COULD NOT HAVE FIRED BEFORE, whatever the threshold. The collector
+        # OMITTED last_success on any failure, and `time() - <absent>` is an
+        # empty vector, not a large number - so the one rule watching for a
+        # broken collector went silent exactly when it broke. Same family as
+        # ContainerRestartLoop reading a counter that resets on every restart.
+        #
+        # The second clause is what stops a dead collector paging twice for one
+        # cause. `and on(instance)` rather than a bare `and` because
+        # node_textfile_mtime_seconds carries a `file` label this metric does
+        # not, so an unqualified match would find nothing.
+        #
+        # 900 rather than 600 so the two thresholds cannot trip in one instant,
+        # and warning rather than critical because the host vitals are current -
+        # what is stale is one source's slice of them.
+        #
+        # It also covers the case that has no source_up series at all: a WRITE
+        # failure. The whole slow tier was lost 278 times in three days to a
+        # place name with an umlaut, and nothing but bin/verify-host.sh saw it.
+        expr: >-
+          (time() - home_server_collector_last_success_timestamp_seconds > 900)
+          and on(instance)
+          (time() - node_textfile_mtime_seconds{file="/textfile/home-server.prom"}
+           < 600)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "bin/collect-metrics.py is running but has not completed a full pass"
+          description: >-
+            The collector is alive and the host vitals are current, but at least
+            one source or one file write has been failing, so part of the
+            exposition is frozen while the rest is not.
+            `journalctl --user -u home-server-metrics -n 50`.
+
+      - alert: CollectorSourceFailing
+        # WHICH source, which is the half neither rule above can name. Sibling
+        # of CollectorClientUnavailable further down: that one is "cannot poll
+        # this container at all", this one is "polled it and the source raised".
+        #
+        # This series has existed since the collector did and had NO CONSUMER -
+        # no rule here, no check in bin/verify-host.sh - which is why a source
+        # that failed every 30 seconds for two hours produced no notification of
+        # any kind.
+        #
+        # 15m, not 5m, and the reason is the slow tier: it runs one tick in ten,
+        # so a slow source's verdict is only refreshed every five minutes. The
+        # series does not blink between its own runs - the slow .prom is left in
+        # place rather than rewritten empty - so a `for:` window is meaningful,
+        # but three cycles is the margin that keeps one transient failure from
+        # paging.
+        expr: home_server_collector_source_up == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "collector source {{ $labels.source }} is failing"
+          description: >-
+            This source has raised on every run for fifteen minutes, so the
+            series it produces are absent rather than zero - and an absent
+            series makes every other rule about them unfireable. The source
+            prints its own error:
             `journalctl --user -u home-server-metrics -n 50`.
 
       - alert: VerifyBatteryStale

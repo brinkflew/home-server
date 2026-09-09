@@ -28,9 +28,24 @@ export function useMetricsStale(): ComputedRef<string | null> {
   const host = useHostStore();
   return computed(() => {
     if (host.prometheusDown) return "prometheus is unreachable; this is the last answer it gave";
-    const f = host.collectorFreshness;
-    if (f.missing) return "the collector has never reported";
-    if (f.stale) return `the collector last ran ${fmt.duration(f.age)} ago; these numbers are frozen`;
+    // The DECISION is host.collectorState, shared with StalenessBanner; only
+    // the phrasing differs, because this returns one line for PanelBox and the
+    // banner has a title and a detail. Two copies of the decision is how a
+    // panel ends up saying the collector is fine under a banner saying it is
+    // not - which is the defect this file's own header was written about.
+    switch (host.collectorState) {
+      case "never":
+        return "the collector has never reported";
+      case "frozen":
+        return `the collector last ran ${fmt.duration(host.collectorRunFreshness.age)} ago; these numbers are frozen`;
+      case "starting":
+        return "the collector has not yet completed a full pass";
+      case "degraded":
+        // Deliberately NOT "these numbers are frozen": most of them are not.
+        return host.failedSources.length
+          ? `the collector is degraded; ${host.failedSources.join(", ")} not reporting`
+          : "the collector is degraded; part of this is not reporting";
+    }
     return null;
   });
 }

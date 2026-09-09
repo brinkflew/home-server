@@ -14,7 +14,8 @@ const { activityDocument, libraryDocument } = await load("/fixtures/media.ts");
 const { sortRows, actionFor, badgeFor, whoLine, stateClass, STATE_LABEL, STATE_TONE } =
   await load("/src/media.ts");
 const { posterHeight, posterUrl } = await load("/src/images.ts");
-const { containerTone, laneTone, quotaTone, heartbeatTone } = await load("/src/health.ts");
+const { containerTone, laneTone, quotaTone, heartbeatTone, collectorState } =
+  await load("/src/health.ts");
 const { seriesStyle, bandOpacity, ceilingTick, yTicks, symmetricExtent } = await load("/src/charts.ts");
 const { fleetDocument, fleetUnreadable } = await load("/fixtures/fleet.ts");
 const {
@@ -596,6 +597,51 @@ check("an unreadable stamp is null", quotaWindow(Number.NaN, NOW), null);
 
 check("a heartbeat nobody wrote is grey", heartbeatTone(Number.NaN, 600).tone, "off");
 check("a stale heartbeat is amber", heartbeatTone(900, 600).tone, "warn");
+
+// --- every catalogued query has a fixture ------------------------------------
+// uncovered() existed and was only ever a dev-server WARNING, printed once at
+// startup into a log nobody reads on the way past. It is an assertion here
+// because the coupling it guards is silent in both directions: the table
+// answers by exact query string, so a query edited in src/queries.ts without
+// the fixture renders an empty panel rather than an error.
+//
+// PULSE_QUERY is the reason this is being added now. It lived as a private
+// const in stores/host.ts with a hand-copied twin in the fixture, so it was
+// outside ALL_QUERIES and this check could not have covered it at all - and an
+// empty pulse response reads as zero scrape targets and a collector that has
+// never reported, which is indistinguishable from a real fault.
+const { uncovered } = await load("/fixtures/prometheus.ts");
+check("every catalogued query has a fixture", uncovered().join(" ") || "none", "none");
+
+// --- the collector's five states ---------------------------------------------
+// NO FIXTURE CARRIES `degraded`, DELIBERATELY - a permanent warning strip on
+// every screenshot would be worse than the state being undrawn - so the state
+// machine is driven directly here instead. That is the whole reason
+// collectorState is a pure function in src/health.ts rather than a computed in
+// the store, where nothing without a browser could reach it.
+//
+// The one that matters is `degraded`. On 2026-09-09 a single failing source of
+// twenty-two made bin/collect-metrics.py OMIT its success stamp, the store read
+// the absence as `missing`, and the banner said "the metrics collector has
+// never reported" about a collector that had run two seconds earlier.
+console.log("\n-- the collector's five states --");
+const seen = (age) => ({ age, threshold: 600, stale: age > 600, missing: false });
+const unseen = { age: Number.NaN, threshold: 600, stale: true, missing: true };
+
+check("everything current is ok", collectorState(seen(12), seen(12)), "ok");
+check("a collector that has never run says never", collectorState(unseen, unseen), "never");
+check("a collector that stopped is frozen", collectorState(seen(900), seen(900)), "frozen");
+check("running but never completed a pass is starting",
+      collectorState(seen(12), unseen), "starting");
+check("running with an old completion is DEGRADED",
+      collectorState(seen(12), seen(7200)), "degraded");
+// Ordering: a collector that stopped while a source was failing is frozen, not
+// degraded. Both clauses are true and only the first sentence is useful.
+check("stopped outranks degraded", collectorState(seen(900), seen(7200)), "frozen");
+// And the asymmetry that caused the bug: an ABSENT completion stamp on a
+// RUNNING collector must never read as `never`.
+check("absent completion on a live collector is not never",
+      collectorState(seen(12), unseen) === "never", false);
 
 // --- the fleet document ------------------------------------------------------
 console.log("\n-- the fleet document --");
