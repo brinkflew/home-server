@@ -190,10 +190,14 @@ bin/collect-metrics.py --print | grep container_network   # the per-segment coun
 ./bin/verify-media.sh "/mnt/media/library/transcoded/movies/<film>/<film>.mkv"
 ./bin/verify-media.sh --library movies        # will these drift in a browser?
 podman auto-update --dry-run                  # 17 rows with a policy, not an empty table
-systemctl --user list-timers                  # verify hourly, backup + auto-update + search nightly
+systemctl --user list-timers                  # verify hourly, backup + auto-update + search nightly,
+                                              # restore-verify weekly Wed + off-site first Mon
 
 systemctl --user start home-server-backup     # back up now rather than waiting for 03:00
 journalctl --user -u home-server-backup -n 50
+systemctl --user start home-server-verify-restore          # does the SERVER's copy restore? Wed 05:30
+systemctl --user start home-server-verify-restore-offsite  # the off-site copy; first Mon, ~4.6GB egress
+grep restore_verified ~/.cache/home-server/backup-state    # what has been proven, and when
 
 ./bin/search-missing.py --dry-run --verbose   # what is missing, and what is merely unreleased
 systemctl --user start home-server-search.service   # sweep now rather than waiting for 04:30
@@ -203,8 +207,9 @@ systemctl --user start home-server-search.service   # sweep now rather than wait
 outlive the machine they are talking about:
 
 ```bash
-./bin/verify-restore.sh                       # does the latest snapshot actually restore?
-./bin/verify-restore.sh --repo offsite --deep # the copy that survives the disk, data re-read
+./bin/verify-restore.sh                       # the WORKSTATION's third copy at ~/backups
+./bin/verify-restore.sh --repo offsite --deep # the drill: the surviving copy, without the server
+# `--repo local` is the third copy, NOT the server's - the server verifies its own two on timers.
 ./bin/backup-config.sh && ./bin/backup-offsite.sh   # the third copy, and the off-site prune
 ./bin/reboot-host.sh --dry-run                # pre-flight for the one dangerous operation
 ./bin/lint-repo.sh                            # ASCII, exec bits, shellcheck, quadlet dry-run
@@ -1779,6 +1784,20 @@ signal read green.
   one, in a comment, which is why it strips them.
 - The same page was the eighth lead panel and the one that never got the shared recipe, and the
   sentence counting that recipe had already drifted in two directions at once.
+
+### The copy an ordinary restore would use was the one copy nothing verified
+- **`--repo local` names the WORKSTATION's third copy**, so two checks reported on restore
+  verifications, both passed, and `/var/backups/home-server` - written nightly, read by any ordinary
+  restore - had never been verified on a schedule. `core` has no `~/backups` at all.
+- **`restic restore latest` picked among CHAINS**: `--latest 1` is per GROUP, the off-site repository
+  holds three, and six of them predate the 2026-08-15 rename. The fixed `--host home-server` cannot
+  discriminate, so the path is the only filter.
+- The carry-forward's `[a-z]+` would have destroyed `server_offsite` nightly, under a comment
+  anticipating a third kind; `RestoreNeverProven`'s alternation would have paged nobody; and
+  `smoke.mjs`'s extractor had never seen a restore key, because a backslash is not whitespace.
+- **No `check_timer_run` leg on purpose** - it hardcodes `bad`, and a failed restore verification must
+  not block an OS security update. Two server kinds, two new markers, four ceilings; the workstation
+  drill keeps its own key so an automated run cannot hold it green.
 
 ## Target architecture
 

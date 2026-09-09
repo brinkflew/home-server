@@ -2404,14 +2404,32 @@ if (battery === null) {
   // for a literal cannot see them. That is the trap lint-repo.sh leg 9 already
   // paid for, and the answer is the same: match the prefix from the call that
   // mints it, never a literal list maintained here.
+  //
+  // A BACKSLASH IS NOT WHITESPACE, which is what `\s+` was missing. Four of the
+  // nine check_backup_age calls put the marker key on a continuation line, so the
+  // separator is ` \` + newline + tabs - and `\s` matches every character in that
+  // run except the backslash. All four restore_verified_* keys were therefore
+  // invisible to this extractor from the day it was written, and the guard below
+  // could not see it: backup_local_at is on a single-line call, so it matched, and
+  // the subset check passed because no page reads a restore marker yet. The day one
+  // did, this would have reported the page reading a fact the battery does not
+  // emit - which would have been false, and would have sent somebody to the wrong
+  // file. Both counts are asserted now rather than one representative key.
   if (battery === null) {
     console.log("SKIP  bin/verify-host.sh is not readable from here");
   } else {
     const facts = new Set([...battery.matchAll(/^\s*fact\s+([a-z_0-9]+)/gm)].map((mm) => mm[1]));
-    for (const mm of battery.matchAll(/check_backup_age\s+\S+\s+"[^"]*"\s+([a-z_0-9]+)/g)) {
+    const calls = [...battery.matchAll(/check_backup_age\s+\S+\s+"[^"]*"[\s\\]+([a-z_0-9]+)/g)];
+    for (const mm of calls) {
       facts.add(`backup_${mm[1]}`);
     }
     check("the battery extraction found the dynamic backup keys too", facts.has("backup_local_at"), true);
+    // EVERY call site, not just the ones on one line. A floor rather than an exact
+    // count, on lint leg 7's argument: an extraction that has stopped matching must
+    // read as a failure and not as a clean run.
+    check("the extraction reached the continuation-line call sites too",
+      calls.length >= 9 && facts.has("backup_restore_verified_server_at")
+        && facts.has("backup_restore_verified_offsite_at"), true);
     check("every fact key this page reads is one the battery emits",
       sys.FACT_KEYS.filter((k) => !facts.has(k)), []);
   }

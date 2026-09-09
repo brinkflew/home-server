@@ -27,7 +27,9 @@ systemctl --user enable --now home-server-promote.timer home-server-verify.timer
                               home-server-search.timer home-server-conduct-runner-build.timer \
                               home-server-agents-update.timer home-server-mirror-update.timer \
                               home-server-github-runner-build.timer \
-                              home-server-ci-artifacts-sweep.timer
+                              home-server-ci-artifacts-sweep.timer \
+                              home-server-verify-restore.timer \
+                              home-server-verify-restore-offsite.timer
 
 # TWO UNITS HERE ARE SERVICES RATHER THAN TIMERS, so they are enabled on their
 # own line. conduct is long-running - it polls - rather than something a clock
@@ -87,6 +89,20 @@ systemctl --user enable --now home-server-github-runner@1.service \
 # the reason this trap has been hit three times is that it is invisible in every
 # individual case.
 systemctl --user start home-server-ci-artifacts-sweep.service
+
+# AND THE TWO RESTORE VERIFICATIONS, WHICH ARE THE FOURTH AND FIFTH. Same trap,
+# and the consequence sits between the two above: nothing is broken and nothing
+# grows, but the first proof that the backups actually restore waits a week for
+# one of them and a MONTH for the other. bin/verify-host.sh reports that
+# correctly in the meantime - `no server restore verification has EVER been
+# recorded` - so the skip is visible rather than silent, which is more than the
+# first three traps managed.
+#
+# THE OFF-SITE ONE PULLS ~4.6 GB BACK FROM SCALEWAY, so run it when that is
+# convenient rather than reflexively; the weekly one reads a local repository and
+# costs nothing but disk I/O. Both refuse cleanly if .env has not been rendered.
+systemctl --user start home-server-verify-restore.service
+systemctl --user start home-server-verify-restore-offsite.service
 ```
 
 **`/var/agents` IS A SECOND CHECKOUT AND IT IS NOT MADE BY ANY OF THIS.** conduct's
@@ -267,6 +283,7 @@ symlinks, so there is no copy step. Only `daemon-reload` is needed.
 | `home-server-boot-reclaim` | **The step the unattended reboot structurally cannot take.** `/boot` is 350 MB usable, a deployment slot is 145.3 MiB, and an update needs a third slot transiently - `ostree-finalize-staged` writes the new kernel before the old one is dropped, asking for 152.3 MB in the journal. Two fit and three do not, and the partition cannot be grown: zero free sectors on the disk and `p4` is XFS. `bin/reboot-host.sh` has always kept the invariant by hand, ending in `rpm-ostree cleanup -r` after the reboot it performed; `bin/reboot-when-staged.sh` reboots and the process that would clean up dies with the machine. So every unattended reboot left two slots spent, the next image staged into a partition with no room to finalize it, and the Sunday window refused - correctly - every week until somebody ran two commands by hand. Five minutes after a boot then every thirty, doing nothing at all while `/boot` has room. It drops the rollback only on a green verdict **from this boot**, and pins the outgoing commit with an ostree ref first, so what is given up is the second `/boot` entry rather than the deployment. See `bin/reclaim-boot-slot.sh`. |
 | `home-server-metrics` | Collects, every 30 seconds, the numbers no container can honestly measure here: host filesystems (node-exporter's collector reads `/proc/1/mountinfo`, which no rootless container may), host network (`/proc/net` resolves in the reader's namespace), and the cgroup memory detail that separates a container holding cold page cache from one that is actually starved. It writes Prometheus exposition format into node-exporter's textfile directory rather than pushing, because Prometheus pulls - which also buys `node_textfile_mtime_seconds`, dating the file from outside the collector. See `bin/collect-metrics.py`. |
 | `home-server-backup` | Backs up `config/` nightly at 03:00, to `/var/backups/home-server` and then off-site by `restic copy`. This is the backup that actually happens; the workstation's `bin/backup-config.sh` is a third copy taken when someone is home. See `bin/backup-server.sh`. |
+| `home-server-verify-restore` / `home-server-verify-restore-offsite` | **Prove the backups restore, rather than that they exist.** `restic check` says a repository is internally consistent; neither it nor any staleness marker says that what comes out is a config tree the stack can start from. There are three repositories and until 2026-09-09 the one written nightly by automation - `/var/backups/home-server`, the copy an ordinary restore would use - was the only one nothing verified, because `--repo local` names the WORKSTATION's third copy at `~/backups` and reads like it means this machine. Every other job here has a timer and a durable marker; these had the marker and no timer, so the remedy was a person remembering. Weekly on a Wednesday for the server's own repository, monthly on the first Monday for the off-site copy - both at 05:30, the first quiet minute after the 00:00-04:50 night of jobs, and neither on a Sunday, because 05:00-09:00 there is the reboot window and a restore in progress would be killed by the machine going down. **They do not replace the workstation drill and their markers are separate so that they cannot**: `bin/verify-restore.sh --repo offsite`, run by hand, is the only thing that proves the surviving copy is reachable WITHOUT this machine, and one shared key would have held its marker green for ever. Four kinds, four markers, four ceilings. See `bin/verify-restore.sh` and `docs/backups.md`. |
 | `home-server-seeding` | Enforces the one part of the seeding policy qBittorrent cannot express: a **72-hour floor** before any torrent may be stopped. Every share limit qBittorrent has is a maximum that triggers an action, so a minimum can only be enforced by withholding those limits - which is all this does. Past 72h a torrent gets ratio 1.5 and a seven-day seeding limit and qBittorrent stops it on whichever lands first; Radarr and Sonarr then delete it and its files, as they already did. It deletes nothing itself, and a stopped timer means nothing is ever reaped rather than things being reaped early. See `bin/apply-seeding-policy.py`. |
 | `home-server-search` | Sweeps for monitored media that is missing and has actually been released, and asks Radarr and Sonarr to search for it. It exists because a back-catalogue title is searched once, at add time, and never again - RSS only carries new uploads, so 94 episodes stayed missing while approved releases sat on a configured indexer. Counted in episodes rather than seasons, because a season query asks for a season PACK and returned nothing. **This row was missing from this table until 2026-08-19**, which is the drift the glob above was written to prevent, arriving in the half of the setup that is still a hand-maintained list. See `bin/search-missing.py`. |
 | `app-agents.slice` | **Not a unit that runs anything - a cgroup ceiling.** Every Windmill container, `conduct` and every phase-runner scope joins it, so the fleet is bounded in aggregate rather than by a sum of per-unit limits it could never have: its runners are `podman run --rm`, so their count is a variable. The `app-` prefix is load-bearing - systemd derives the hierarchy from the dashes, so this nests under `app.slice` where every quadlet already lives, which is the path `bin/collect-metrics.py` resolves against. It has no `[Install]` and is never enabled; a unit's `Slice=` pulls it in. Assert it by its effect - `agents.slice_limits` reads the limits back out of the cgroup, because a `Slice=` naming a slice with no unit file silently gets systemd's defaults. See `host/systemd/app-agents.slice`. |

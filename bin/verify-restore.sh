@@ -2,10 +2,26 @@
 # ==============================================================================
 # Prove that a backup restores, rather than that it exists
 # ------------------------------------------------------------------------------
-# RUNS ON THE WORKSTATION. `restic snapshots` says a snapshot exists.
-# `restic check` says the repository is internally consistent. Neither says the
-# thing that matters: that what comes out is a config tree the stack can start
-# from.
+# `restic snapshots` says a snapshot exists. `restic check` says the repository
+# is internally consistent. Neither says the thing that matters: that what comes
+# out is a config tree the stack can start from.
+#
+# FOUR REPOSITORY KINDS, AND THE NAMES ARE NOT INTERCHANGEABLE. Two run here on
+# a timer and two are run by hand from the workstation, and each writes its own
+# marker, because a cheap automated run must never stand in for a copy nobody
+# has tested from the machine they would actually restore from:
+#
+#   --repo server          the server's own nightly repository, /var/backups.
+#                          The copy an ordinary restore would use - and until
+#                          2026-09-09 the one copy nothing verified at all.
+#   --repo server_offsite  the off-site copy, read from the server. Monthly.
+#   --repo offsite         the off-site copy, read from the WORKSTATION. This is
+#                          the disaster drill: it is the only one that proves the
+#                          copy is reachable without the machine it protects.
+#   --repo local           the workstation's THIRD copy at ~/backups, written by
+#                          hand by bin/backup-config.sh. `local` means that copy,
+#                          not the server's - which is easy to misread and is why
+#                          the server's repository went unverified for a month.
 #
 # This had never been tested. The only restore ever performed was during the
 # migration on 2026-08-12, from a backup taken before Caddy, Pocket ID and
@@ -34,16 +50,34 @@
 #   second one means sign-on still works.
 #
 # Usage:
-#   bin/verify-restore.sh                  the local repository
-#   bin/verify-restore.sh --repo offsite   the off-site one, which is now the
-#                                          only copy that survives nvme0n1
-#   bin/verify-restore.sh --deep           also read 5% of the pack data back
-#   bin/verify-restore.sh --keep           leave the restored tree in place
+#   bin/verify-restore.sh                        the workstation's third copy
+#   bin/verify-restore.sh --repo offsite         the off-site one, which is the
+#                                                only copy that survives nvme0n1
+#   bin/verify-restore.sh --repo server          on the SERVER, its own repository
+#   bin/verify-restore.sh --repo server_offsite  on the SERVER, the off-site copy
+#   bin/verify-restore.sh --deep                 also read 5% of the pack data back
+#   bin/verify-restore.sh --keep                 leave the restored tree in place
+#
+# The two server kinds run from home-server-verify-restore.timer and
+# home-server-verify-restore-offsite.timer; see host/systemd/README.md.
 # ==============================================================================
 
 set -uo pipefail
 
 export PATH="$HOME/.local/bin:$PATH"
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The marker file every backup leg writes and bin/verify-host.sh grades. Reached
+# through the same overridable variable bin/backup-server.sh uses rather than a
+# hardcoded path, so a test can point both writers at one scratch file.
+STATE="${HOME_SERVER_BACKUP_STATE:-$HOME/.cache/home-server/backup-state}"
+
+# THE HOST TAG CANNOT DISCRIMINATE ANYTHING, so do not reach for it as if it
+# could. Both writers pass a FIXED `--host home-server` deliberately - see
+# bin/backup-server.sh - because `restic forget` groups by host and $(hostname)
+# would split one machine's history into separately pruned chains. It is asserted
+# here only so a snapshot from some other writer cannot satisfy the filter below.
+HOST_TAG=home-server
 
 REPO_KIND=local
 DEEP=""
@@ -59,14 +93,91 @@ while [ $# -gt 0 ]; do
 done
 
 fails=0
-say()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
-ok()   { printf '  \033[32mPASS\033[0m  %s\n' "$*"; }
-bad()  { printf '  \033[31mFAIL\033[0m  %s\n' "$*"; fails=$((fails + 1)); }
-die()  { printf '\033[31mverify-restore: %s\033[0m\n' "$*" >&2; exit 1; }
+# ONLY WHEN SOMETHING CAN RENDER IT. Two of the four kinds now run from a timer,
+# where the only reader is the journal and a raw escape is noise in front of
+# every line that matters.
+if [ -t 1 ]; then
+	C_BOLD=$'\033[1m'; C_GRN=$'\033[32m'; C_RED=$'\033[31m'; C_OFF=$'\033[0m'
+else
+	C_BOLD=""; C_GRN=""; C_RED=""; C_OFF=""
+fi
+say()  { printf '\n%s==> %s%s\n' "$C_BOLD" "$*" "$C_OFF"; }
+ok()   { printf '  %sPASS%s  %s\n' "$C_GRN" "$C_OFF" "$*"; }
+bad()  { printf '  %sFAIL%s  %s\n' "$C_RED" "$C_OFF" "$*"; fails=$((fails + 1)); }
+die()  { printf '%sverify-restore: %s%s\n' "$C_RED" "$*" "$C_OFF" >&2; exit 1; }
 
 command -v restic >/dev/null || die "restic is not on PATH"
 
+# INSTALLED BEFORE EITHER THING IT REMOVES EXISTS, which is the whole reason it
+# is here rather than beside the mktemp further down. Bash keeps ONE EXIT trap, and
+# this now has two things to clean up: a private directory holding a repository
+# password, written in the case block below, and up to 8 GB of restored tree. The
+# password directory has to be created before restic is first called, so a trap
+# installed after the scratch directory would leave the plaintext behind on every
+# early die.
+#
+# INT AND TERM DO NOT CLEAN UP THEMSELVES - they turn a signal into an exit, and
+# the EXIT trap does the work. Without them a systemd TimeoutStartSec kill leaves
+# the restored tree on the same disk as config/, which is the disk this job exists
+# to protect.
+PWDIR=""
+TARGET=""
+# shellcheck disable=SC2317  # reached through the EXIT trap, which shellcheck
+# cannot follow once the body is more than one line.
+cleanup() {
+	[ -z "$PWDIR" ]  || rm -rf "$PWDIR"
+	[ -n "$KEEP" ]   || { [ -z "$TARGET" ] || rm -rf "$TARGET"; }
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 case "$REPO_KIND" in
+	server|server_offsite)
+		# THE SERVER HOLDS THESE AS ENVIRONMENT VARIABLES, NOT AS FILES. Both
+		# server kinds run from a timer that passes .env through EnvironmentFile=,
+		# and by hand from a checkout with no environment at all - so source it when
+		# the variable is absent, the same sentinel bin/backup-server.sh uses.
+		if [ -z "${BACKUP_LOCAL_REPOSITORY:-}" ] && [ -f "$ROOT/.env" ]; then
+			set -a
+			# shellcheck disable=SC1091
+			. "$ROOT/.env"
+			set +a
+		fi
+
+		# A PRIVATE FILE RATHER THAN A COMMAND LINE, copied from
+		# bin/backup-server.sh: restic wants a file, and the obvious spelling -
+		# --password-command "echo $PASS" - puts the plaintext in the process table
+		# where anything on the box can read it out of ps. umask first, so the
+		# directory is 0700 and the file 0600 from the moment they exist;
+		# /run/user is tmpfs, so the password never reaches a disk.
+		umask 077
+		PWDIR=$(mktemp -d /run/user/"$(id -u)"/home-server-verify-restore.XXXXXX 2>/dev/null) \
+			|| PWDIR=$(mktemp -d) || die "cannot create a private directory for the password"
+
+		if [ "$REPO_KIND" = server ]; then
+			[ -n "${BACKUP_LOCAL_REPOSITORY:-}" ] \
+				|| die "BACKUP_LOCAL_REPOSITORY is not set - run bin/render-env.sh"
+			[ -n "${BACKUP_LOCAL_PASSWORD:-}" ] || die "BACKUP_LOCAL_PASSWORD is not set"
+			printf '%s' "$BACKUP_LOCAL_PASSWORD" >"$PWDIR/pw"
+			export RESTIC_REPOSITORY="$BACKUP_LOCAL_REPOSITORY"
+		else
+			# ALL FOUR, not just the repository. "Not configured yet" and "configured
+			# and rejected" are different states and the difference belongs in the
+			# guard: an empty access key produces a 403 that reads exactly like a
+			# revoked one. Same argument as bin/backup-server.sh's off-site guard.
+			[ -n "${BACKUP_OFFSITE_REPOSITORY:-}" ] \
+				|| die "BACKUP_OFFSITE_REPOSITORY is not set - run bin/render-env.sh"
+			[ -n "${BACKUP_OFFSITE_PASSWORD:-}" ]   || die "BACKUP_OFFSITE_PASSWORD is not set"
+			[ -n "${BACKUP_OFFSITE_ACCESS_KEY:-}" ] || die "BACKUP_OFFSITE_ACCESS_KEY is not set"
+			[ -n "${BACKUP_OFFSITE_SECRET_KEY:-}" ] || die "BACKUP_OFFSITE_SECRET_KEY is not set"
+			printf '%s' "$BACKUP_OFFSITE_PASSWORD" >"$PWDIR/pw"
+			export RESTIC_REPOSITORY="$BACKUP_OFFSITE_REPOSITORY"
+			export AWS_ACCESS_KEY_ID="$BACKUP_OFFSITE_ACCESS_KEY"
+			export AWS_SECRET_ACCESS_KEY="$BACKUP_OFFSITE_SECRET_KEY"
+		fi
+		export RESTIC_PASSWORD_FILE="$PWDIR/pw"
+		;;
 	local)
 		export RESTIC_REPOSITORY="${RESTIC_REPOSITORY:-$HOME/backups/home-server}"
 		export RESTIC_PASSWORD_FILE="${RESTIC_PASSWORD_FILE:-$HOME/.config/restic/home-server.pw}"
@@ -80,9 +191,35 @@ case "$REPO_KIND" in
 		set +a
 		export RESTIC_PASSWORD_FILE="${HOME_SERVER_OFFSITE_PW:-$HOME/.config/restic/home-server-offsite.pw}"
 		;;
-	*) die "--repo takes 'local' or 'offsite', not '$REPO_KIND'" ;;
+	*) die "--repo takes 'server', 'server_offsite', 'offsite' or 'local', not '$REPO_KIND'" ;;
 esac
 [ -s "$RESTIC_PASSWORD_FILE" ] || die "no repository password at $RESTIC_PASSWORD_FILE"
+
+# WHICH CHAIN, NOT JUST WHICH REPOSITORY - and a repository here holds more than
+# one. `--latest 1` means "the latest per GROUP" and restic groups by host AND
+# paths, so an unfiltered `restore latest` picks among chains rather than taking
+# the newest snapshot. Measured on the off-site repository on 2026-09-09, which
+# holds THREE:
+#
+#   32 x /var/backups/staging/config              this server, nightly
+#    1 x /home/avs/.cache/home-server/staging/config   the workstation's third copy
+#    6 x /home/avs/.cache/media-stack/staging/config   from before the 2026-08-15 rename
+#
+# So the check that says "the off-site copy restores" could restore another
+# machine's tree, or a three-week-old one from a project name that no longer
+# exists, and report success. bin/backup-server.sh already works around this for
+# the marker it writes and says so; the verification never did.
+#
+# THE PATH IS THE ONLY DISCRIMINATOR, because the host tag is a fixed
+# `home-server` on both writers. The three server-facing kinds all verify the
+# SERVER's chain deliberately - including --repo offsite, run from the
+# workstation, because docs/backups.md's whole point is that it restored the
+# snapshot the server itself wrote rather than a copy of the workstation's.
+case "$REPO_KIND" in
+	local) SNAP_PATH="${HOME_SERVER_SNAPSHOT_PATH:-$HOME/.cache/home-server/staging/config}" ;;
+	*)     SNAP_PATH="${HOME_SERVER_SNAPSHOT_PATH:-/var/backups/staging/config}" ;;
+esac
+CHAIN=(--host "$HOST_TAG" --path "$SNAP_PATH")
 
 # WHERE THE SCRATCH TREE GOES IS NOT A DETAIL. config/ is 5.5 GB, and on this
 # workstation /tmp is tmpfs with 7.6 GB free out of 15 GB of RAM - so the
@@ -101,7 +238,18 @@ mkdir -p "$SCRATCH" 2>/dev/null
 # is a headroom figure, and one that no longer clears the tree it is protecting
 # would let the restore run out of disk partway through, after downloading
 # several gigabytes.
-need_mb=$(restic snapshots --latest 1 --json 2>/dev/null \
+snap_json=$(restic snapshots "${CHAIN[@]}" --latest 1 --json 2>/dev/null)
+# A CHAIN THAT DOES NOT EXIST MUST NOT READ AS A FAILED RESTORE. Without this the
+# filter above turns a wrong SNAP_PATH into `restore failed` several minutes and
+# several gigabytes later, which sends the reader to the backup rather than to the
+# one line that is actually wrong.
+case "$snap_json" in
+	''|'[]'|null) die "no snapshot in $RESTIC_REPOSITORY for host $HOST_TAG path $SNAP_PATH.
+  That is the chain this kind verifies; override it with HOME_SERVER_SNAPSHOT_PATH.
+  What the repository does hold:
+$(restic snapshots --json 2>/dev/null | jq -r '[.[]|.paths[]]|unique|.[]|"    " + .' 2>/dev/null)" ;;
+esac
+need_mb=$(printf '%s' "$snap_json" \
 	| jq -r '[.[].summary.total_bytes_processed // 0] | max // 0' \
 	| awk '{n = ($1 / 1048576) * 1.5; printf "%d", (n < 1 ? 20000 : n)}')
 have_mb=$(df -Pm "$SCRATCH" | awk 'NR==2 {print $4}')
@@ -122,7 +270,8 @@ cleanup() { [ -n "$KEEP" ] || rm -rf "$TARGET"; }
 trap cleanup EXIT
 
 say "repository: $RESTIC_REPOSITORY"
-restic snapshots --latest 1 --compact || die "cannot read the repository"
+echo "  chain: host $HOST_TAG, path $SNAP_PATH"
+restic snapshots "${CHAIN[@]}" --latest 1 --compact || die "cannot read the repository"
 
 # ------------------------------------------------------------------------------
 say "Integrity"
@@ -147,7 +296,7 @@ fi
 # ------------------------------------------------------------------------------
 say "Restoring the latest snapshot"
 # ------------------------------------------------------------------------------
-restic restore latest --target "$TARGET" >/dev/null || die "restore failed"
+restic restore latest "${CHAIN[@]}" --target "$TARGET" >/dev/null || die "restore failed"
 
 # restic recreates the full original path, so config/ lands several levels down
 # under whatever staging directory it was backed up from. Find it rather than
@@ -370,21 +519,52 @@ printf '\033[32mthis snapshot restores\033[0m\n'
 # automated job needs a durable record of its last success, not just an exit 0 -
 # and this was the job it was not applied to.
 #
-# WRITTEN OVER SSH, exactly as bin/backup-offsite.sh does for offsite_pruned_at,
-# and for the same reason: this runs on the WORKSTATION, and the check that
-# reads it runs on the server. Non-fatal - a marker that could not be recorded
-# must never turn a successful restore verification into a failure.
+# THE REPO KIND IS PART OF THE KEY, and that is the load-bearing half. Proving
+# one copy restores says nothing about another, and collapsing them into a single
+# marker would let the weekly automated run here hold the off-site drill's key
+# green for ever - which is the same argument bin/verify-host.sh makes for keeping
+# two ceilings, applied one level up. Four kinds, four keys, four checks.
 #
-# The repo kind is part of the key. Proving the local copy restores says nothing
-# about the one that survives the disk, and collapsing them into one marker
-# would let a monthly local run hide an off-site copy nobody has ever tested.
+# Non-fatal either way: a marker that could not be recorded must never turn a
+# successful restore verification into a failure.
 stamp="restore_verified_${REPO_KIND}_at"
-if ssh "${HOME_SERVER_HOST:-home.local}" \
-  'f=~/.cache/home-server/backup-state; mkdir -p "$(dirname "$f")"; touch "$f";
-   grep -v "^'"$stamp"'=" "$f" > "$f.tmp";
-   echo "'"$stamp"'=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$f.tmp";
-   mv "$f.tmp" "$f"' 2>/dev/null; then
-	printf '  recorded the verification on the server as %s\n' "$stamp"
-else
-	printf '  (could not reach the server to record it - harmless)\n'
-fi
+case "$REPO_KIND" in
+	server|server_offsite)
+		# ALREADY ON THE MACHINE THAT READS IT. The ssh below is a loopback ssh from
+		# here, needing key auth to itself, and it fails into the "harmless" branch -
+		# so a verification would run for an hour and record nothing, silently.
+		#
+		# ITS OWN TEMP NAME, not the bare "$STATE.tmp" that bin/backup-server.sh
+		# uses: that script rewrites this file WHOLE at 03:00, and two writers
+		# sharing one temp path can truncate each other's work. What actually keeps
+		# them apart is ORDERING - both units are After=home-server-backup.service,
+		# and Persistent=true catch-up after downtime is the only thing that could
+		# make them coincide. A same-instant race would still lose a key; that is
+		# named here rather than claimed shut, because the alternative is a lock
+		# neither writer has ever needed.
+		tmp="$STATE.verify-restore.$$"
+		mkdir -p "$(dirname "$STATE")" 2>/dev/null
+		touch "$STATE" 2>/dev/null
+		if { grep -v "^$stamp=" "$STATE"; echo "$stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)"; } \
+			>"$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null; then
+			printf '  recorded the verification as %s\n' "$stamp"
+		else
+			rm -f "$tmp" 2>/dev/null
+			printf '  (could not record %s in %s - harmless)\n' "$stamp" "$STATE"
+		fi
+		;;
+	*)
+		# OVER SSH, exactly as bin/backup-offsite.sh does for offsite_pruned_at, and
+		# for the same reason: these two kinds run on the WORKSTATION and the check
+		# that reads the marker runs on the server.
+		if ssh "${HOME_SERVER_HOST:-home.local}" \
+		  'f=~/.cache/home-server/backup-state; mkdir -p "$(dirname "$f")"; touch "$f";
+		   grep -v "^'"$stamp"'=" "$f" > "$f.tmp";
+		   echo "'"$stamp"'=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$f.tmp";
+		   mv "$f.tmp" "$f"' 2>/dev/null; then
+			printf '  recorded the verification on the server as %s\n' "$stamp"
+		else
+			printf '  (could not reach the server to record it - harmless)\n'
+		fi
+		;;
+esac

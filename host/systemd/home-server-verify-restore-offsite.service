@@ -1,0 +1,59 @@
+# ==============================================================================
+# Prove the off-site copy restores, from the server, monthly
+# ------------------------------------------------------------------------------
+# THIS DOES NOT REPLACE THE WORKSTATION DRILL, and the two markers are separate so
+# that it cannot. `bin/verify-restore.sh --repo offsite`, run by hand from the
+# workstation, is the only thing that proves the surviving copy is reachable
+# WITHOUT this machine - which is the situation the off-site copy exists for. This
+# unit proves something weaker and still worth knowing: that the data up there is
+# readable and produces a usable config tree, without waiting for a person.
+#
+# So it writes restore_verified_server_offsite_at and the drill writes
+# restore_verified_offsite_at, graded by two checks at two ceilings. Sharing one
+# key would have kept the drill's marker green for ever off the back of this
+# unit - which is exactly the argument bin/verify-host.sh already makes for not
+# collapsing the local and off-site keys into one.
+#
+# IT COSTS EGRESS, which is why it is monthly and the other one is weekly: ~4.6 GB
+# pulled back from Scaleway plus 5% of the pack data re-read. The server has the
+# credentials already - bin/backup-server.sh copies up here nightly - and a
+# restore only ever reads, so nothing about this widens what the server can do to
+# the off-site repository. The key is still scoped so it cannot delete.
+#
+# THE CHAIN FILTER IS NOT OPTIONAL HERE. The off-site repository holds three
+# chains: this server's, the workstation's third copy, and six snapshots still
+# under ~/.cache/media-stack from before the 2026-08-15 rename. An unfiltered
+# `restore latest` picks among them, so without the filter this unit could restore
+# another machine's tree and report that the off-site copy verifies. See
+# bin/verify-restore.sh.
+#
+# Symlinked into ~/.config/systemd/user/ - see host/systemd/README.md.
+# ==============================================================================
+
+[Unit]
+Description=Prove the off-site backup restores, from the server
+Documentation=file:/var/home-server/bin/verify-restore.sh
+# Ordering only, never Wants= - see home-server-verify-restore.service, which
+# gives the argument and the reason this is not decoration: three units write
+# ~/.cache/home-server/backup-state and Persistent=true catch-up is the one thing
+# that can make them coincide.
+After=home-server-backup.service
+After=home-server-verify-restore.service
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/var/home-server/.env
+ExecStart=/var/home-server/bin/verify-restore.sh --repo server_offsite --deep
+Environment=TMPDIR=/var/tmp
+# LONGER THAN THE WEEKLY ONE, and bounded by the network rather than by the disk:
+# this pulls the whole snapshot back across the internet. Still a ceiling - a
+# hung connection must not leave the unit running into next month.
+TimeoutStartSec=120min
+
+Nice=10
+CPUWeight=20
+IOWeight=20
+
+MemoryHigh=1G
+MemoryMax=2G

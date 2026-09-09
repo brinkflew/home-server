@@ -506,12 +506,21 @@ if [ -z "$DRY" ]; then
 		# moment it happened. It is also written by the 00:00 pre-update run, so the
 		# value can legitimately be older than local_at above.
 		grep -E '^windmill_dump_at=' "$STATE" 2>/dev/null
-		# Same again, from the workstation this time. bin/verify-restore.sh writes
-		# restore_verified_local_at / restore_verified_offsite_at over SSH when a
+		# Same again. bin/verify-restore.sh writes restore_verified_<kind>_at when a
 		# restore actually verifies, and this 03:00 rewrite would erase it the same
-		# night. Matched as a PREFIX so a third repository kind does not silently
+		# night. Matched as a PREFIX so a further repository kind does not silently
 		# stop being carried forward the day someone adds one.
-		grep -E '^restore_verified_[a-z]+_at=' "$STATE" 2>/dev/null
+		#
+		# AND THAT PREFIX WAS [a-z]+ UNTIL 2026-09-09, WHICH IS NARROWER THAN IT
+		# LOOKS. It carried `local` and `offsite` and would have silently dropped
+		# `server_offsite` - a key with an underscore in it - so the marker for the
+		# monthly off-site verification would have been destroyed here on the first
+		# night after it was written, and the check would have read "no off-site
+		# restore verification has EVER been recorded" for ever. The comment above
+		# anticipated a third kind correctly; the character class it was written
+		# beside did not. Two of the four kinds now run here on a timer rather than
+		# on the workstation, so this line carries markers written by this machine.
+		grep -E '^restore_verified_[a-z_]+_at=' "$STATE" 2>/dev/null
 	} >"$STATE.tmp"
 	mv "$STATE.tmp" "$STATE"
 fi

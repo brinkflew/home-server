@@ -543,16 +543,32 @@ groups:
         # why this rule has to exist: CheckFailing is `== 3`, the same gap
         # OsImageStale, ProbeBinaryMissing and UpdateRolledBack each needed
         # their own rule for.
-        expr: home_server_check_status{id=~"backup.restore_(local|offsite)_age"} == 2
+        #
+        # A PATTERN AND NOT AN ALTERNATION. This read
+        # `backup.restore_(local|offsite)_age` until 2026-09-09, which is a
+        # hand-maintained list of ids in a file nothing cross-checks - so the two
+        # server-side verifications added that day would have warned in the battery
+        # and paged nobody, which is the one failure this rule exists to prevent.
+        # Same lesson as bin/lint-repo.sh leg 9: match the shape the producer mints,
+        # never enumerate what it has minted so far.
+        expr: home_server_check_status{id=~"backup.restore_[a-z_]+_age"} == 2
         for: 1h
         labels:
           severity: warning
         annotations:
           summary: "{{ $labels.id }} - the backups are not proven to restore"
           description: >-
-            A backup is not proven until it has been restored. Run
+            A backup is not proven until it has been restored. Four copies are
+            graded separately and the id says which. `backup.restore_server_age`
+            and `backup.restore_server_offsite_age` are written by timers on the
+            host - check `systemctl --user status home-server-verify-restore` and
+            `home-server-verify-restore-offsite`, and note that "has EVER been
+            recorded" on a rebuilt host means the one-time start in
+            host/systemd/README.md was skipped. `backup.restore_local_age` and
+            `backup.restore_offsite_age` are the two that need a person: run
             `./bin/verify-restore.sh` from the workstation, and
-            `--repo offsite --deep` for the copy that survives the disk.
+            `--repo offsite --deep` for the drill that proves the surviving copy is
+            reachable without this machine.
 
       - alert: BackupTsdbSnapshotStale
         expr: time() - home_server_backup_tsdb_snapshot_timestamp_seconds > 172800

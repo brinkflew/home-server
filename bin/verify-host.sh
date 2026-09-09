@@ -1437,9 +1437,18 @@ if [ -z "$GREENBOOT" ]; then
 	# HOME is always set, but an unbound expansion aborts the whole script
 	# under `set -u` and that is too sharp an edge to leave lying around.
 	backup_state="${HOME:-/root}/.cache/home-server/backup-state"
-	# <id> <label> <key> <max-hours> <severity>
+	# <id> <label> <key> <max-hours> <severity> [hint]
+	#
+	# THE HINT IS WHAT A READER DOES NEXT, and it differs by caller in a way the
+	# label cannot carry. Most of these legs are fixed by looking at the job that
+	# writes the marker; the two server-side restore verifications are fixed by
+	# starting a unit, and on a fresh host "has EVER been recorded" means the
+	# one-time start in host/systemd/README.md was skipped rather than that
+	# anything is broken. Appended to both the absent and the stale message, so
+	# the sentence is the same wherever it is read from. Optional, so every
+	# existing caller is unchanged.
 	check_backup_age() {
-		local id="$1" label="$2" key="$3" max="$4" sev="$5" at age
+		local id="$1" label="$2" key="$3" max="$4" sev="$5" hint="${6:-}" at age
 		at=$(sed -n "s/^${key}=//p" "$backup_state" 2>/dev/null | tail -1)
 		fact "backup_$key" "${at:-}"
 		if [ -z "$at" ]; then
@@ -1463,9 +1472,9 @@ if [ -z "$GREENBOOT" ]; then
 				# preceded by a LITERAL ok|bad|warn|note, so the variable form
 				# silently drops both callers from lint's coverage. Same lesson
 				# as the boot_free branches above.
-				warn "$id" "no $label has EVER been recorded"
+				warn "$id" "no $label has EVER been recorded${hint}"
 			else
-				bad "$id" "no $label has EVER been recorded"
+				bad "$id" "no $label has EVER been recorded${hint}"
 			fi
 			return
 		fi
@@ -1473,7 +1482,7 @@ if [ -z "$GREENBOOT" ]; then
 		if [ "$age" -le "$max" ]; then
 			ok "$id" "$label ${age}h ago"
 		else
-			"$sev" "$id" "the $label is ${age}h old (limit ${max}h)"
+			"$sev" "$id" "the $label is ${age}h old (limit ${max}h)${hint}"
 		fi
 	}
 	# The local copy is on the same disk as config/, so it is the weaker of the
@@ -1552,15 +1561,36 @@ if [ -z "$GREENBOOT" ]; then
 	#
 	# WARN AND NOT FAIL, for the reason the whole backup block already gives:
 	# bin/reboot-host.sh refuses to act on a host this battery calls unhealthy,
-	# and a restore verification that is overdue is not fixed by a reboot. It is
-	# fixed by running the script, which needs a workstation.
+	# and a restore verification that is overdue is not fixed by a reboot.
 	#
-	# TWO KEYS, TWO CEILINGS. The local repository sits on the same disk as
-	# config/, so proving it restores says nothing about surviving that disk - and
-	# a single shared marker would let a cheap monthly local run stand in for an
-	# off-site copy nobody has ever tested. The off-site ceiling is the LONGER of
-	# the two only because that verification pulls data back across the network and
-	# costs egress; it is the more important of the pair, not the less.
+	# FOUR KEYS, FOUR CEILINGS, AND THE KEYS MUST NOT BE SHARED. A single marker
+	# would let a cheap automated run stand in for a copy nobody has tested, so
+	# every repository kind bin/verify-restore.sh knows about writes its own:
+	#
+	#   server          the server's OWN nightly repository, /var/backups. Weekly,
+	#                   from home-server-verify-restore.timer.
+	#   server_offsite  the off-site copy, read from here. Monthly.
+	#   offsite         the off-site copy, read from the WORKSTATION - the drill
+	#                   that proves it is reachable without this machine.
+	#   local           the workstation's THIRD copy at ~/backups.
+	#
+	# THE TWO WORKSTATION CEILINGS ARE LONG BECAUSE A PERSON HAS TO BE HOME; the
+	# two server ones are two periods of their timer, matching the 48h the nightly
+	# legs above use for the same reason. The off-site drill's ceiling is the
+	# longest of the four and it is the most important of them, not the least -
+	# it pulls data back across the network and costs egress.
+	#
+	# `server` EXISTED FOR A MONTH BEFORE ANYTHING VERIFIED IT. The server's own
+	# repository is the copy an ordinary restore would use, written nightly by
+	# automation, and it was the one copy with no verification and no marker -
+	# because `--repo local` names the workstation's third copy, which reads like
+	# it means this one. See docs/known-state.md.
+	check_backup_age backup.restore_server_age  "server restore verification" \
+		restore_verified_server_at  336 warn \
+		" - home-server-verify-restore.timer writes it weekly; if it has never run at all, the one-time start in host/systemd/README.md was skipped"
+	check_backup_age backup.restore_server_offsite_age "off-site restore verification from the server" \
+		restore_verified_server_offsite_at 1440 warn \
+		" - home-server-verify-restore-offsite.timer writes it monthly; if it has never run at all, the one-time start in host/systemd/README.md was skipped"
 	check_backup_age backup.restore_local_age   "local restore verification" \
 		restore_verified_local_at   720 warn
 	check_backup_age backup.restore_offsite_age "off-site restore verification" \

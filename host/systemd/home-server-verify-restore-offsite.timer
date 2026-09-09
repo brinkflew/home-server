@@ -1,0 +1,43 @@
+# ==============================================================================
+# Verify the off-site copy monthly, on the first Monday
+# ------------------------------------------------------------------------------
+# THE FIRST MONDAY, not the first of the month, and the weekday is what does the
+# work. `*-*-01` lands on a Sunday one month in seven, which is the unattended
+# reboot window - home-server-reboot.timer, hourly 05:00-09:00 - and a two-hour
+# restore started at 05:30 there would be killed by the machine going down. A
+# weekday-and-date pair is ANDed by systemd, so `Mon *-*-1..7` is the first Monday
+# and can never be a Sunday.
+#
+# It is also never a Wednesday, which keeps it off home-server-verify-restore's
+# day. That matters less than it looks - both are After=home-server-backup and one
+# is After= the other - but two multi-gigabyte restores on one morning is nothing
+# to arrange deliberately.
+#
+# 05:30 for the same reason as its weekly sibling: it is the first minute after
+# the 00:00-04:50 night of jobs, and clear of the 03:00 backup this reads behind.
+#
+# MONTHLY BECAUSE IT COSTS EGRESS. ~4.6 GB pulled back from Scaleway each run.
+# bin/verify-host.sh grades the marker at 1440h - two periods, the same slack the
+# weekly one gets at 336h and the nightly legs get at 48h.
+#
+# Persistent=true so a machine that was off on the first Monday verifies when it
+# comes back rather than skipping the month - which on a monthly cadence is the
+# difference between a stale marker and a missed one.
+#
+# IT DOES NOT COVER THE FIRST INSTALL. `enable --now` writes the stamp file
+# straight away, so there is no missed elapse and the unit does not fire; here
+# that would mean the first off-site verification waits up to a month. The
+# one-time `systemctl --user start` is in host/systemd/README.md.
+# ==============================================================================
+
+[Unit]
+Description=Prove the off-site backup restores, monthly
+
+[Timer]
+OnCalendar=Mon *-*-1..7 05:30
+Persistent=true
+RandomizedDelaySec=10min
+AccuracySec=5min
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,73 @@
+# ==============================================================================
+# Prove the server's own backup restores, rather than that it exists
+# ------------------------------------------------------------------------------
+# THE COPY THIS VERIFIES IS THE ONE NOTHING VERIFIED. There are three
+# repositories, and until 2026-09-09 the one written nightly by automation -
+# /var/backups/home-server, the copy an ordinary restore would actually use - had
+# no verification and no marker at all. The two that did have markers were the
+# off-site copy and the WORKSTATION's third copy, both run by hand.
+#
+# `--repo local` is what hid it. It names the workstation's third copy at
+# ~/backups, not this machine's repository, so "the local restore verification is
+# 20 days old" read like a statement about the server and was not one.
+#
+# EVERY OTHER JOB ON THIS HOST HAS A TIMER AND A DURABLE MARKER; these had the
+# marker and no timer, so the remedy was a person remembering. That is the whole
+# change: the marker was already being written, and nothing was writing it on a
+# schedule.
+#
+# A plain user unit rather than a quadlet, for the reason every host-side job in
+# this directory is one: it reads a repository on the host's own disk and restores
+# into the host's own scratch space. Nothing about it belongs in a container.
+#
+# WHAT IT COSTS is one restore of ~4.6 GB from the same NVMe, plus a 5% re-read of
+# the pack data, once a week. What it buys is the difference between "restic check
+# says the repository is consistent" and "what comes out is a config tree the
+# stack can start from" - 23 SQLite databases through PRAGMA integrity_check, 11
+# certificates, the ACME account, and Pocket ID's passkey store present by name.
+#
+# Symlinked into ~/.config/systemd/user/ - see host/systemd/README.md.
+# ==============================================================================
+
+[Unit]
+Description=Prove the server's own backup restores
+Documentation=file:/var/home-server/bin/verify-restore.sh
+# Ordering only, never Wants=. A verification is worth running whether or not the
+# stack is up, and a Wants= here would start containers somebody had deliberately
+# stopped - the rule home-server-backup.service states in full.
+#
+# AND IT IS LOAD-BEARING RATHER THAN DECORATIVE. Both writers rewrite
+# ~/.cache/home-server/backup-state, and bin/backup-server.sh rewrites it WHOLE.
+# At 03:00 against 05:30 they cannot meet - but both timers are Persistent=true,
+# so a machine that was off for a day fires them together on the next boot, and
+# that is the one case where they could. This is what keeps them in order.
+After=home-server-backup.service
+After=network-online.target
+
+[Service]
+Type=oneshot
+# NOT the optional -/ form. The repository password is in here; without it this
+# unit cannot do its job at all, and failing loudly is the right answer.
+EnvironmentFile=/var/home-server/.env
+ExecStart=/var/home-server/bin/verify-restore.sh --repo server --deep
+# ~8 GB of restored tree has to land somewhere disk-backed. The script refuses a
+# tmpfs scratch outright, and its own default is $HOME/.cache - which is the
+# directory the marker file lives in. /var/tmp is the same filesystem and the
+# right place for a large temporary tree. A literal, because Environment= does
+# not expand a variable from EnvironmentFile=.
+Environment=TMPDIR=/var/tmp
+# A local restore plus 23 integrity checks. Generous; the point is that a job
+# wedged on I/O cannot still be running when next week's tick arrives.
+TimeoutStartSec=30min
+
+# The whole job is I/O against the disk that also holds every application's
+# database and the repository it is reading. Yield to them, same shape as
+# home-server-backup.
+Nice=10
+CPUWeight=20
+IOWeight=20
+
+# A ceiling, not a tuning knob. restic's memory use scales with the index, and
+# this is the same pair home-server-backup uses for the same binary.
+MemoryHigh=1G
+MemoryMax=2G

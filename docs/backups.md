@@ -18,7 +18,10 @@ passkeys, watch state - existed in exactly one place.
 
 ```bash
 systemctl --user start home-server-backup     # on the server; the timer runs it at 03:00
-./bin/verify-restore.sh                       # from the WORKSTATION: does it actually restore?
+systemctl --user start home-server-verify-restore          # does the SERVER's copy restore? weekly
+systemctl --user start home-server-verify-restore-offsite  # does the off-site copy? monthly
+./bin/verify-restore.sh                       # from the WORKSTATION: the third copy
+./bin/verify-restore.sh --repo offsite --deep  # from the WORKSTATION: the drill that matters
 ```
 
 | Copy | Where | Written by | Protects against |
@@ -263,14 +266,43 @@ every claim about restoring TLS and sign-on was inference.
 assertions: 23 databases through `PRAGMA integrity_check`, 11 certificates, the ACME account, and
 every named database including Pocket ID's passkey store.
 
-| Copy | Proven by |
-|---|---|
-| server local | `TMPDIR=/var/tmp bin/verify-restore.sh` on the server, against `/var/backups/home-server` |
-| workstation pull | `bin/verify-restore.sh` |
-| **off-site** | `bin/verify-restore.sh --repo offsite` - 5.6 GB pulled back from Scaleway |
+**Two of the four are now on a timer, since 2026-09-09.** Four kinds rather than three, because the
+repository and the machine reading it are two different questions:
+
+| Kind | Copy | Runs | Marker |
+|---|---|---|---|
+| `--repo server` | `/var/backups/home-server` | **the server, weekly (Wed 05:30)** | `restore_verified_server_at` |
+| `--repo server_offsite` | off-site | **the server, monthly (first Mon 05:30)** | `restore_verified_server_offsite_at` |
+| `--repo offsite` | off-site | the workstation, by hand | `restore_verified_offsite_at` |
+| `--repo local` | `~/backups/home-server` | the workstation, by hand | `restore_verified_local_at` |
+
+**`--repo server` closed a gap that had been open for a month and looked closed.** The server's own
+nightly repository is the copy an ordinary restore would use, and it was the one copy with no
+verification and no marker at all - while two checks reported on restore verifications and both
+passed. `--repo local` is what hid it: it names the *workstation's* third copy, so
+"the local restore verification is 20 days old" read like a statement about the server and was not
+one. The proof that it is not a naming quibble is that `core` has no `~/backups` at all.
+
+**The two server kinds do not replace the two manual ones, and the markers are separate so that they
+cannot.** `--repo offsite` from the workstation is the only one that proves the surviving copy is
+reachable *without* the machine it protects - a restore read from the server proves the data is
+readable and nothing about the path you would actually take if `nvme0n1` died. A single shared marker
+would have let the monthly automated run hold the drill's key green for ever, which is the same
+argument for two keys applied one level up.
 
 The off-site one is the test that mattered, because it is the only copy that survives `nvme0n1`, and
 it restored the snapshot **the server itself wrote** rather than a copy of the workstation's chain.
+
+**And "the snapshot the server itself wrote" was not what the script selected.** `restic restore
+latest` was unfiltered, and `--latest 1` means the latest *per group* - restic groups by host and
+paths. Measured on 2026-09-09, the off-site repository holds **three** chains: 32 snapshots under
+`/var/backups/staging/config`, one under `~/.cache/home-server/staging/config`, and six still under
+`~/.cache/media-stack/staging/config` from before the 2026-08-15 rename. So the verification could
+restore another machine's tree, or a three-week-old one from a project name that no longer exists,
+and report that this copy restores. `bin/backup-server.sh` had documented and worked around exactly
+this for the snapshot id it records; the verification never did. Every kind now filters by host and
+path, and a chain that matches nothing is a distinct error naming the override rather than a `restore
+failed` several gigabytes later.
 
 **Restoring 5.5 GB needs somewhere to put it, and `/tmp` is not it.** On the workstation `/tmp` is
 tmpfs with 7.6 GB free out of 15 GB of RAM, so the obvious default would unpack the tree into memory
@@ -294,18 +326,29 @@ manager** - off-site backups you cannot decrypt are not backups.
 here writes a marker into `~/.cache/home-server/backup-state` and `bin/verify-host.sh` grades it for
 staleness. `bin/verify-restore.sh` wrote nothing at all - so "this ran last night" and "nobody has
 run it since March" were the same observable state, on the one job whose entire purpose is to turn an
-assumption into a measurement. It now writes `restore_verified_local_at` or
-`restore_verified_offsite_at` over SSH, exactly as `bin/backup-offsite.sh` already does for
-`offsite_pruned_at`, and **only on success** - a failed verification leaves the previous timestamp to
-go stale rather than recording a run that proved nothing.
+assumption into a measurement. It now writes `restore_verified_<kind>_at` and **only on success** - a
+failed verification leaves the previous timestamp to go stale rather than recording a run that proved
+nothing. The two workstation kinds write it over SSH, exactly as `bin/backup-offsite.sh` already does
+for `offsite_pruned_at`; the two server kinds write the file directly, because from the server that
+SSH is a loopback connection needing key auth to itself, and it fails into the "harmless" branch - so
+a verification would run for an hour and record nothing, silently.
 
-**Two keys and two ceilings, 30 days and 90.** The local repository sits on the same disk as
-`config/`, so proving it restores says nothing about surviving that disk; a single shared marker
-would let a cheap monthly local run stand in for an off-site copy nobody had ever tested. The
-off-site ceiling is the **longer** of the two only because that verification pulls data back across
-the network and costs egress - it is the more important of the pair, not the less. `RestoreNeverProven`
-alerts on either, and keys on the **check** rather than on the marker's age, because a staleness rule
-needs the series to exist and the state it has to cover is a marker that was never written.
+**Four keys and four ceilings: 336 hours, 1440, 720 and 2160.** The two server ceilings are two
+periods of their own timer, which is the same slack the nightly legs get from their 48h. The two
+workstation ceilings are long because a person has to be home. A single shared marker would let a
+cheap automated run stand in for a copy nobody had ever tested - which is why the pair became a
+quartet rather than the new runs refreshing the existing keys. The off-site drill's 2160h is the
+**longest** of the four and it is the most important of them, not the least: it pulls data back across
+the network, costs egress, and is the only one that does not depend on the machine being protected.
+
+`RestoreNeverProven` alerts on any of the four, and keys on the **check** rather than on the marker's
+age, because a staleness rule needs the series to exist and the state it has to cover is a marker that
+was never written. **Its selector is a pattern and not a list** - `backup.restore_[a-z_]+_age` - since
+the two ids added on 2026-09-09 would otherwise have warned in the battery and paged nobody, a
+hand-maintained alternation in a file nothing cross-checks. `bin/backup-server.sh`'s carry-forward
+learned the same lesson the same day: it rewrites `backup-state` whole at 03:00 and preserved
+`restore_verified_[a-z]+_at`, a class that carries `local` and `offsite` and would have silently
+dropped `server_offsite` on the first night after it was written.
 
 **`--repo local` means the WORKSTATION's copy, and running it for the first time found that copy four
 days stale.** There are three repositories, not two: the server's nightly one at
@@ -314,4 +357,6 @@ days stale.** There are three repositories, not two: the server's nightly one at
 2026-08-15, taken before ntfy existed, so the verification failed on a missing `ntfy/auth.db` - the
 alerting accounts, whose loss is invisible until a phone quietly stops authenticating. Nothing tracks
 its freshness: `offsite_pruned_at` records the workstation's *prune*, and there is no marker for the
-copy itself. That gap is named here rather than closed.
+copy itself. That gap is named here rather than closed - and it is now the only one of the four with
+no freshness signal at all, since `--repo server` grades the copy this machine writes and the two
+off-site kinds grade a copy `backup.offsite_age` already fails on within 72h.

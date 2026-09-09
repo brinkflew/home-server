@@ -1,0 +1,44 @@
+# ==============================================================================
+# Verify the server's own repository weekly, on a Wednesday
+# ------------------------------------------------------------------------------
+# 05:30 IS THE FIRST QUIET MINUTE OF THE DAY. The night is fully booked below it:
+# podman-auto-update at 00:00-02:00, the backup at 03:00 with a 45-minute
+# timeout, the CI artifact sweep at 04:00, the missing-media search at 04:30, the
+# agents mirror at 04:40 and the checkout pull at 04:50. Reading a repository the
+# 03:00 backup is still writing is the one overlap that would matter.
+#
+# WEDNESDAY, AND NOT SUNDAY, because Sunday 05:00-09:00 is the unattended reboot
+# window - home-server-reboot.timer - and a restore in progress there would be
+# killed by the machine going down. It would cost nothing but a week, since the
+# marker is only written on success and a failed run leaves the previous
+# timestamp to age. Mid-week also leaves days of runway before that window has
+# any reason to care.
+#
+# WEEKLY RATHER THAN NIGHTLY. This reads the whole repository back and restores
+# ~4.6 GB; the failure it catches - a repository that no longer produces a usable
+# config tree - does not appear overnight, and backup.local_age already fails
+# within 48h if the backup itself stops. bin/verify-host.sh grades this marker at
+# 336h, two periods, matching the slack the nightly legs get from their 48h.
+#
+# Persistent=true so a machine that was off on Wednesday verifies when it comes
+# back rather than skipping the week.
+#
+# IT DOES NOT COVER THE FIRST INSTALL, which is the trap this directory has now
+# hit four times: `systemctl --user enable --now` writes the stamp file
+# immediately, so there is no missed elapse and the unit does NOT fire. Here that
+# would mean the first verification waits a week - and the check would correctly
+# report that none has ever been recorded. The one-time `systemctl --user start`
+# is in host/systemd/README.md with its siblings.
+# ==============================================================================
+
+[Unit]
+Description=Prove the server's own backup restores, weekly
+
+[Timer]
+OnCalendar=Wed *-*-* 05:30
+Persistent=true
+RandomizedDelaySec=10min
+AccuracySec=5min
+
+[Install]
+WantedBy=timers.target

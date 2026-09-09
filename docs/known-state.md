@@ -5284,3 +5284,56 @@ service on the rack read **memory starved**. Nothing on the host was.
   same recipe. Eight carry it. The number is gone from all three copies rather than corrected a
   third time.
 
+
+### The copy an ordinary restore would use was the one copy nothing verified
+- **Three repositories, and `--repo local` names the WORKSTATION's third one.**
+  `bin/verify-restore.sh` defaulted `RESTIC_REPOSITORY` to `$HOME/backups/home-server`, so
+  `restore_verified_local_at` graded the copy `bin/backup-config.sh` writes BY HAND from the
+  workstation - not `/var/backups/home-server`, which `bin/backup-server.sh` writes nightly and which
+  any ordinary restore would read. Two checks reported on restore verifications, both passed, and the
+  primary copy had never been verified on a schedule at all. `core` has no `~/backups`, which is the
+  proof this is not a naming quibble: the kind could not have run here even by accident.
+- **Every other job on this host has a timer AND a durable marker; these had the marker and no
+  timer.** CLAUDE.md states the rule in the abstract and 2026-08-19 applied its second half to this
+  script. The remedy stayed a person remembering, at 472h of a 720h ceiling on 2026-09-09.
+- **`restic restore latest` was picking among CHAINS, not taking the newest snapshot.** `--latest 1`
+  means the latest per GROUP and restic groups by host and paths. The off-site repository holds
+  **three**: 32 snapshots under `/var/backups/staging/config`, one under
+  `~/.cache/home-server/staging/config`, and six still under `~/.cache/media-stack/staging/config`
+  from before the 2026-08-15 rename. So a verification could restore another machine's tree, or a
+  three-week-old one from a project name that no longer exists, and report that this copy restores.
+  `bin/backup-server.sh` documents and works around exactly this for the snapshot id it records; the
+  verification never did. **The host tag cannot discriminate** - both writers pass a fixed
+  `--host home-server` deliberately, so `forget` does not split one machine's history - so the PATH is
+  the only filter that works, and a chain matching nothing is now its own error naming the override
+  rather than a `restore failed` several gigabytes later.
+- **The carry-forward anticipated a third kind and its character class did not.**
+  `bin/backup-server.sh` rewrites `backup-state` WHOLE at 03:00, so every key that must survive is
+  named; the restore markers were matched as `^restore_verified_[a-z]+_at=` under a comment saying
+  *"so a third repository kind does not silently stop being carried forward the day someone adds
+  one."* `[a-z]+` carries `local` and `offsite` and drops `server_offsite`, so the monthly marker
+  would have been destroyed on its first night and the check would have read "has EVER been recorded"
+  for ever. The comment was right; the regex beside it was one character class too narrow.
+- **`RestoreNeverProven`'s selector was a hand-maintained alternation** -
+  `backup.restore_(local|offsite)_age` - in a file nothing cross-checks, so both new checks would have
+  warned in the battery and paged nobody. A pattern now, on lint leg 9's argument: match the shape the
+  producer mints, never enumerate what it has minted so far.
+- **`smoke.mjs`'s extractor had never seen a restore marker, and its guard could not say so.** It
+  re-derives the concatenated `backup_*` fact keys from the `check_backup_age` call sites, and used
+  `\s+` to cross the separator before the marker key - but four of the calls put that key on a
+  continuation line, where the run is ` \` + newline + tabs and **a backslash is not whitespace**. All
+  four `restore_verified_*` keys were invisible from the day it was written. The guard asserts
+  `backup_local_at`, which is on a single-line call and matched, and the subset check passed because
+  no page reads a restore marker - so the day one did, it would have reported the page reading a fact
+  the battery does not emit, which would have been false.
+- **No `check_timer_run` leg, deliberately, against the convention that every new timer gets one.**
+  That helper hardcodes `bad` on a failed or overdue run, and `bin/reboot-host.sh` refuses to act on a
+  host this battery calls unhealthy - so a failed restore verification would block OS security
+  updates, which is what `backup.offsite_prune_age` once did for real. The marker covers both states
+  at `warn` already: it is written only on success, and `check_backup_age` honours the declared
+  severity on the never-written path.
+- **Two server kinds rather than two more markers on the existing keys.** A restore read from the
+  server proves the off-site data is readable and nothing about the path that matters if `nvme0n1`
+  dies, so `restore_verified_offsite_at` still means the workstation drill and can still go stale
+  while the monthly automated run is green. Sharing one key would have held the drill's marker green
+  for ever - the two-keys argument, one level up.
