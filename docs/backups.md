@@ -304,7 +304,9 @@ this for the snapshot id it records; the verification never did. Every kind now 
 path, and a chain that matches nothing is a distinct error naming the override rather than a `restore
 failed` several gigabytes later.
 
-**Restoring 5.5 GB needs somewhere to put it, and `/tmp` is not it.** On the workstation `/tmp` is
+**Restoring the tree needs somewhere to put it, and `/tmp` is not it.** It was 5.5 GB when this
+was written and measured 7.8 GB on 2026-09-09, which is the point: the figure moves, so the script
+asks restic for the snapshot's own size and demands 1.5x it rather than carrying a number. On the workstation `/tmp` is
 tmpfs with 7.6 GB free out of 15 GB of RAM, so the obvious default would unpack the tree into memory
 and run out partway through, after downloading several gigabytes. `verify-restore.sh` defaults to
 disk-backed storage and refuses up front if the scratch filesystem is `tmpfs` or too small, naming

@@ -20,8 +20,9 @@
 # this directory is one: it reads a repository on the host's own disk and restores
 # into the host's own scratch space. Nothing about it belongs in a container.
 #
-# WHAT IT COSTS is one restore of ~4.6 GB from the same NVMe, plus a 5% re-read of
-# the pack data, once a week. What it buys is the difference between "restic check
+# WHAT IT COSTS, MEASURED rather than estimated: 80 seconds wall clock, 56s of CPU
+# and a 1G memory peak, reading a 4.6 GB repository and writing a 7.8 GB tree to
+# /var/tmp, once a week. The 5% pack re-read is inside that. What it buys is the difference between "restic check
 # says the repository is consistent" and "what comes out is a config tree the
 # stack can start from" - 23 SQLite databases through PRAGMA integrity_check, 11
 # certificates, the ACME account, and Pocket ID's passkey store present by name.
@@ -50,7 +51,7 @@ Type=oneshot
 # unit cannot do its job at all, and failing loudly is the right answer.
 EnvironmentFile=/var/home-server/.env
 ExecStart=/var/home-server/bin/verify-restore.sh --repo server --deep
-# ~8 GB of restored tree has to land somewhere disk-backed. The script refuses a
+# The 7.8 GB restored tree has to land somewhere disk-backed. The script refuses a
 # tmpfs scratch outright, and its own default is $HOME/.cache - which is the
 # directory the marker file lives in. /var/tmp is the same filesystem and the
 # right place for a large temporary tree. A literal, because Environment= does

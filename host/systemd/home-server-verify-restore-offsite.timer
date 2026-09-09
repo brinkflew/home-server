@@ -16,7 +16,8 @@
 # 05:30 for the same reason as its weekly sibling: it is the first minute after
 # the 00:00-04:50 night of jobs, and clear of the 03:00 backup this reads behind.
 #
-# MONTHLY BECAUSE IT COSTS EGRESS. ~4.6 GB pulled back from Scaleway each run.
+# MONTHLY BECAUSE IT COSTS EGRESS. The whole 4.6 GB repository comes back from
+# Scaleway each run - measured at 2m45s against the local one's 80s.
 # bin/verify-host.sh grades the marker at 1440h - two periods, the same slack the
 # weekly one gets at 336h and the nightly legs get at 48h.
 #

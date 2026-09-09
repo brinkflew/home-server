@@ -98,7 +98,8 @@ systemctl --user start home-server-ci-artifacts-sweep.service
 # recorded` - so the skip is visible rather than silent, which is more than the
 # first three traps managed.
 #
-# THE OFF-SITE ONE PULLS ~4.6 GB BACK FROM SCALEWAY, so run it when that is
+# THE OFF-SITE ONE PULLS THE WHOLE 4.6 GB REPOSITORY BACK FROM SCALEWAY (2m45s
+# measured), so run it when that is
 # convenient rather than reflexively; the weekly one reads a local repository and
 # costs nothing but disk I/O. Both refuse cleanly if .env has not been rendered.
 systemctl --user start home-server-verify-restore.service

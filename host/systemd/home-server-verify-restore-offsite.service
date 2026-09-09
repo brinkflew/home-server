@@ -14,8 +14,9 @@
 # unit - which is exactly the argument bin/verify-host.sh already makes for not
 # collapsing the local and off-site keys into one.
 #
-# IT COSTS EGRESS, which is why it is monthly and the other one is weekly: ~4.6 GB
-# pulled back from Scaleway plus 5% of the pack data re-read. The server has the
+# IT COSTS EGRESS, which is why it is monthly and the other one is weekly: the whole
+# 4.6 GB repository comes back from Scaleway, 5% of it twice. Measured at 2m45s wall
+# clock against the weekly one's 80s, which is the network and nothing else. The server has the
 # credentials already - bin/backup-server.sh copies up here nightly - and a
 # restore only ever reads, so nothing about this widens what the server can do to
 # the off-site repository. The key is still scoped so it cannot delete.

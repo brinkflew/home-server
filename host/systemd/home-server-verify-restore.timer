@@ -14,8 +14,8 @@
 # timestamp to age. Mid-week also leaves days of runway before that window has
 # any reason to care.
 #
-# WEEKLY RATHER THAN NIGHTLY. This reads the whole repository back and restores
-# ~4.6 GB; the failure it catches - a repository that no longer produces a usable
+# WEEKLY RATHER THAN NIGHTLY. It reads a 4.6 GB repository back and writes a 7.8 GB
+# tree, 80 seconds of it; the failure it catches - a repository that no longer produces a usable
 # config tree - does not appear overnight, and backup.local_age already fails
 # within 48h if the backup itself stops. bin/verify-host.sh grades this marker at
 # 336h, two periods, matching the slack the nightly legs get from their 48h.
