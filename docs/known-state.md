@@ -5861,3 +5861,64 @@ service on the rack read **memory starved**. Nothing on the host was.
 - **The arrival rate is not flat, so this warning again is not the number being wrong.** 2026-09-02
   to 09-06 saw no runs at all; the three days to 09-09 ran at fifteen a day. At fifteen, thirteen
   days is 98 GB.
+
+## The library was 95% drifting and the check for it had never been run
+
+- **690 of 725 files**, on the first sweep `home-server-verify-media.timer` ever performed
+  (2026-09-09, 24m38s for the whole library). `bin/verify-media.sh` had existed for weeks, was the
+  only check for a failure this host has actually had, and was referenced by no unit at all - so the
+  answer was available the whole time and nobody had asked.
+- **One signature, and it names the cause exactly.** Every failure carries a `max` of 10.427s or
+  10.428s with scattered sub-second gaps - NVENC's 250-frame cap at 23.976 fps, plus adaptive
+  I-frames at scene cuts. That is the "old arguments" shape `docs/media-pipeline.md` describes: the
+  library is almost entirely files transcoded before `-no-scenecut 1` reached the Tdarr flow.
+- **The 35 that pass do so in two different ways**, and both are correct. `min 6.047s / mean 6.048s`
+  is Tdarr's pinned output since the fix. A flat `10.010s` is a different encoder with a REGULAR
+  grid - and regularity above the segment length is all the HLS stream-copy path needs, because
+  ffmpeg only merges when a GOP is shorter than the segment.
+- **So the finding is a BACKLOG, and that changed the design.** `media.keyframe_drift` and
+  `media.verify_run` are two checks because a standing obligation and a broken instrument want
+  opposite treatment - and with one id they mask each other, which is the failure this area exists
+  to prevent arriving from inside it. The drift half is deliberately unalerted on `update.pin_lag`'s
+  stated precedent; `MediaSweepStopped` covers the half that is an event.
+- **Nothing is broken for most viewers.** A native client direct-plays and is unaffected; this is
+  the browser's stream-copy path only. What it costs is a re-transcode of the library, which is days
+  of GPU time and a decision rather than an incident.
+
+## Two measurement errors on the way to that number, both from instruments
+
+- **33 seconds a file, and the truth was 2.2.** The first timed run appeared to grade 45 files in 25
+  minutes, which put a full sweep at 6.7 hours against a 90-minute `TimeoutStartSec` - a unit that
+  could never finish. Timing four uncached episodes by hand gave 2.2s each, and the completed sweep
+  settled it at 725 files in 24m38s.
+- **The cause was journald's rate limiter, and the thing it dropped was the measurement.** That run
+  was emitting a `container exec` event per `podman exec` - about 1.7 KB each, because the
+  linuxserver Jellyfin image's OCI labels carry its whole description - so journald hit its burst
+  limit and discarded the script's own PASS lines. Counting them undercounted progress by 20x. **An
+  instrument that is too loud silences itself**, and the noise and the signal go through the same
+  pipe.
+- `podman --events-backend=none` on the one call site fixes it: measured 0 events afterwards, and
+  nothing here consumes an exec event. Local to the call rather than in `containers.conf`, unlike
+  the `health_status` change - which was every container all the time and a far larger prize at
+  47.3% of all journal bytes.
+- **And `systemctl --user is-active` exits NON-ZERO for `activating`**, so every `is-active || break`
+  poll loop written to wait for the sweep returned instantly and reported it still running. Four
+  wait loops in a row measured nothing at all. Compare the STRING, not the exit code.
+
+## The curl -K quoting trap, in the second file to pay for it
+
+- **HTTP 400 on `bin/probe-credentials.sh`'s very first deployed run.** The Gandi request body was
+  inline as `data = "{\"rrset_values\":...}"`, and curl's `-K` configuration does not unescape `\"`
+  inside a quoted value - so the JSON was sent truncated at its first inner quote and Gandi refused
+  a body that was not a body.
+- **The lesson was already recorded and quoted twelve lines above the call.**
+  `bin/jellyfin-watching.sh` carries it for the Authorization header: "unquoted is the only spelling
+  with no quote character in it". Knowing a trap and writing the code that falls into it are
+  different things, which is the argument for `data = @file`: it removes the question rather than
+  answering it, because the config line then carries a path and no quotes at all.
+- **The classification was right even though the request was wrong**, which is the only reason this
+  was cheap. 400 is not 401, so the leg reported "not a refusal of the token, but not a write
+  either" rather than blaming the credential. A probe that read any non-2xx as a dead token would
+  have sent somebody to rotate a working PAT.
+- Fixed and re-run: **HTTP 201**, the record written and removed, 31 days before the first renewal
+  Caddy had scheduled.

@@ -1976,6 +1976,39 @@ signal read green.
   assumption about what reads raw `nyc`. The arrival rate is not flat either - fifteen a day for the
   three days to 09-09 - so this warning again is the check working, not the number being wrong.
 
+### The library was 95% drifting and the check for it had never been run
+- **690 of 725 files** on the first sweep the timer ever performed, 24m38s for the library.
+  `bin/verify-media.sh` had existed for weeks and was referenced by no unit, so the answer was
+  available the whole time and nobody had asked.
+- One signature: `max` 10.427s with scattered sub-second gaps, which is NVENC's 250-frame cap plus
+  adaptive I-frames at scene cuts - the library is almost entirely files transcoded before
+  `-no-scenecut 1` reached the Tdarr flow. The 35 that pass do so two ways, both correct: 6.047s
+  from Tdarr since the fix, or a flat 10.010s, because REGULARITY above the segment length is all
+  the stream-copy path needs.
+- **The finding is a BACKLOG, which is why there are two ids.** `media.keyframe_drift` is
+  deliberately unalerted on `update.pin_lag`'s precedent; `media.verify_run` is the event half. With
+  one id they mask each other. A native client direct-plays and is unaffected.
+
+### Two measurement errors on the way to that number, both from instruments
+- **33 seconds a file, and the truth was 2.2** - which put a full sweep at 6.7 hours against a
+  90-minute timeout, i.e. a unit that could never finish. It finished in 24m38s.
+- **The cause was journald's rate limiter dropping the measurement.** A `container exec` event per
+  `podman exec` at ~1.7 KB each (the linuxserver image's OCI labels carry its whole description) hit
+  the burst limit and discarded the script's own PASS lines, undercounting progress 20x. **An
+  instrument that is too loud silences itself.** `--events-backend=none` on the call site; 0 after.
+- **`systemctl --user is-active` exits NON-ZERO for `activating`**, so four `is-active || break`
+  wait loops in a row returned instantly and measured nothing. Compare the STRING.
+
+### The curl -K quoting trap, in the second file to pay for it
+- **HTTP 400 on the credential probe's first deployed run**: the Gandi body was inline as
+  `data = "{\"rrset_values\":...}"` and curl's `-K` does not unescape `\"` inside a quoted value,
+  so the JSON arrived truncated at its first inner quote.
+- The lesson was already recorded AND quoted twelve lines above the call, for Jellyfin's
+  Authorization header. `data = @file` removes the question rather than answering it.
+- **The classification was right even though the request was wrong**, which is why it was cheap: 400
+  is not 401, so the leg said "not a refusal of the token, but not a write either" rather than
+  sending somebody to rotate a working PAT. Re-run: **HTTP 201**.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

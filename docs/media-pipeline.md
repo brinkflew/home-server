@@ -225,6 +225,21 @@ Things in it that are not obvious and cost time to find:
   "has never run" and FAIL from the first deferral, on a host that swept the library perfectly six
   days earlier. `update.podman_run` paid for that lesson first.
 
+  **Two checks, and the first live sweep is what split them.** `media.verify_run` grades whether the
+  instrument is working - never run, could not run, or two weekly runs missed - and is alerted,
+  because a sweep that has stopped IS an event. `media.keyframe_drift` grades what it found, and is
+  deliberately **not** alerted: the first full run flagged the large majority of what it read, all
+  with one signature, and that is days of re-transcoding rather than an incident. `update.pin_lag`
+  states the rule this follows - a condition that stays true until somebody does an afternoon's work
+  would have a rule firing on a timer rather than on a change, and belongs in the MOTD and on the
+  dashboard where a standing obligation is read when somebody is deciding what to do next.
+
+  **Without the split they mask each other.** One id warning about a backlog looks exactly like one
+  warning because there is no jellyfin container - a broken instrument hiding behind a real finding,
+  which is the failure this whole area exists to prevent, arriving from inside it. And "not
+  measured" is a `note` rather than a pass, because reading an absent sweep as "none drifting" is
+  the same mistake facing the other way.
+
   **`exit 1` from that script means two opposite things**, which is the second job the marker does.
   It is both "one or more files will drift" and "there is no jellyfin container, so nothing could be
   measured" - and a reader with only the exit code cannot tell the library being bad from the check
