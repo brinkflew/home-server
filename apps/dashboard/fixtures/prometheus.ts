@@ -220,6 +220,110 @@ function bySeries(): Record<string, SeriesSpec[]> {
     at: constant(f.avail),
   }));
 
+  // THE ONE QUERY ON THIS PAGE THAT IS BUILT BY CONCATENATION, and therefore
+  // the one `uncovered()` structurally cannot see: it walks ALL_QUERIES, and
+  // `SYSTEM.filesystemAvail + '{mountpoint="/var"}'` is assembled at the call
+  // site in StoragePage.vue, so it is not in that list under any name. The table
+  // answers by EXACT string, so without this line the lookup misses, `free`
+  // comes back empty, and varStack simply omits its last band - the stack then
+  // adds up to 65 GB of consumers under a 233 GB ceiling and reads as a disk
+  // three quarters empty rather than one 28% full. Every check green, and only
+  // a screenshot showed it.
+  //
+  // The same shape as bin/lint-repo.sh leg 9's trap, which this repository has
+  // already recorded once: a check that greps for a literal name cannot see a
+  // name built by concatenation.
+  //
+  // DERIVED FROM `FS`, NEVER A SECOND 168. The mount table and this band are
+  // two readings of one quantity; a literal here is how they come to disagree
+  // on screen, which is the defect the census's own comments keep naming.
+  const varFs = FS.find((f) => f.mountpoint === "/var")!;
+  table[`${SYSTEM.filesystemAvail}{mountpoint="/var"}`] = [
+    {
+      metric: { __name__: "node_filesystem_avail_bytes", device: varFs.device, fstype: varFs.fstype, mountpoint: "/var" },
+      at: constant(varFs.avail as number),
+    },
+  ];
+
+  // --- the /var census ------------------------------------------------------
+  // THE CENSUS SHIPPED WITH NO FIXTURE AT ALL, so /system/storage's largest
+  // panel drew "no data in this window" here for as long as it existed and
+  // nothing in either harness could see it. Restructuring that panel is what
+  // found it: a layout cannot be checked against a chart that draws nothing.
+  //
+  // THE BANDS SUM TO `/var`'s USED FIGURE, WHICH IS WHAT MAKES THE CEILING
+  // HONEST. The chart pins yMax to capacity and appends `free` as the last
+  // band, so consumers + free must equal the volume or the stack stops short of
+  // its own labelled top edge - the unpinned-ceiling defect facing the other
+  // way. FS above gives /var 233 GB with 168 GB available, so these add to 65.
+  //
+  // AND ONE OF THEM GROWS, because a flat stack cannot show the thing the panel
+  // was built for - /var went 47.4 -> 146.4 GiB in 25 days and no single number
+  // could say what did it. `ci_lanes` climbs and `other_unaccounted` gives way
+  // by the same amount, which is how the real census behaves when a walk finds
+  // more of what it names. THE SAME `ramp` KEY IN BOTH is load-bearing: a second
+  // key would add independent noise and the sum would stop being 65 GB.
+  //
+  // PER CONSUMER, WITH THE GROUP SUMS DERIVED - NOT TWO HAND-WRITTEN TABLES.
+  // The collector publishes one labelled series and `sum by (group)` is
+  // Prometheus' job, so a fixture that spelled the groups out separately would
+  // be two readings of one quantity that could drift apart on screen - the
+  // defect this repository has recorded against two consumers of one metric
+  // more than once. The group here is the consumer's first token, exactly as
+  // bin/collect-metrics.py derives it.
+  const VAR_CONSUMERS: { consumer: string; at: At }[] = [
+    { consumer: "ci_artifacts", at: constant(15.4 * GB) },
+    { consumer: "ci_lanes", at: (t) => 12.6 * GB + ramp("varci", t, 0.8 * GB) },
+    { consumer: "podman_overlay", at: swing("varoverlay", 13.8 * GB, 0.4 * GB) },
+    { consumer: "podman_volumes", at: constant(412 * MB) },
+    { consumer: "backups_repo", at: constant(2.4 * GB) },
+    { consumer: "backups_staging", at: constant(3.7 * GB) },
+    { consumer: "config", at: constant(4.3 * GB) },
+    { consumer: "conduct_uv", at: swing("varuv", 2.15 * GB, 0.3 * GB) },
+    { consumer: "conduct_logs", at: constant(1.9 * GB) },
+    { consumer: "log_journal", at: constant(2.7 * GB) },
+    { consumer: "cache_other", at: constant(437 * MB) },
+    { consumer: "checkout", at: constant(21 * MB) },
+    { consumer: "other_unaccounted", at: (t) => 4.8315 * GB - ramp("varci", t, 0.8 * GB) },
+    // A GROUP `VAR_GROUPS` HAS NEVER HEARD OF, and the only thing that renders
+    // varStack's stray branch. It folds into one `unnamed` band rather than
+    // being dropped, because a stack claiming to add up to the whole disk must
+    // not silently discard a share - and the live host proves the branch is not
+    // hypothetical: `consumer` and `volumes` were minted by the collector's
+    // first version and are still inside a 24h window today.
+    { consumer: "scratch_tmp", at: constant(380 * MB) },
+  ];
+  const varGroupOf = (consumer: string) => consumer.split("_", 1)[0];
+
+  table[SYSTEM.varConsumer] = VAR_CONSUMERS.map((c) => ({
+    metric: { __name__: "home_server_var_consumer_bytes", consumer: c.consumer, group: varGroupOf(c.consumer) },
+    at: c.at,
+  }));
+  table[SYSTEM.varByGroup] = [...new Set(VAR_CONSUMERS.map((c) => varGroupOf(c.consumer)))].map((group) => {
+    const members = VAR_CONSUMERS.filter((c) => varGroupOf(c.consumer) === group);
+    return { metric: { group }, at: (t: number) => members.reduce((sum, c) => sum + c.at(t), 0) };
+  });
+  // 80% of the volume, against 65 GB actually held: the rest is entitlement
+  // four capped consumers have not taken yet. Not a round percentage and not
+  // derived from the bands above - verify-host.sh computes it from ceilings the
+  // census does not publish, so a fixture that recomputed it here would be
+  // asserting an arithmetic the host does not do.
+  table[SYSTEM.varCapacity] = [{ metric: {}, at: constant(233 * GB) }];
+  table[SYSTEM.varCommitted] = [{ metric: {}, at: constant(186.4 * GB) }];
+
+  // COVERED THOUGH NOTHING READS THEM YET, which is the whole argument the
+  // "every catalogued query has a fixture" assertion makes: the table answers by
+  // exact query string, so the first panel to ask for one of these would render
+  // empty rather than error. They were catalogued with the census and no page
+  // has picked them up - the same shape as arr_health_issues and the four
+  // SYSTEM.* queries this repository has already recorded as having no consumer.
+  //
+  // NOT ZERO. A quadlet leaks no volumes and two `rm -f` call sites missing `-v`
+  // leaked 332 of 340, 9,227 MB; a fixture at zero would draw the state that
+  // needs no attention and could never show the one that does.
+  table[SYSTEM.varOrphanedVolumes] = [{ metric: {}, at: constant(3) }];
+  table[SYSTEM.varOrphanedVolumeBytes] = [{ metric: {}, at: constant(412 * MB) }];
+
   table[SYSTEM.disksInfo] = DISKS.map((d) => ({
     metric: { __name__: "home_server_disk_info", device: d.device, model: d.model, firmware: d.firmware },
     at: constant(1),

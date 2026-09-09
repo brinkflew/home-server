@@ -134,6 +134,25 @@ function rail(tone: Tone): string {
  * so a 1h window is two points and a flat line means "low resolution", not "a
  * still machine". The aside says so rather than leaving it to be inferred.
  */
+
+/**
+ * THE PLOT HEIGHT, RAISED WITH THE PANEL'S WIDTH RATHER THAN LEFT BEHIND BY IT.
+ *
+ * 120 was chosen against a half-width panel, where it draws a plot of about
+ * 548x120. Full width the same number is 1210x120, better than 10:1, and it is
+ * the only chart in the app that is not in a two-up band - so there was no
+ * precedent to inherit and a literal would have been a number nobody could
+ * check. /system/load's four plots are 132 at 4.2:1; matching that ratio here
+ * would want 290, which is a panel taller than the two under it put together.
+ *
+ * AND TEN BANDS HAVE TO BE TELLABLE APART, which is the half that is not about
+ * aspect. VAR_GROUPS is ordered largest-first precisely so the small consumers
+ * "do not vanish into a hairline between two giants"; at 120px `checkout` at
+ * 21 MB of 233 GB has no pixels at all, and every gain here is shared out over
+ * the nine bands that are not `free`.
+ */
+const PLOT_H = 180;
+
 const { window: win } = useTimeWindow();
 const cross = useCrosshair();
 onUnmounted(() => cross.clear());
@@ -237,15 +256,28 @@ const commitment = computed(() => {
 
   <!-- BETWEEN "how full" AND "what hardware", because that is the causal order:
        the mount table says /var is filling, this says what is filling it, and
-       the drives below are what it all sits on. -->
-  <Band label="Growth" :cols="2">
-    <PanelBox label="What fills /var" :stale="metricsStale">
-      <template #aside>
-        <span class="mono cap">hourly census</span>
-      </template>
+       the drives below are what it all sits on.
+
+       ONE PANEL, FULL WIDTH, AND IT USED TO BE TWO EQUAL COLUMNS. The chart sat
+       beside the commitment reading at about 310px against 190, and Band.vue's
+       docblock names that exactly: two panels of different SHAPE - a chart and a
+       three-line reading - where the answer is to give the taller one its own
+       band and never to equalise the boxes. `stretch` "absorbs a few tens of
+       pixels, not a few hundred", and 120 is the size of gap that means the band
+       was wrong. docs/known-state.md carries the same lesson off /system/load,
+       where it was hiding about 70.
+
+       THE BAND CARRIES THE LABEL AND THE PANEL DOES NOT, which is the shape
+       `Headroom` and `Backups` on this page already use for a single-panel band.
+       The aside is where /var keeps being named now that "What fills /var" is
+       not a panel title. -->
+  <Band label="Growth">
+    <template #aside><span>what fills /var, hourly census</span></template>
+
+    <PanelBox :stale="metricsStale">
       <MetricChart
         :series="varSeries"
-        :height="120"
+        :height="PLOT_H"
         :y-max="growth.data.value?.capacity"
         stacked
         legend
@@ -256,25 +288,34 @@ const commitment = computed(() => {
         :from="from"
         :to="to"
       />
-    </PanelBox>
 
-    <PanelBox label="Commitment" :stale="metricsStale">
-      <template #aside>
-        <span class="mono cap">every ceiling, added up</span>
-      </template>
-      <div class="lead">
-        <StatusDot :tone="commitment.tone" :size="9" />
-        <span class="reading mono">{{ commitment.text }}</span>
+      <!-- THE COMMITMENT BELONGS TO THIS CHART, and not only because it fits
+           here. It is `committed / capacity`, and `capacity` is already the
+           chart's own yMax - the same projection of the same stack against the
+           same ceiling, so reading it under the drawing is reading it against
+           the thing it is a claim about. /system/load's Memory panel is the
+           precedent: a swap meter under a stack it deliberately is not a band
+           of, on this same recipe.
+
+           IT KEEPS ITS DOT, ITS TONE AND BOTH SENTENCES. This is the number
+           nothing was computing until 2026-09-09 - every consumer of /var was
+           sized against the free space on the day it was written and no two were
+           ever added together, so four ceilings committed more than the disk had
+           left while every check read green. It is being re-placed, not demoted
+           to a caption, which is why it is not in the panel's aside. -->
+      <div class="commit">
+        <div class="commit-head">
+          <span class="commit-read mono">
+            <StatusDot :tone="commitment.tone" :size="9" />
+            <span :class="toneClass(commitment.tone)">{{ commitment.text }}</span>
+          </span>
+          <span class="mono cap">{{ commitment.sub }}</span>
+        </div>
+        <p class="commit-note mono">
+          Uncapped consumers contribute only what they hold today, so this is a
+          floor. Raising a ceiling raises it.
+        </p>
       </div>
-      <p class="lead-sub mono">{{ commitment.sub }}</p>
-      <!-- THE NUMBER NOTHING WAS COMPUTING. Every consumer of /var was sized
-           against the free space on the day it was written and no two were ever
-           added together, so on 2026-09-09 four ceilings between them committed
-           more than the disk had left while every check read green. -->
-      <p class="lead-sub mono">
-        Uncapped consumers contribute only what they hold today, so this is a
-        floor. Raising a ceiling raises it.
-      </p>
     </PanelBox>
   </Band>
 
@@ -282,8 +323,30 @@ const commitment = computed(() => {
        for. They were a 1fr 1fr 340px row whose third column held two more
        panels stacked inside it, and that inner column flipped to a ROW at 1280
        and stayed one at 375 - the fold with no floor docs/dashboard.md names.
-       Band's own 1180 rung replaces the whole arrangement. -->
-  <Band label="Hardware" :cols="2">
+       Band's own 1180 rung replaces the whole arrangement.
+
+       AND IT STRETCHES, WHICH THE BAND ABOVE DELIBERATELY DOES NOT. The test in
+       Band.vue's docblock is whether the panels are the SAME SHAPE and differ by
+       chrome rather than in kind: these are two hardware tables, and the spread
+       is arithmetic on row heights - a drive row stacks device, model and the
+       SMART sentence at 87px against a mount row's 42.
+
+       MEASURED AT 1360, BOTH WAYS, BECAUSE THE FIXTURE IS THE WIDER CASE.
+       This host has 3 mounts and 2 drives: 210 against 257, so the stretch
+       closes 47px - the same order as /system/load's 45 and FleetPage's 25.
+       fixtures/prometheus.ts carries 4 mounts and 3 drives on purpose, one
+       unmeasurable mount and one ungraded drive to exercise states this machine
+       does not have, so every screenshot shoot.mjs takes shows 91px instead.
+       Both numbers are here because only one of them is on screen: the comment
+       would otherwise be contradicted by the only picture anyone ever looks at.
+
+       IT IS ALSO NOT BOUNDED BY ANYTHING, and that is the clause to re-read
+       before adding a drive: the spread is 87d - 42m + 1 and nothing here caps
+       it. Five drives against three mounts is 518 against 210, a spread of 308,
+       and stretch stops being the right answer long before that - the BAND does,
+       and the fix is then the one applied to Growth above rather than a bigger
+       number in this comment. -->
+  <Band label="Hardware" :cols="2" stretch>
     <PanelBox label="Mounts" :stale="metricsStale">
       <p v-if="!mounts.length" class="empty mono">no filesystem reported</p>
       <table v-else class="tbl">
@@ -427,6 +490,51 @@ const commitment = computed(() => {
 }
 
 .dim {
+  color: var(--fg-5);
+}
+
+/* --- the commitment, under the chart it is a claim about ------------------ */
+
+/* /system/load's `.swap` recipe, which is the app's one precedent for a reading
+   under a chart in the same panel: a rule, then the reading. `--line` is the
+   token for a divider INSIDE a panel; `--border-divider` is the one between
+   rows of a table, and they are not interchangeable. */
+.commit {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line);
+}
+
+/* IT WRAPS, AND UNLIKE `WindowPicker` IT CAN. That component carried a
+   `flex-wrap: wrap` under a comment claiming it wrapped "rather than losing 7d
+   off the end", with `flex: none` on the next line pinning it to max-content -
+   so the declaration could never fire and the comment described the opposite of
+   what happened. Neither child here sets `flex`, so both shrink and the row
+   folds; measured at 390, where the sentence on the right needs the full width
+   and the reading has to keep its own line. */
+.commit-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px var(--gap);
+  font: var(--t-mono-sm);
+}
+
+/* --t-mono-sm, NOT the lead's --t-mono-xl. The lead recipe belongs to the one
+   unlabelled panel at the top of a page - eight pages carry it and this panel
+   was the ninth thing borrowing it, from inside a band of its own. A second
+   reading at headline size is how a page comes to have two headlines. */
+.commit-read {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg);
+}
+
+.commit-note {
+  margin-top: 6px;
+  font: var(--t-mono-xs);
   color: var(--fg-5);
 }
 

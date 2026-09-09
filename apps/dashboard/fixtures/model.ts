@@ -489,6 +489,24 @@ const CHECKS: Check[] = [
     status: "note",
     message: "smartctl reports no self-test log for dm-0; not measured rather than passing",
   },
+  // THE ONE CHECK /system/storage's COMMITMENT FOOTNOTE READS. Its tone comes
+  // from the battery rather than from a ratio recomputed in the page, so with
+  // no capacity check in the document the dot was grey at every value - which
+  // is the correct ABSENCE state and therefore left the toned path undrawn.
+  // Ids and wording are the live battery's, off bin/verify-host.sh.
+  { section: "capacity", id: "capacity.census", status: "pass", message: "the /var census ran 1h ago" },
+  {
+    section: "capacity",
+    id: "capacity.var_breakdown",
+    status: "pass",
+    message: "/var holds 66560MB, of which 4947MB (7%) is unaccounted",
+  },
+  {
+    section: "capacity",
+    id: "capacity.var_commitment",
+    status: "pass",
+    message: "if every capped consumer reached its ceiling /var would hold 190874MB of 238592MB (80%)",
+  },
   // --- the media pipeline, which /library is the only reader of ------------
   // ADDED 2026-09-09, WITH THAT PAGE'S EVIDENCE BAND. No fixture had ever
   // carried a check from any of these three sections, so a FindingsPanel asking

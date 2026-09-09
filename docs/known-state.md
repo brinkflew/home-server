@@ -5509,3 +5509,40 @@ service on the rack read **memory starved**. Nothing on the host was.
   two functions for one reason: a cancel arriving at a round that had already ended reports "the
   round had already ended", and overwriting `ended` with `cancelled` would make the row claim
   somebody stopped a round that stopped by itself.
+
+### A band that paired a chart with a sentence, and a fixture that could not show either
+- **`/system/storage` drew four panels at four heights**, and the worst was the Growth band the
+  census shipped the day before: a 310px chart beside a 190px reading. `Band.vue`'s docblock decides
+  it - `stretch` "absorbs a few tens of pixels, not a few hundred", and the answer to two panels of
+  different SHAPE is to give the taller one its own band. The chart is full width now with the
+  commitment folded under it, which is defensible on the arithmetic rather than only on the height:
+  `committed / capacity` is a projection of the same stack against the same `capacity` that is
+  already the chart's `yMax`. `/system/load`'s Memory panel is the precedent.
+- **The Hardware band is the case `stretch` IS for, and both numbers are in the comment.** Two
+  hardware tables differing by row height - 87px a drive against 42px a mount - so it closes 47px on
+  this host and **91px in every screenshot**, because `fixtures/prometheus.ts` deliberately carries an
+  extra unmeasurable mount and an ungraded drive. Quoting only the live number would have left the
+  comment contradicted by the one picture anyone looks at. It is not bounded: five drives against
+  three mounts is a spread of 308, and the band is wrong before that, not the number.
+- **THE CENSUS SHIPPED WITH NO FIXTURE AT ALL.** Six catalogued queries, none of them answered, so
+  `smoke.mjs`'s "every catalogued query has a fixture" assertion was RED on `main` from the day the
+  census landed - and the largest panel on the page drew "no data in this window" in every
+  screenshot ever taken of it. The per-consumer series is the fixture and the group sums are DERIVED
+  from it, because two hand-written tables for one quantity is how two readers come to disagree.
+- **`uncovered()` structurally cannot see a query built by concatenation.** The page asks for
+  `node_filesystem_avail_bytes{mountpoint="/var"}`, assembled at the call site, and the fixture table
+  answers by EXACT string - so `free` came back empty, `varStack` omitted its last band, and the
+  stack read as 65 GB under a 233 GB ceiling: a disk three quarters empty rather than one 28% full.
+  Every check green, and only a screenshot showed it. Leg 9's trap, in a second place.
+- **RETIRING A CONSUMER BLANKS THE WHOLE CHART FOR ONE WINDOW LENGTH.** The live host carries eleven
+  groups over 24h and nine over 30m: `consumer` and `volumes` were minted by the collector's first
+  version, before the `consumer_` prefix rule, and stopped at the fix. `stackedAreaPaths` NaNs any
+  column where one live series is missing, so the nine real groups are absent for the first 22h and
+  the two retired ones for the last 2h - **no column in the window has every series finite**, every
+  band comes out with an empty `d`, and the y axis disappears with it because `ticksY` is gated on
+  `empty`. The legend still lists every series, which is what made it look like a drawing bug. It
+  clears itself within a day, which is exactly why it is written down; `partial` is not the fix,
+  because a stack that does not sum to its `yMax` is dishonest.
+- **`commitmentRow` in `src/system.ts` has no consumer anywhere** - written for a commitment TABLE
+  that was never built, and there are no per-consumer ceilings published to build one from:
+  `bin/verify-host.sh` sums four of them and publishes only the total.

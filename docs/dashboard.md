@@ -2406,3 +2406,67 @@ Final count **69 problems against a baseline of 73** - four fewer, and the four 
 lines. Everything remaining is the one expected missing-poster 404. The new viewport reported no
 horizontal overflow on any route, which is the first time anything has looked at that band.
 
+
+## /system/storage: one band that wanted to be two, and the fixture that could not say so
+
+The page drew four panels at four heights. The Growth band was the worst and the newest - the census
+shipped it the day before, a **310px chart beside a 190px reading**, and `Band.vue`'s docblock
+settles that shape without needing a measurement: `stretch` "absorbs a few tens of pixels, not a few
+hundred", and two panels of different *kind* are the case where the taller one gets its own band.
+
+So the chart is full width now and the commitment sits under it, inside the same panel. **That is an
+argument about the arithmetic and not only about the height**: the reading is `committed / capacity`,
+and `capacity` is already the chart's `yMax`, so it is the same projection of the same stack against
+the same ceiling. `/system/load`'s Memory panel is the precedent - a swap meter under a stack it
+deliberately is not a band of - and the `.swap` divider recipe carried over unchanged. The plot went
+120 -> 180: 120 was picked against a half-width panel and would have been better than 10:1 across the
+full one, and ten stacked bands need the height more than the aspect does.
+
+**The commitment keeps its dot, its tone and both sentences**, at `--t-mono-sm` rather than the
+lead's `--t-mono-xl`. It had been borrowing the lead recipe from inside a band of its own, which
+would have made it the page's second headline; the eight-page lead recipe belongs to the one
+unlabelled panel at the top.
+
+**Hardware IS what `stretch` is for, and the comment carries two numbers.** Two hardware tables
+differing only by row height - 87px a drive against 42px a mount - so it closes **47px on this host**
+and **91px in every screenshot**, because the fixture deliberately carries an extra unmeasurable
+mount and an ungraded drive to exercise those states. Quoting only the live figure would have left
+the comment contradicted by the one picture anyone ever looks at. It is also unbounded: five drives
+against three mounts is a spread of 308, and at that point the band is wrong, not the number.
+
+### Three things the fixtures could not show, and one the live host could not stop showing
+
+**The census shipped with no fixture at all.** Six catalogued queries, none answered, so
+`smoke.mjs`'s "every catalogued query has a fixture" assertion was **red on `main`** from the day it
+landed, and the largest panel on the page drew "no data in this window" in every screenshot ever
+taken of it. The per-consumer series is the fixture now and the group sums are *derived* from it,
+because two hand-written tables for one quantity is how two readers of a metric come to disagree.
+
+**`uncovered()` structurally cannot see a query built by concatenation.** The page asks for
+`node_filesystem_avail_bytes{mountpoint="/var"}`, assembled at the call site, and the fixture table
+answers by exact string - so `free` came back empty, `varStack` omitted its last band, and the stack
+read as 65 GB under a 233 GB ceiling: a disk three quarters empty rather than one 28% full. Every
+check green; only a screenshot showed it. That is `bin/lint-repo.sh` leg 9's trap in a second place.
+
+**And the blank chart on the live host was not the census being young.** It carries **eleven** groups
+over 24h and nine over 30m - `consumer` and `volumes` were minted by the collector's first version,
+before the `consumer_` prefix rule, and stopped at the fix. `stackedAreaPaths` NaNs any column where
+one live series is missing, so the nine real groups are absent for the first 22h and the two retired
+ones for the last 2h: **no column in the window has every series finite**, every band comes out with
+an empty `d`, and the y axis goes with it because `ticksY` is gated on `empty`. The legend still
+lists every series, which is what made it read as a drawing bug rather than a data one.
+
+The general shape is worth more than the instance: **retiring or renaming a consumer blanks the whole
+chart for one window length.** It clears itself within a day, which is why it is written down now
+rather than looked at later. `partial` is not the fix - a stack that does not sum to its `yMax` is
+dishonest - so it belongs in `varStack`, the only place that can tell a retired group from a gapped
+one. `commitmentRow` is still there with no consumer, written for a commitment table nothing
+publishes per-consumer ceilings to build.
+
+### What proved it
+
+`npm run build` (`vue-tsc --build`), `node fixtures/smoke.mjs`, `bin/lint-repo.sh` all twelve legs,
+and `node fixtures/shoot.mjs` at 1360, 901, 834 and 390 with no horizontal overflow on any route.
+The two Hardware numbers were measured with `getBoundingClientRect()` in the page rather than read
+off a picture - 252 against 343 on the fixture, and 210 against 257 recomputed from the row heights
+for this host's 3 mounts and 2 drives - and the band measured a spread of 0 afterwards.

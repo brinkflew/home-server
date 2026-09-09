@@ -1851,6 +1851,19 @@ signal read green.
   behind that green tick.
 - The global `.dim` means STALE and ADDS to a scoped one, so a caption borrowing it reads as stale.
 
+### A band that paired a chart with a sentence, and a fixture that could not show either
+- A 310px chart beside a 190px reading is not what `stretch` is for, so the chart took its own band
+  and the commitment folded under it - it is a projection of the same stack against the same yMax.
+  Hardware IS the case for it, and both numbers are in the comment: 47px live, 91 in every
+  screenshot, because the fixture carries an extra mount and drive on purpose.
+- **The census shipped with no fixture at all**, so smoke's "every catalogued query has a fixture"
+  was red on `main` and the page's largest panel drew nothing in every screenshot ever taken of it.
+- **`uncovered()` cannot see a query built by concatenation**, so `free` was silently absent and the
+  stack read as a disk three quarters empty rather than one 28% full. Leg 9's trap, second place.
+- **Retiring a consumer blanks the whole chart for one window length** - two groups from the
+  collector's first version meant no column had every series finite. The legend still listed them.
+- `commitmentRow` has no consumer, and no per-consumer ceiling is published to build one from.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless
