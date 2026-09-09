@@ -4465,7 +4465,7 @@ if [ -z "$GREENBOOT" ]; then
 
 	cap_total=$(census_get df_total_mb)
 	cap_used=$(census_get df_used_mb)
-	cap_unacc=$(census_get other_unaccounted_mb)
+	cap_unacc=$(census_get consumer_other_unaccounted_mb)
 
 	# The census's own liveness. A stale census is not a capacity finding - it is
 	# the reason the capacity findings below cannot be trusted, so it is graded
@@ -4535,9 +4535,9 @@ if [ -z "$GREENBOOT" ]; then
 		}
 		cap_lanes=0
 		for _l in $ci_lanes_enabled; do cap_lanes=$(( cap_lanes + 1 )); done
-		cap_owed "$ci_artifact_budget_mb" "$(census_get ci_artifacts_mb)"
-		[ "$cap_lanes" -gt 0 ] && cap_owed $(( cap_lanes * 20480 )) "$(census_get ci_lanes_mb)"
-		cap_owed "$jd_cap_mb" "$(census_get log_journal_mb)"
+		cap_owed "$ci_artifact_budget_mb" "$(census_get consumer_ci_artifacts_mb)"
+		[ "$cap_lanes" -gt 0 ] && cap_owed $(( cap_lanes * 20480 )) "$(census_get consumer_ci_lanes_mb)"
+		cap_owed "$jd_cap_mb" "$(census_get consumer_log_journal_mb)"
 		cap_owed 16384 "${tsdb_mb:-}"
 	fi
 

@@ -432,20 +432,23 @@ def source_storage(m):
         return
 
     for key, raw in sorted(marker.items()):
-        if not key.endswith("_mb"):
+        # A PREFIX, NOT AN `_mb` SUFFIX, AND THE DIFFERENCE COST TWO BUGS.
+        # `df_total_mb`, `df_used_mb` and `volumes_orphaned_mb` all end in `_mb`
+        # and none of them is a consumer: the first two are the whole filesystem
+        # and would stack on top of the parts that add up to it, and the third is
+        # a subset of podman_volumes. A suffix match swept in the first pair, a
+        # denylist fixed them, and the third - added to the census later - walked
+        # straight past it. The census spells membership with `consumer_` so this
+        # cannot drift again.
+        #
+        # None of the three is republished under a name of its own either.
+        # node_filesystem_size_bytes and node_filesystem_avail_bytes already
+        # carry the first two, and bin/verify-host.sh's facts carry the third;
+        # one quantity under two names on two schedules is how two readers of a
+        # metric come to disagree on screen.
+        if not key.startswith("consumer_") or not key.endswith("_mb"):
             continue
-        # df_total_mb AND df_used_mb ALSO END IN _mb AND ARE NOT CONSUMERS.
-        # Without this they join the family as consumer="df_used", which is the
-        # whole filesystem stacked on top of the parts that add up to it - a
-        # chart claiming /var is twice its own size. Caught by reading the first
-        # exposition rather than by any test. They are not republished under a
-        # name of their own either: node_filesystem_size_bytes and
-        # node_filesystem_avail_bytes already carry them, and one quantity under
-        # two names on two schedules is how two readers of a metric come to
-        # disagree on screen.
-        if key in ("df_total_mb", "df_used_mb"):
-            continue
-        consumer = key[:-3]
+        consumer = key[len("consumer_"):-3]
         value = _marker_number(raw, scale=float(1 << 20))
         if value is None:
             continue

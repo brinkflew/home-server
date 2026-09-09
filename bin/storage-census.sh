@@ -20,7 +20,8 @@
 # The walk happens anyway; depth only changes what is printed. So conduct's
 # three caches cost nothing on top of the cache root, and every intermediate
 # consumer here is derived by SUBTRACTION from an output already in hand. Total
-# cost measured on the host: 7.0 s warm, which is why this is an hourly timer
+# cost measured on the host: 7.0 s warm and 31.9 s cold under the unit's own
+# Nice=10 and IOWeight=20, which is why this is an hourly timer
 # and not a source in bin/collect-metrics.py, whose whole run is budgeted at 25s
 # against a 30-second tick.
 #
@@ -256,10 +257,17 @@ mkdir -p "$(dirname "$MARKER")" 2>/dev/null || true
 	printf 'census_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 	printf 'df_total_mb=%s\n' "$df_total_mb"
 	printf 'df_used_mb=%s\n' "$df_used_mb"
+	# `consumer_` PREFIXED, AND THAT IS NOT COSMETIC. The reader picks consumers
+	# out of this file by key shape, and a plain `_mb` suffix is not a membership
+	# test: df_total_mb and volumes_orphaned_mb are both `_mb` and neither is a
+	# consumer. Both were swept into the stack by a suffix match - the first
+	# double-counted the whole filesystem, the second a subset of podman_volumes -
+	# and the denylist that fixed the first did not know about the second, because
+	# it was added afterwards. A prefix cannot drift that way.
 	for c in "${CONSUMERS[@]}"; do
-		printf '%s_mb=%s\n' "$c" "${V[$c]}"
+		printf 'consumer_%s_mb=%s\n' "$c" "${V[$c]}"
 	done
-	printf 'other_unaccounted_mb=%s\n' "$unaccounted"
+	printf 'consumer_other_unaccounted_mb=%s\n' "$unaccounted"
 	printf 'volumes_total=%s\n' "${volumes_total:-}"
 	printf 'volumes_orphaned=%s\n' "${volumes_orphaned:-}"
 	printf 'volumes_orphaned_mb=%s\n' "${volumes_orphaned_mb:-}"
