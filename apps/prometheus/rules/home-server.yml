@@ -1077,43 +1077,48 @@ groups:
             log before assuming a local cause; measured on 2026-08-15 the
             causes were a dead mirror, duplicate entries and two sites down.
 
-      - alert: MediaKeyframeDrift
-        # THE ONE FAILURE ON THIS HOST A PERSON REPORTS BEFORE A CHECK DOES, and
-        # until 2026-09-09 nothing on a timer looked for it: bin/verify-media.sh
-        # existed for weeks and no unit referenced it. A file whose keyframes
-        # fall closer together than Jellyfin's 6s HLS segment makes ffmpeg merge
-        # GOPs, so segment N carries different media than playlist entry N and
-        # the error accumulates - +22.397s after twenty-five segments, measured.
-        # What somebody watching sees is the picture jumping and subtitles
-        # drifting, which names neither the cause nor the file.
+      - alert: MediaSweepStopped
+        # THE INSTRUMENT, NOT THE FINDING, AND THE FIRST LIVE SWEEP IS WHY THOSE
+        # ARE TWO CHECKS. This fired as MediaKeyframeDrift for about an hour on
+        # 2026-09-09 before the first full run came back: the majority of what
+        # it had read was flagged, all with one signature - a 10.427s ceiling
+        # with scattered sub-second gaps, which is NVENC's 250-frame cap plus
+        # adaptive I-frames at scene cuts, i.e. every file transcoded before
+        # `-no-scenecut 1` reached the Tdarr flow. That is days of
+        # re-transcoding.
         #
-        # A NEW SECTION HAS NO MATCHER, WHICH IS WHY THIS IS HERE AT ALL. Only
-        # capacity, agents and ci carry a section-wide == 2, so a media.* WARN
-        # would page nobody - the silent half of grading something WARN that
-        # docs/observability.md names. A FAIL would be carried by CheckFailing,
-        # and this check never emits one: a drifting file is not a reason to
-        # block an OS security update, which is what a FAIL in this battery does
-        # through bin/reboot-host.sh.
+        # A BACKLOG MUST NOT PAGE ON A SCHEDULE. update.pin_lag says it plainly:
+        # a condition that stays true until somebody does an afternoon's work
+        # would have a rule firing on a timer rather than on a change, and it
+        # belongs in the MOTD and on the dashboard where a standing obligation
+        # is read when somebody is deciding what to do next. So
+        # media.keyframe_drift is deliberately UNALERTED, and this covers the
+        # half that is genuinely an event: the sweep has stopped running, or it
+        # ran and could not measure anything.
         #
-        # 12h BECAUSE THE INPUT IS WEEKLY. The check grades a marker a sweep
-        # writes once every seven days, so a shorter window would just repeat
-        # the same alert every hour until the next Thursday. Half a day is long
-        # enough that a re-transcode started on the morning it fires can settle
-        # it before it pages twice.
-        expr: home_server_check_status{id="media.keyframe_drift"} == 2
+        # WITHOUT THE SPLIT THEY WOULD MASK EACH OTHER. One id warning for a
+        # backlog looks exactly like one warning because there is no jellyfin
+        # container - and a broken instrument hiding behind a real finding is
+        # the failure this whole section exists to prevent, arriving from
+        # inside it.
+        #
+        # 12h BECAUSE THE INPUT IS WEEKLY, and the check already waits 17 days
+        # before calling a gap abnormal - the ExecCondition can legitimately
+        # defer a run while somebody is watching.
+        expr: home_server_check_status{id="media.verify_run"} == 2
         for: 12h
         labels:
           severity: warning
         annotations:
-          summary: "Library files will drift during browser playback"
+          summary: "The library keyframe sweep is not running"
           description: >-
-            The check message names the files, up to ten of them, and
-            home_server_media_files_bad carries the count. Re-transcode them, or
-            watch them in a native client, which direct-plays and is unaffected.
-            ./bin/verify-media.sh --full <file> shows the whole keyframe grid.
-            This same check also fires when the sweep could NOT run - the
-            script's exit code cannot separate the two, so read media_error in
-            the message before assuming the library is at fault.
+            Either it has never run - the one-time start in
+            host/systemd/README.md was skipped, which a Persistent= timer needs
+            - or it ran and could not measure anything, or two weekly runs have
+            passed with nothing recorded. The check message says which.
+            `exit 1` from bin/verify-media.sh means both "files will drift" and
+            "there is no jellyfin container", so read media_error rather than
+            the exit code. journalctl --user -u home-server-verify-media.
 
       - alert: FilesystemFillingUp
         expr: >-

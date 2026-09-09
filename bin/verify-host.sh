@@ -4592,24 +4592,57 @@ if [ -z "$GREENBOOT" ]; then
 	fact media_files_checked  "${media_checked:-}" num
 	fact media_files_bad      "${media_bad:-}" num
 
+	# TWO IDS, AND THE FIRST LIVE SWEEP IS WHY. They were one, which conflated
+	# "the instrument is working" with "here is what it found" - and those want
+	# opposite treatment the moment the finding is a BACKLOG rather than an
+	# event. Measured 2026-09-09: the first full sweep flagged the majority of
+	# what it had read, all with the same signature - a 10.427s ceiling with
+	# scattered sub-second gaps, which is NVENC's 250-frame cap plus adaptive
+	# I-frames at scene cuts, i.e. every file transcoded before `-no-scenecut 1`
+	# landed in the Tdarr flow. That is days of re-transcoding, not an incident.
+	#
+	# SO media.keyframe_drift IS DELIBERATELY NOT ALERTED, and update.pin_lag is
+	# the precedent said out loud: "a lagging pin is true continuously until
+	# somebody does an afternoon's work, so a rule would page on a schedule
+	# rather than on a change". A standing obligation belongs in the MOTD and on
+	# the dashboard, where it is read when somebody is deciding what to do next.
+	# A rule firing every twelve hours about a backlog is how people learn to
+	# ignore a channel.
+	#
+	# AND media.verify_run IS, because a sweep that has stopped running IS an
+	# event, and the two must not be able to mask each other. With one id, a
+	# library backlog would have hidden a broken instrument behind an identical
+	# warn - which is the failure this whole section exists to avoid, arriving
+	# from inside.
 	if [ -z "$media_at" ]; then
 		if [ "$uptime_s" -lt 604800 ]; then
-			ok media.keyframe_drift "no library keyframe sweep recorded yet (up $((uptime_s / 3600))h) - the timer is weekly, so this is not yet due"
+			ok media.verify_run "no library keyframe sweep recorded yet (up $((uptime_s / 3600))h) - the timer is weekly, so this is not yet due"
 		else
-			warn media.keyframe_drift "the library's keyframe grid has NEVER been swept, and this machine has been up $((uptime_s / 86400))d - check home-server-verify-media.timer; host/systemd/README.md carries the one-time start"
+			warn media.verify_run "the library's keyframe grid has NEVER been swept, and this machine has been up $((uptime_s / 86400))d - check home-server-verify-media.timer; host/systemd/README.md carries the one-time start"
 		fi
 	elif [ -n "$media_err" ]; then
 		# THE OVERLOADED EXIT CODE, SEPARATED. `exit 1` from that script is both
 		# "files will drift" and "there is no jellyfin container", which are
 		# opposite findings. This arm is the second one, and it must not read as
 		# the library being fine.
-		warn media.keyframe_drift "the last library sweep could not run: $media_err - so the ${media_checked:-0} file(s) it reports say nothing about the library. journalctl --user -u home-server-verify-media"
+		warn media.verify_run "the last library sweep could not run: $media_err - so the ${media_checked:-0} file(s) it reports say nothing about the library. journalctl --user -u home-server-verify-media"
 	elif [ -n "$media_age_d" ] && [ "$media_age_d" -gt 17 ]; then
-		warn media.keyframe_drift "the library's keyframe grid was last swept ${media_age_d}d ago against a weekly timer - two missed sweeps is more than the playback gate explains, so the timer or its ExecCondition has stopped letting it through"
-	elif [ -n "$media_bad" ] && [ "$media_bad" -gt 0 ]; then
-		warn media.keyframe_drift "$media_bad of ${media_checked:-?} library file(s) have keyframes closer than the 6s HLS segment and WILL drift in a browser:${media_names:+ $media_names} - re-transcode them, or watch them in a native client, which direct-plays. ./bin/verify-media.sh --full <file> shows the grid"
+		warn media.verify_run "the library's keyframe grid was last swept ${media_age_d}d ago against a weekly timer - two missed sweeps is more than the playback gate explains, so the timer or its ExecCondition has stopped letting it through"
 	else
-		ok media.keyframe_drift "${media_checked:-0} library file(s) swept ${media_age_d:-?}d ago, none with keyframes closer than the HLS segment"
+		ok media.verify_run "${media_checked:-0} library file(s) swept ${media_age_d:-?}d ago"
+	fi
+
+	# NOT MEASURED IS A NOTE, NOT A PASS. When the sweep has not run or could not
+	# run, this has no opinion about the library and must not offer one -
+	# media.verify_run above carries the reason, and reading an absent sweep as
+	# "none drifting" is absence-read-as-health in the one place this section was
+	# written to prevent it.
+	if [ -z "$media_at" ] || [ -n "$media_err" ]; then
+		note media.keyframe_drift "not measured - see media.verify_run for why the sweep has no result"
+	elif [ -n "$media_bad" ] && [ "$media_bad" -gt 0 ]; then
+		warn media.keyframe_drift "$media_bad of ${media_checked:-?} library file(s) have keyframes closer than the 6s HLS segment and WILL drift in a browser:${media_names:+ $media_names} - re-transcode them, or watch them in a native client, which direct-plays. ./bin/verify-media.sh --full <file> shows the grid. This is a BACKLOG rather than an incident and is deliberately not alerted"
+	else
+		ok media.keyframe_drift "${media_checked:-0} library file(s) checked, none with keyframes closer than the HLS segment"
 	fi
 
 	# --------------------------------------------------------------------------
