@@ -462,6 +462,31 @@ export interface FleetRound {
    */
   published: boolean;
   /**
+   * conduct's own word for HOW this round ended, or null.
+   *
+   * IT IS THE FIELD THAT SEPARATES A DECISION FROM A MISS, which nothing here
+   * could do before. `published` says a publication row closed; `pr_url` says
+   * whether it carried a pull request; neither can tell a person declining at
+   * the gate from the seven-day HUMAN_TIMEOUT expiring, and `roundState` said so
+   * in a comment for as long as it drew both amber. conduct reads it off the
+   * finished Windmill job - a cancelled flow carries `canceled_by` - and records
+   * it on the publication row.
+   *
+   * "declined" | "cancelled" | "settled" ARE DECISIONS and settle the round.
+   * "published" | "ended" | "abandoned" | "unknown" ARE NOT: "ended" covers a
+   * gate timeout and a failed flow, which Windmill reports identically, and
+   * "unknown" is a job Windmill no longer remembers.
+   *
+   * NULL IS "NOBODY RECORDED" AND NEVER "NOBODY DECIDED" - conduct not yet
+   * migrated, a backfill that has not reached this row, or a document from an
+   * older collector. It must read as the absence of an answer, exactly as
+   * `pr_state`'s "unknown" does, and it is why `roundState` still has a
+   * "not published" to fall through to.
+   *
+   * MAY BE `undefined`, because the bundle and the collector deploy separately.
+   */
+  outcome?: string | null;
+  /**
    * True when a LATER round for the same task exists and this one opened no
    * pull request - so its work is not what a reviewer is looking at.
    *

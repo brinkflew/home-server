@@ -4200,14 +4200,22 @@ def source_fleet(m, doc):
         # the live database before the migration had run.
         has_pr = (_fleet_has(conn, "publication", "pr_url")
                   and _fleet_has(conn, "publication", "pr_number"))
+        # AND `outcome` IS THE SAME QUESTION ONE MIGRATION LATER. It is what
+        # separates a round a person DECIDED about from one that merely stopped -
+        # a declined approval from a seven-day timeout - which `pr_url` alone has
+        # never been able to do. Absent means conduct has not migrated yet, and
+        # every reader downstream must treat that as "nobody recorded" rather
+        # than as "nobody decided".
+        has_outcome = _fleet_has(conn, "publication", "outcome")
         # `job_id` IS THE PRIMARY KEY AND IS ALSO THE ANSWER TO A SECOND
         # QUESTION: which flow a CLOSED round is suspended in. See the notice
         # join below for why the obvious route - this round's dispatch rows -
         # cannot supply it.
         pubs = _fleet_rows(conn, """
-            SELECT job_id, worktree_id, branch, closed_at, opened_at%s
+            SELECT job_id, worktree_id, branch, closed_at, opened_at%s%s
               FROM publication ORDER BY opened_at
-        """ % (", pr_url, pr_number" if has_pr else ""))
+        """ % (", pr_url, pr_number" if has_pr else "",
+               ", outcome" if has_outcome else ""))
 
         # A PUBLICATION BELONGS TO THE ROUND THAT WAS RUNNING WHEN IT OPENED,
         # and the join has to say so. Matching on worktree alone was invisible
@@ -4370,6 +4378,23 @@ def source_fleet(m, doc):
             # not read as a round still waiting to publish.
             row["published"] = bool(published) and published.get(
                 "closed_at") is not None
+
+            # HOW THE ROUND ENDED, AS conduct's OWN WORD FOR IT.
+            #
+            # NULL IS "NOBODY RECORDED", NEVER "NOBODY DECIDED". Three ways to
+            # get one: conduct has not migrated yet, the publication closed
+            # before the column existed and conduct's backfill has not reached
+            # it, or Windmill no longer remembers the job. All three are the
+            # ABSENCE of an answer, so the round keeps its amber row and its
+            # button - the same rule `pr_state`'s "unknown" already follows one
+            # field up, pointing the same way.
+            #
+            # CARRIED VERBATIM AND CLASSIFIED IN THE BUNDLE. It is a closed
+            # vocabulary rather than a sentence, which is the whole reason it can
+            # be branched on at all: `closed_why` beside it is prose written in
+            # another repository, and src/fleet.ts refuses to read it for exactly
+            # that reason.
+            row["outcome"] = published.get("outcome") if has_outcome else None
 
             # "unknown" IS NOT ONLY GITHUB BEING DOWN. It also covers a
             # publication row this collector could not read a pull request off

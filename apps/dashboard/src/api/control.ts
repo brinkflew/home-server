@@ -37,6 +37,7 @@ export type ControlAction =
   | "resume"
   | "cancel"
   | "cancel_requeue"
+  | "settle"
   | "quota_spend"
   | "quota_pace";
 
@@ -56,6 +57,17 @@ export interface ControlRequest {
    * stop dispatch for the lane, whatever is on it.
    */
   odoo_task?: number | null;
+  /**
+   * Which round, for `settle` and nothing else, as the flow job that ran it.
+   *
+   * THE ONE IDENTITY A ROUND HAS THAT OUTLIVES ITS LANE. Every other action
+   * reaches conduct's `chain`, which holds one row per worktree and moves to
+   * whichever change ran last - so they name a lane and a task, and only the
+   * newest round on a lane can be acted on at all. A `publication` row is keyed
+   * per flow job and is never reused, so this names one round exactly however
+   * long ago it ran, which is what lets a round the lane left behind be settled.
+   */
+  job_id?: string | null;
   /** Why, in a few words. It lands on the row and beside the switch. */
   note?: string;
 }
@@ -89,6 +101,10 @@ export async function control(request: ControlRequest): Promise<string> {
   // no round at all. conduct reads absence as "the caller named none" and
   // refuses the four actions that need it.
   if (typeof request.odoo_task === "number") body.odoo_task = request.odoo_task;
+  // SAME RULE AS `odoo_task` ONE LINE UP: sent only when there is one, because
+  // Windmill's schema types it as a string and a null would fail validation on
+  // the nine actions that name a lane rather than a job.
+  if (request.job_id) body.job_id = request.job_id;
   if (request.note) body.note = request.note;
   // `fetchText` AND NOT `fetchJson`, WHICH IS THE WHOLE BUG THIS ONCE HAD. This
   // spot carried a comment reading "Windmill answers the run endpoint with a

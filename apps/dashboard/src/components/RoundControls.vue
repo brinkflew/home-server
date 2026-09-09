@@ -101,6 +101,8 @@ const TITLES: Record<string, string> = {
     "cancel the flow, close the round, close the pull request it opened, and release its worktree. The task keeps its stage and gets a note",
   cancel_requeue:
     "everything cancel does, and move the task back to Pending so the fleet can choose it again",
+  settle:
+    "record that this round needs nothing more, so it stops asking for attention. Nothing is cancelled, started or removed",
 };
 
 /** Red on the two that destroy something, and on nothing else. */
@@ -120,6 +122,12 @@ function act(offer: ControlOffer): () => Promise<void> {
       // destructive actions without the task id rather than guessing which
       // round on a reused lane was meant.
       odoo_task: props.round.odoo_task,
+      // AND THE THIRD, WHICH ONLY `settle` NEEDS AND ALL OF THEM ARE CHECKED
+      // AGAINST. Sent unconditionally rather than behind an `action === settle`
+      // test: a branch here pairing a field with an action would be the same
+      // shape as a chip re-deriving its command from its label, which the
+      // comment above exists to refuse. conduct ignores it on the other nine.
+      job_id: props.round.flow_job_id,
     });
     // AFTER THE POST AND ONLY ON SUCCESS. A command that never reached Windmill
     // is not outstanding, it failed, and the chip says so itself.

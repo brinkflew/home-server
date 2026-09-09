@@ -53,6 +53,36 @@ export const MERGE_STEP = "merge";
  *  keeping a phase off `main`. Stripped for display only; never for a link. */
 export const BRANCH_PREFIX = "agents/";
 
+/**
+ * The outcomes that are a DECISION, and so settle a round on their own.
+ *
+ * conduct's OWN VOCABULARY, AND IT IS AN ENUM PRECISELY SO IT CAN BE READ. The
+ * habit this file refuses is branching on `closed_why` - a sentence written in
+ * another repository, which nothing here controls and nobody can rename safely.
+ * `publication.outcome` is the opposite: a closed set of words both sides agree
+ * on, which conduct derives structurally from the finished flow job.
+ *
+ * WHY THE SPLIT IS THE ONLY THING WORTH KNOWING. A closed round that opened no
+ * pull request has two causes and `roundState` said for months that it could not
+ * tell them apart: a person declining is a decision, conduct's seven-day
+ * HUMAN_TIMEOUT is a miss nobody chose. Hiding requires positive evidence, so
+ * the miss keeps its amber row and its button - and a person answering IS the
+ * strongest positive evidence there is, so the decision does not.
+ *
+ * "ended" IS DELIBERATELY NOT HERE. It covers a gate timeout and a failed flow,
+ * which Windmill reports identically - `canceled` false, `success` false - so
+ * conduct does not claim to know which, and neither may this.
+ */
+export const DECIDED_OUTCOMES = ["declined", "cancelled", "settled"] as const;
+
+/** Whether conduct recorded a person deciding how this round ended. */
+export function roundDecided(r: FleetRound): boolean {
+  // A STRING TEST AND NOT A CAST. `outcome` arrives from a document written by
+  // a collector this bundle did not ship with, so a word neither side knows
+  // about must read as "no decision recorded" rather than throw a row away.
+  return DECIDED_OUTCOMES.includes(r.outcome as (typeof DECIDED_OUTCOMES)[number]);
+}
+
 /** A state a round is in, and how it should read. */
 export interface RoundState {
   tone: Tone;
@@ -97,7 +127,16 @@ export function isSettled(r: FleetRound): boolean {
  */
 export type RoundClass = "owed" | "live" | "recoverable" | "unmerged" | "finished";
 
-/** The one state `roundState` produces that something can still be done about. */
+/**
+ * The state whose recoverability depends on the LANE rather than on itself.
+ *
+ * It was "the one state something can still be done about" until `settle`
+ * existed. Two states are recoverable now and they are recoverable for different
+ * reasons, which is why only this one is a constant: everything offered on a
+ * `stopped` round is aimed at a worktree, so it can only be the newest round on
+ * its lane, while `not published` has an action keyed on the flow job and needs
+ * no such test.
+ */
 export const RECOVERABLE_STATE = "stopped";
 
 export function roundOutcome(r: FleetRound): RoundClass {
@@ -143,15 +182,13 @@ export function roundOutcome(r: FleetRound): RoundClass {
   // the day the board grew a cancel button every round anybody cancelled landed
   // in `unmerged` - on the board, with nothing to press, for ever. The change
   // that made a round actionable is what filled the class this clause drains.
-  //
-  // `not published` DELIBERATELY DOES NOT JOIN IT, and that is the next
-  // question a reader asks. It has two causes and `roundState` cannot tell them
-  // apart: a person declining is a decision, but conduct's seven-day
-  // HUMAN_TIMEOUT is a miss nobody chose. Once the round closes,
-  // agents.approvals_pending stops warning and the phone stops reminding, so
-  // the row is the last visible trace of an approval that went unanswered.
-  // Hiding an absence of a decision is what the positive-evidence rule refuses.
   if (state === "pr closed") return "finished";
+
+  // AND A DECISION IS THE THIRD ANSWER, arriving from conduct rather than from
+  // GitHub. `declined`, `cancelled` and `settled` are all somebody saying what
+  // became of this round, which is the positive evidence `isSettled`'s comment
+  // demands - so they fold behind `show N finished` exactly as a merge does.
+  if (roundDecided(r)) return "finished";
 
   // SUPERSEDED IS THE ONE EXCEPTION AND IT IS NOT AN INCONSISTENCY. A later
   // round carried the same work, so the thing to look at IS on the board -
@@ -163,15 +200,37 @@ export function roundOutcome(r: FleetRound): RoundClass {
   // and absence is false, because an older collector cannot say which that is
   // and guessing in front of a destructive button is what this guards. A
   // stopped round that is not the current one is history nothing can reach.
+  //
+  // AND IT IS THE ONLY STATE THAT STILL TURNS ON THE LANE. `not published`
+  // below used to sit outside this test and got `unmerged` for it, because
+  // every control there was is aimed at a worktree; `settle` is not, so a round
+  // in that state has something to press whatever its lane has done since.
   if (state === RECOVERABLE_STATE) {
     return r.latest_on_worktree === true ? "recoverable" : "finished";
   }
 
-  // EVERYTHING ELSE IS STILL AN OPEN QUESTION: a pull request under review, a
-  // publication nobody could confirm, a gate that ended without opening one.
-  // All of them stay on the board and none of them offers a control -
-  // what happens next to a round that reached the publish path happens
-  // somewhere else, and the row already links to it.
+  // `not published` IS RECOVERABLE NOW, AND THAT IS THIS CHANGE'S OTHER HALF.
+  //
+  // IT STAYS ON THE BOARD FOR THE REASON IT ALWAYS DID. Once the round closes,
+  // agents.approvals_pending stops warning and the phone stops reminding, so
+  // the row is the last visible trace of an approval nobody answered - and
+  // hiding an absence of a decision is what the positive-evidence rule refuses.
+  // Nothing about that has changed; what has changed is that the state now
+  // means only that, because a decision has its own word one clause up.
+  //
+  // WHAT WAS WRONG WAS THE CLASS, NOT THE VISIBILITY. `unmerged` is defined as
+  // the class `roundControls` offers nothing on, and its comment gives the
+  // reason: a restart would force-push over a branch an OPEN PULL REQUEST is
+  // pointing at. That argument is exactly true of `in review` and `published`
+  // and has never been true here - this state is a round that opened NO pull
+  // request. One word answered two different questions, and the row a person
+  // most wanted to act on was the one it silenced.
+  if (state === "not published") return "recoverable";
+
+  // EVERYTHING ELSE IS STILL AN OPEN QUESTION: a pull request under review and
+  // a publication nobody could confirm. Both stay on the board and neither
+  // offers a control - what happens next to a round that reached the publish
+  // path happens on GitHub, and the row already links straight there.
   return "unmerged";
 }
 
@@ -220,9 +279,20 @@ export function roundState(r: FleetRound): RoundState {
   // round published. Grey rather than amber - it is history, not a fault - and
   // absence is false, because an older collector emits no such field.
   if (r.superseded) return { tone: "off", state: "superseded" };
+  // A PERSON DECIDED HOW THIS ENDED, AND THE WORD IS THEIRS. Checked after
+  // `superseded` deliberately: both are grey and both are finished, and where
+  // they overlap the useful sentence is the one pointing at the round that
+  // carried the work rather than the one saying somebody stopped this one.
+  //
+  // GREY RATHER THAN AMBER, WHICH IS THE WHOLE CHANGE. Amber says a person
+  // should look; a person already has. Task 1640's round was declined on
+  // 2026-09-07 and drew amber afterwards on a lane that had run three other
+  // tasks since, with nothing on the board able to touch it.
+  if (roundDecided(r)) return { tone: "off", state: r.outcome as string };
   // A publication row that closed carrying no pull request, on a database this
-  // code COULD have read one from: the flow ended without opening one, which is
-  // a declined approval or a seven-day timeout.
+  // code COULD have read one from, and with NO decision recorded against it:
+  // the seven-day timeout, a flow that failed, or a round whose outcome nothing
+  // could establish. Amber, because nobody chose this.
   if (r.published) return { tone: "warn", state: "not published" };
   // No publication row at all - it never reached the publish path.
   return { tone: "fail", state: "stopped" };

@@ -5469,3 +5469,43 @@ service on the rack read **memory starved**. Nothing on the host was.
   a `<Teleport defer to="#toolbar">` - so a `v-model` on it does nothing.
 - **The global `.dim` means STALE and ADDS to a page's scoped `.dim`**, so a caption borrowing it
   renders as though its panel had stopped updating. A caption needs its own name.
+
+### conduct was handed the decision and had nowhere to put it
+- **`_publication` asks the finished flow job one question - *is there a url*** - so a declined
+  approval and a seven-day gate timeout close the publication row identically, and its own comment
+  named both causes while recording neither. `01a07cbd` carried `canceled: true`,
+  `canceled_by: "avs"`, `canceled_reason: "declined from the dashboard"` the whole time.
+- **The board therefore drew a person's own decision back at them as amber "not published", for
+  ever.** Task 1640's round was declined 2026-09-07, the work went in by hand as a different pull
+  request, and `upskald-ship` ran three more tasks; `FLEET_ROUNDS` is 40, so the row had weeks left.
+- **Nothing could touch it, and every refusal was correct.** `chain` is one row per worktree, so all
+  four round actions answered "this lane now holds task 1249, not task 1640" - and `roundOutcome`
+  put the state in `unmerged`, the class `roundControls` offers nothing on, so none was even drawn.
+- **`unmerged`'s argument never applied to this state.** It is *a restart would force-push over a
+  branch an open pull request points at* - and this is a round that opened NO pull request. One word
+  was answering "keep this row" and "nothing can be done about it", and the row a person most wanted
+  to act on was the one it silenced. `not published` is `recoverable` now; the visibility is
+  unchanged and so is its reason.
+- **`canceled` is the discriminator and `success` cannot be**: a cancelled job also reports
+  `success: false`, so reading that alone folds the decision back into the miss. `canceled_reason` is
+  refused deliberately - half those sentences are conduct's own, so it would be conduct reading
+  itself back through the control plane and calling it evidence.
+- **`settle` reaches `publication` rather than `chain`**, which is the only reason it lands: a
+  publication row is keyed per flow job and never reused, so it names one round exactly however long
+  ago it ran. It cancels no flow, starts no phase, touches no worktree and writes no tracker stage.
+  Three identities are still checked, and the task only when BOTH sides have one - refusing over an
+  absence would make the oldest rounds the ones it cannot act on.
+- **The lane test had to MOVE from `roundOutcome` to `roundControls`.** It was free while a
+  non-current round folded into `finished` and this function never saw one; a `not published` round
+  stays actionable now, so the test sits where it can disable four chips and leave the fifth alone.
+- **Three primary chips is a width, so `resume` gives way on the one state that offers both.** Not
+  arbitrary: a round that reached the publish path finished every phase, so a resume skips all five
+  and re-runs only the gate and the squash - the same question about the same commits.
+- **The backfill is finite by construction and a 404 is an ANSWER.** Nothing writes a new NULL, so
+  the worklist can only shrink; Windmill keeps a job thirty days, so the tail is permanently
+  unanswerable and is recorded `unknown` rather than polled once a minute for ever. Every other
+  status leaves the row - a control plane having a bad minute must not brand a round unknowable.
+- **`publication_close` COALESCEs the outcome and `publication_outcome` overwrites it**, and they are
+  two functions for one reason: a cancel arriving at a round that had already ended reports "the
+  round had already ended", and overwriting `ended` with `cancelled` would make the row claim
+  somebody stopped a round that stopped by itself.

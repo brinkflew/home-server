@@ -2545,6 +2545,75 @@ never re-counts an attempt and one that has to re-plan legitimately does.
 **A RESUME WITH NOTHING TO SKIP IS REFUSED IN THOSE WORDS.** It is a restart under a name promising
 it would be cheap, and the board says so on a disabled chip rather than sending one.
 
+### The round the lane had left behind, and the one action that could still reach it
+
+**A LANE-SHAPED TARGET IS THE RIGHT GUARD AND IT LEFT A CLASS OF ROUND UNREACHABLE.** Task 1640's
+round was declined at the gate on 2026-09-07; the work went in by hand as a different pull request,
+and `upskald-ship` then ran tasks 1264, 1261 and 1249. All four round actions answered *"upskald-ship
+now holds the round for task 1249, not task 1640"*, which is correct and is the whole point of the
+discriminator. The board offered none of them anyway. Two days later the row was still amber and
+there was nothing anywhere - dashboard, CLI or ssh - that could move it.
+
+**`settle` REACHES `publication` RATHER THAN `chain`, WHICH IS WHY IT LANDS.** A publication row is
+keyed on the flow job and is never reused: one row, one round, for as long as the row exists. So the
+control carries a `job_id` and names its round exactly, with no lane in the way. It is the smallest
+action here by a long way - **no flow cancelled, no phase started, no worktree touched, no tracker
+stage written** - and that is what makes it safe to offer on a round from any point in a lane's
+history. It sets `publication.outcome` to `settled` and stops.
+
+**IT STILL CHECKS THREE IDENTITIES.** The board sends a job id, a lane and a task; the row carries
+its own of each, and disagreement is a refusal. That is `_control_round`'s discriminator applied to a
+different table, and it turns a mistyped id into a refusal rather than somebody else's round quietly
+settled. The task is compared **only when both sides have one** - a publication written before
+`odoo_task` was populated carries none, and refusing over an absence would make the oldest rounds,
+the ones most likely to need this, the ones it cannot act on.
+
+**AND IT REFUSES TWO STATES RATHER THAN IGNORING THEM.** A round still OPEN wants an approval, a
+decline or a cancel; settling one would record an end for something that has not ended. A round that
+opened a PULL REQUEST has GitHub as the authority on what became of its work - `merged` and
+`pr closed` are answers, and a person's shrug must not be written on top of a better one.
+
+**SETTLING TWICE IS NOT A FAULT.** The board re-reads every five minutes, so two presses of a chip
+that has not visibly cleared is the ordinary way this happens; the second reports what the outcome
+already is. A round already recorded `declined` keeps that word, because a decision does not need a
+second one on top of it and `declined` says more than `settled` does.
+
+### The decline was in the flow job all along, and `_publication` asked one question of it
+
+**A DECLINED APPROVAL AND A SEVEN-DAY TIMEOUT CLOSED THE SAME ROW THE SAME WAY.** `_publication`
+holds the finished Windmill job, read `result["url"]`, found none and called
+`publication_close(conn, job_id)` - its own comment naming both causes and recording neither. What
+the document actually carries, measured on `01a07cbd`: `canceled: true`, `canceled_by: "avs"`,
+`canceled_reason: "declined from the dashboard"`.
+
+**`canceled` IS THE DISCRIMINATOR AND `success` CANNOT BE.** A cancelled job also reports
+`success: false`, so anything reading that alone folds the decision back into the miss it is meant
+to separate. **`canceled_reason` is deliberately not read**: it is prose, and half the sentences that
+reach it are conduct's own - `_control_stop_flow` composes one - so branching on it would be conduct
+reading itself back through the control plane and calling it evidence. **`canceled_by` is not read
+either**: one seat, so it would name the same person on every row, and the per-round record of who
+answered lives on the Windmill job for thirty days beside the reason.
+
+**`publication.outcome` IS A CLOSED VOCABULARY BECAUSE THE OTHER END BRANCHES ON IT.** `published`,
+`declined`, `cancelled`, `settled`, `ended`, `abandoned`, `unknown`. `ended` covers a gate timeout
+and a flow that failed - Windmill reports those identically - so conduct does not claim to know
+which. `publication_close` takes it under COALESCE, the same rule `pr_url` already has: a cancel
+arriving at a round that had already ended reports *"the round had already ended"*, and overwriting
+`ended` with `cancelled` there would make the row claim somebody stopped a round that stopped by
+itself. `publication_outcome` is the deliberate overwrite and is a separate function for that
+reason; both its callers are later knowledge rather than a second guess at the same moment.
+
+**THE BACKFILL IS FINITE BY CONSTRUCTION.** Every row conduct closes from now on records an outcome,
+so `publications_unrecorded` can only return rows that closed before the column existed - three per
+cycle, newest first, because Windmill keeps a job for thirty days and the board draws forty rounds,
+so working backwards spends the first cycles on rows a reader can actually see. It runs beside
+`_publications` and ahead of the dispatch pass, which is why the bound is small: every request there
+is time a round waiting to start spends waiting. **A 404 is an ANSWER** - the tail is permanently
+unanswerable, so it is recorded `unknown` rather than asked about once a minute for ever - and every
+other status leaves the row for the next cycle, because a control plane having a bad minute must not
+brand a round unknowable. Guarded per row, for the reason `_publications` has it: one dead flow job
+stopped the whole fleet for two hours on 2026-08-24.
+
 **`cancel` REFUSING A CLOSED ROUND WAS TRUE OF THE FLOW AND FALSE OF EVERYTHING ELSE.** A round that
 stopped on its own leaves a worktree on disk, a task parked where intake cannot reach it and possibly
 a pull request; somebody deciding not to retry has exactly that to do. So the flow cancel and the

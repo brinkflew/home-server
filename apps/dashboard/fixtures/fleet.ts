@@ -347,6 +347,113 @@ export function fleetDocument(): FleetDocument {
         tokens_in: 210300,
         tokens_out: 9814,
       },
+      // THE ROUND THIS ACTION EXISTS FOR, AND ITS LANE HAS MOVED ON.
+      //
+      // Measured on upskald-ship, 2026-09-07: a person declined the approval at
+      // 22:06, the work went in by hand as a different pull request, and the
+      // lane then ran three other tasks. Every control there was is aimed at a
+      // worktree and conduct keeps ONE chain row per worktree, so all four
+      // answered "this lane now holds task 1249, not task 1640" - and the class
+      // this state landed in offered none of them anyway. It sat amber for two
+      // days with nothing on the board able to touch it.
+      //
+      // `outcome: null` IS THE POINT OF THIS ROW. conduct held the decision in
+      // the finished flow job and had nowhere to put it, so the board could not
+      // tell it from a seven-day timeout. `settle` is what a person presses when
+      // nothing can establish it after the fact - the backfill's own tail.
+      {
+        worktree_id: "wt-1640aa",
+        project: "upskald",
+        odoo_task: 1640,
+        ref: "agents/docs/1640-trim-tooling-config-prose",
+        phase: "ship",
+        opened_at: iso(44 * 3600),
+        started_at: iso(44 * 3600),
+        ended_at: iso(43 * 3600),
+        attempts: 3,
+        max_attempts: 3,
+        flow_job_id: "job-1640a",
+        head: "a129196",
+        resumed_at: null,
+        waiting_on: null,
+        link: null,
+        summary: "Cut the CI and build file prose to the constraint",
+        kind: null,
+        closed_at: iso(43 * 3600),
+        closed_why: "reached the publish path",
+        done: PHASES,
+        phases: PHASES,
+        // THE HALF THAT DISABLES FOUR CHIPS AND LEAVES THE FIFTH ALONE.
+        latest_on_worktree: false,
+        odoo_url: "https://avanserv.com/odoo/project.task/1640",
+        branch: "agents/docs/1640-trim-tooling-config-prose",
+        branch_url:
+          "https://github.com/avanserv/upskald/tree/docs/1640-trim-tooling-config-prose",
+        pr_url: null,
+        pr_number: null,
+        pr_state: null,
+        published: true,
+        outcome: null,
+        superseded: false,
+        eta_seconds: null,
+        eta_samples: null,
+        held: false,
+        held_at: null,
+        held_why: null,
+        error: null,
+        cost_usd: 5.7,
+        tokens_in: 4177727,
+        tokens_out: 59808,
+      },
+      // AND THE SAME LANE'S CURRENT ROUND, WHICH conduct COULD RECORD. It ended
+      // the same way - a publication that closed carrying no pull request - and
+      // the finished Windmill job said `canceled: true`, so it reads `declined`
+      // in grey and folds behind `show N finished`. The row above and this one
+      // are the same state to every field but `outcome`, which is what makes the
+      // pair worth carrying: a decision and the absence of one, side by side.
+      {
+        worktree_id: "wt-1640aa",
+        project: "upskald",
+        odoo_task: 1249,
+        ref: "agents/feat/1249-landing-page-hero-intake",
+        phase: "ship",
+        opened_at: iso(20 * 3600),
+        started_at: iso(20 * 3600),
+        ended_at: iso(19 * 3600),
+        attempts: 2,
+        max_attempts: 3,
+        flow_job_id: "job-1640b",
+        head: "ed8a987",
+        resumed_at: null,
+        waiting_on: null,
+        link: null,
+        summary: "Take the landing page hero through intake",
+        kind: null,
+        closed_at: iso(19 * 3600),
+        closed_why: "reached the publish path",
+        done: PHASES,
+        phases: PHASES,
+        latest_on_worktree: true,
+        odoo_url: "https://avanserv.com/odoo/project.task/1249",
+        branch: "agents/feat/1249-landing-page-hero-intake",
+        branch_url:
+          "https://github.com/avanserv/upskald/tree/feat/1249-landing-page-hero-intake",
+        pr_url: null,
+        pr_number: null,
+        pr_state: null,
+        published: true,
+        outcome: "declined",
+        superseded: false,
+        eta_seconds: null,
+        eta_samples: null,
+        held: false,
+        held_at: null,
+        held_why: null,
+        error: null,
+        cost_usd: 8.14,
+        tokens_in: 301882,
+        tokens_out: 13470,
+      },
       // A PULL REQUEST THAT WAS CLOSED RATHER THAN MERGED - the outcome that
       // had NEVER been in a fixture, so nothing had ever drawn it. It is the
       // shape `cancel` produces: _control_cancel PATCHes the pull request shut,

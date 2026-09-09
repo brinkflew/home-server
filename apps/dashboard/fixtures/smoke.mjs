@@ -1209,12 +1209,44 @@ console.log("\n-- which rounds the board keeps --");
   // nobody could confirm merged stays on the board.
   check("a publication nobody could confirm is not hidden",
     classOf("wt-0044ab"), "unmerged");
-  // AND THE ASYMMETRY WITH `pr closed` IS DELIBERATE, asserted here so it
-  // cannot be tidied into consistency later. That state is GitHub answering;
-  // this one is either a person declining or conduct's seven-day HUMAN_TIMEOUT
-  // and nothing can tell which - so hiding it would hide an approval nobody
-  // ever answered, on the one surface still showing it.
-  check("a round that opened none is not hidden", classOf("wt-55ee02"), "unmerged");
+  // A ROUND THAT OPENED NONE STAYS ON THE BOARD, AND NOW IT HAS A BUTTON.
+  // Visibility is unchanged and for the unchanged reason: once the round
+  // closes, agents.approvals_pending stops warning and the phone stops
+  // reminding, so the row is the last visible trace of an approval nobody
+  // answered. What was wrong was the CLASS - `unmerged` is defined as the class
+  // roundControls offers nothing on, and its argument for that is a restart
+  // force-pushing over a branch an open pull request points at. This state is a
+  // round that opened NO pull request, so that argument never applied to it.
+  check("a round that opened none is recoverable rather than inert",
+    classOf("wt-55ee02"), "recoverable");
+  check("...and so is one whose lane has moved on, which is the case that hurt",
+    classOf("wt-1640aa", 1640), "recoverable");
+
+  // AND THE ASYMMETRY WITH `pr closed` IS STILL DELIBERATE. That state is
+  // GitHub answering; this one is conduct's seven-day HUMAN_TIMEOUT, a flow
+  // that failed, or an outcome nothing could establish - the ABSENCE of a
+  // decision, which the positive-evidence rule refuses to hide.
+  check("a decision, though, IS positive evidence and does fold away",
+    classOf("wt-1640aa", 1249), "finished");
+  check("...and it reads as the decision rather than as a fault",
+    roundState(by("wt-1640aa", 1249)), { tone: "off", state: "declined" });
+  check("...while the round beside it, with no outcome recorded, stays amber",
+    roundState(by("wt-1640aa", 1640)), { tone: "warn", state: "not published" });
+
+  // NULL IS "NOBODY RECORDED" AND NEVER "NOBODY DECIDED", which is the same
+  // fail-open rule `pr_state`'s "unknown" follows. Three ways to get one:
+  // conduct not migrated, a backfill that has not reached the row, and a job
+  // Windmill no longer remembers.
+  const unrecorded = { ...by("wt-1640aa", 1249), outcome: null };
+  check("an outcome nobody recorded is not a decision",
+    roundState(unrecorded).state, "not published");
+  const noField = { ...by("wt-1640aa", 1249) };
+  delete noField.outcome;
+  check("...and neither is a document from a collector that had no such field",
+    roundState(noField).state, "not published");
+  check("a word neither side knows is not a decision either",
+    roundState({ ...by("wt-1640aa", 1249), outcome: "eaten" }).state,
+    "not published");
 
   // THE TWO EXCEPTIONS, AND NEITHER CONTRADICTS THE RULE. A superseded round's
   // work is on the board under the round that carried it, and a stopped round
@@ -1309,6 +1341,53 @@ check("the older round on a reused lane offers nothing",
 check("...and it is the SAME worktree as the one that does",
   superseded.worktree_id === stopped.worktree_id, true);
 
+// THE ROW THIS WHOLE CHANGE EXISTS FOR: a round that ended without a pull
+// request, on a lane that has since run other work. Every chip aimed at a
+// worktree reaches conduct's one chain row and would act on the wrong round, so
+// all four are disabled with conduct's own sentence - and `settle` is live,
+// because it names the flow job instead and a publication row is never reused.
+const leftBehind = by("wt-1640aa", 1640);
+const behindOffers = roundControls(leftBehind, ctl, nowUnix);
+check("a round the lane has left behind is still offered something",
+  behindOffers.map((c) => c.action),
+  ["settle", "resume", "restart", "cancel", "cancel_requeue"]);
+check("...and settle is the only one that can be pressed",
+  behindOffers.filter((c) => c.disabled === null).map((c) => c.action), ["settle"]);
+check("...while the rest say the lane has moved on",
+  behindOffers.filter((c) => c.action !== "settle")
+    .every((c) => c.disabled.includes("later round")), true);
+check("...and settle leads, because it is the one that costs nothing",
+  behindOffers[0].label, "settle");
+
+// A ROUND IN THE SAME STATE WHOSE LANE HAS NOT MOVED ON KEEPS ALL FIVE LIVE.
+// The lane test is `roundControls`' now rather than `roundOutcome`'s, and a
+// guard that disabled everything would be worse than the class that hid it.
+const notPublished = by("wt-55ee02");
+check("a round whose lane is still its own has every chip live",
+  roundControls(notPublished, ctl, nowUnix).filter((c) => c.disabled === null).length,
+  5);
+
+// SETTLE IS OFFERED ON `not published` AND NOWHERE ELSE, because that state IS
+// "a publication row closed with no pull request" - which is the row conduct
+// writes on. A `stopped` round has no publication at all and a null
+// flow_job_id, so a chip there would answer "conduct has no publication for
+// job ...", and a live round's answer is approve, decline or cancel.
+const settleOn = fleet.rounds.filter(
+  (r) => roundControls(r, ctl, nowUnix).some((c) => c.action === "settle"));
+check("only rounds that published nothing are offered a settle",
+  settleOn.every((r) => roundState(r).state === "not published"), true);
+check("...and every one of them is", settleOn.length,
+  fleet.rounds.filter((r) => roundState(r).state === "not published").length);
+check("a stopped round is not offered one",
+  roundControls(stopped, ctl, nowUnix).some((c) => c.action === "settle"), false);
+
+// AND A ROUND WITH NO FLOW JOB CANNOT NAME ITSELF TO conduct. The chip stays,
+// disabled with the reason: a control that vanishes teaches nothing.
+const noJob = { ...notPublished, flow_job_id: null };
+check("a round recording no flow job says why it cannot be settled",
+  roundControls(noJob, ctl, nowUnix).find((c) => c.action === "settle")
+    .disabled.includes("no flow job"), true);
+
 // AN OLDER COLLECTOR CANNOT SAY WHICH ROUND IS CURRENT, and `undefined !== null`
 // is true - the trap that once rendered `attempt  of 3`. Absence must read as
 // "not the latest" rather than as "probably this one", in front of a chip that
@@ -1331,11 +1410,13 @@ check("...and each says it cannot be told from a later round",
 // applied where the consequence is worse than a colour: a chip reading `cancel`
 // that sent `restart` would close a round somebody meant to start again.
 const LABELS = { hold: "hold", release: "release", restart: "restart",
-                 resume: "resume", cancel: "cancel", cancel_requeue: "cancel+requeue" };
+                 resume: "resume", cancel: "cancel", cancel_requeue: "cancel+requeue",
+                 settle: "settle" };
 const everyOffer = [
   ...roundControls(open, ctl, nowUnix),
   ...roundControls(stopped, ctl, nowUnix),
   ...roundControls(by("wt-77d3e0"), ctl, nowUnix),
+  ...roundControls(by("wt-1640aa", 1640), ctl, nowUnix),
 ];
 check("no chip can send its neighbour's command",
   everyOffer.every((c) => LABELS[c.action] === c.label), true);

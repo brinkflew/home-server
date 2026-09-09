@@ -15,7 +15,7 @@
 // =============================================================================
 
 import { isoToUnix } from "./format";
-import { roundOutcome } from "./fleet";
+import { roundOutcome, roundState } from "./fleet";
 import type { FleetControl, FleetRound, Tone } from "./types";
 import type { ControlAction } from "./api/control";
 
@@ -274,20 +274,33 @@ export function lastStartedAgo(
  * "finished" is defined as the round this function offers nothing on. If a new
  * offer appears here for a class `roundOutcome` calls finished, the button
  * exists on a row nobody can see.
+ *
+ * AND ONE OFFER IS NOT AIMED AT A WORKTREE AT ALL. Every chip below reaches
+ * conduct's `chain`, which holds one row per lane and moves to whichever change
+ * ran last - so all of them are bounded by `notCurrent` and can only act on the
+ * newest round of a lane. `settle` reaches the `publication` row instead, keyed
+ * per flow job and never reused, which is why it is the only thing a round the
+ * lane has left behind can still be offered.
  */
 export function roundControls(
   round: FleetRound,
   control: FleetControl,
   nowUnix: number,
 ): ControlOffer[] {
-  // NOTHING IS OFFERED ON A ROUND THAT REACHED THE PUBLISH PATH. `unmerged` is
-  // on the board - its pull request is the thing a person acts on, and hiding
-  // it would hide the round's only output - but it is not a round the fleet can
+  // NOTHING IS OFFERED ON A ROUND THAT OPENED A PULL REQUEST. `unmerged` is on
+  // the board - that pull request is the thing a person acts on, and hiding it
+  // would hide the round's only output - but it is not a round the fleet can
   // take up again. A restart would force-push over a branch an open pull
   // request is pointing at, which is the hazard `publish.branch_name`'s stable
   // task-shaped name already carries: a pull request changing under an
   // approval. What to do about one of these is on GitHub, and the row links
   // straight there.
+  //
+  // THAT ARGUMENT USED TO COVER `not published` TOO AND NEVER APPLIED TO IT.
+  // The class was one word answering two questions - "keep this row" and
+  // "nothing can be done" - and a round that opened NO pull request has no
+  // branch under review to force-push over. It is `recoverable` now; see
+  // roundOutcome, where the split is made.
   const klass = roundOutcome(round);
   if (klass === "finished" || klass === "unmerged") return [];
 
@@ -303,6 +316,27 @@ export function roundControls(
     round.odoo_task === null
       ? "this round predates conduct's task column, so nothing can tell it from a later round on the same worktree"
       : null;
+
+  // THE LANE HAS MOVED ON, WHICH USED TO BE `roundOutcome`'s JOB AND NOW HAS TO
+  // BE THIS ONE'S TOO. Every action aimed at a worktree reaches conduct's
+  // `chain`, which holds one row and moves to whichever change ran last - so
+  // conduct refuses them with almost exactly this sentence, and a chip that
+  // lands somewhere it cannot act teaches a reader to distrust the others.
+  //
+  // IT WAS FREE UNTIL `settle` EXISTED. `roundOutcome` folded a non-current
+  // round into `finished`, so this function never saw one; now a `not published`
+  // round stays actionable whatever its lane has done since, because settle
+  // names a flow job rather than a worktree. So the test moves here, where it
+  // can disable four chips and leave the fifth alone.
+  //
+  // ABSENCE IS "NOT THE LATEST", NOT "PROBABLY THIS ONE". `undefined !== null`
+  // is true - the trap that once rendered `attempt  of 3` - and a document from
+  // an older collector cannot say which round on a lane is current. Guessing in
+  // front of a button that closes a pull request is what this refuses.
+  const notCurrent =
+    round.latest_on_worktree === true
+      ? null
+      : "this lane now holds a later round - conduct keeps one row per worktree, so this would act on that one";
 
   // THE FLOOR IS conduct's, AND THE BOARD HONOURS IT RATHER THAN DISCOVERING
   // IT. Two starts close together put two flows on one worktree and the next
@@ -329,6 +363,48 @@ export function roundControls(
 
   const open = round.closed_at === null;
   const offers: ControlOffer[] = [];
+
+  // ONE READING OF THE STATE, SHARED. Whether `settle` is offered turns on it,
+  // and so does which three chips a compact row carries - and deriving the same
+  // answer twice is how this application last drew one fact two ways and
+  // disagreed with itself about a tone no fixture carried.
+  //
+  // ASKED OF `roundState` RATHER THAN RE-DERIVED FROM `published` AND `pr_url`.
+  // Those two conditions ARE that state, and restating them here would be the
+  // drift this module's header warns about: a subset of roundState's conditions,
+  // in a second place, with nothing able to see them disagree.
+  const unpublished = roundState(round).state === "not published";
+
+  // SETTLE COMES FIRST BECAUSE IT IS THE ONE THAT COSTS NOTHING, and the order
+  // chips are read in is the order they are tried in - the same argument that
+  // puts `resume` ahead of `restart` below. It starts no phase, cancels no flow
+  // and touches no worktree; it records that a round which ended without a pull
+  // request needs nothing more.
+  //
+  // AND ON `not published` ALONE, because that state is precisely "a publication
+  // row closed carrying no pull request" - which is the row conduct writes on. A
+  // `stopped` round has no publication at all and a null `flow_job_id`, so a
+  // chip there would answer "conduct has no publication for job ..."; a live
+  // round's answer is approve, decline or cancel.
+  if (unpublished) {
+    offers.push({
+      label: "settle",
+      action: "settle",
+      target: round.worktree_id,
+      // NOT `unidentified` AND NOT `notCurrent`. Neither applies: conduct
+      // identifies this round by its flow job, which is a publication's primary
+      // key and is never reused, so a lane that has moved on and a round with no
+      // task id are both still reachable. That is the whole reason this action
+      // exists - task 1640's round was declined, its lane then ran three other
+      // tasks, and nothing on the board could touch it.
+      disabled:
+        unavailable ??
+        (round.flow_job_id
+          ? null
+          : "this round records no flow job, so nothing can name it to conduct"),
+      primary: true,
+    });
+  }
 
   // A HOLD IS THE ONLY OFFER ON A LIVE ROUND THAT IS NOT ABOUT ENDING IT, and
   // it is meaningless once the round is over: conduct does not dispatch a
@@ -357,8 +433,21 @@ export function roundControls(
       label: "resume",
       action: "resume",
       target: round.worktree_id,
-      disabled: unavailable ?? unidentified ?? owed ?? nothingDone ?? tooSoon,
-      primary: true,
+      disabled: unavailable ?? unidentified ?? notCurrent ?? owed ?? nothingDone ?? tooSoon,
+      // THREE PRIMARY CHIPS IS A LAYOUT CONSTRAINT AND NOT A PREFERENCE: at
+      // 132px a fourth wraps and every row on the board becomes 130px tall,
+      // which is a list nobody can scan. `settle` is a fourth on the one state
+      // that offers it, so something has to give way there.
+      //
+      // AND IT IS THIS ONE, BECAUSE OF WHAT `resume` MEANS ON THIS STATE. A
+      // round that reached the publish path finished EVERY phase, so a resume
+      // skips all five and re-runs only the gate and the squash - it asks the
+      // same question about the same commits again, which is the rare intent
+      // after a decline. `restart` is beside it for the common one, and the
+      // round's own page carries this in full. On a `stopped` round it is
+      // primary exactly as it was: half the phases are unfinished and skipping
+      // them is the whole point.
+      primary: !unpublished,
     });
   }
 
@@ -368,7 +457,7 @@ export function roundControls(
     target: round.worktree_id,
     // A RESTART OF AN OPEN ROUND CLOSES IT FIRST; of a closed one it simply
     // starts another. Both are refused inside the floor and both need the id.
-    disabled: unavailable ?? unidentified ?? owed ?? tooSoon,
+    disabled: unavailable ?? unidentified ?? notCurrent ?? owed ?? tooSoon,
     primary: true,
   });
 
@@ -389,14 +478,14 @@ export function roundControls(
     label: "cancel",
     action: "cancel",
     target: round.worktree_id,
-    disabled: unavailable ?? unidentified,
+    disabled: unavailable ?? unidentified ?? notCurrent,
     primary: true,
   });
   offers.push({
     label: "cancel+requeue",
     action: "cancel_requeue",
     target: round.worktree_id,
-    disabled: unavailable ?? unidentified,
+    disabled: unavailable ?? unidentified ?? notCurrent,
     primary: false,
   });
   return offers;

@@ -1837,6 +1837,14 @@ signal read green.
 - `podman image prune -f` cannot reclaim a volume, and `containers.storage_orphans` counts only build
   containers - so nothing on the host could see it.
 
+### conduct was handed the decision and had nowhere to put it
+- `_publication` asked the finished flow job one question, so a declined approval and a seven-day
+  timeout closed the row identically - and the board drew a person's own decision back at them as
+  amber `not published` for ever, on a lane that had run three other tasks since.
+- Every refusal was correct: `chain` is one row per worktree. What was wrong was `unmerged`, whose
+  argument - a restart force-pushing over an open pull request's branch - never applied to a round
+  that opened none. `settle` reaches `publication`, keyed per flow job and never reused.
+
 ### The dashboard typecheck was checking nothing
 - **`vue-tsc --noEmit` resolves no program** against a `files: []` tsconfig with project references,
   so it passes a planted template error. `--build` is the gate, and three real defects were sitting

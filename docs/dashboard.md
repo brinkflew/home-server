@@ -356,6 +356,30 @@ visible trace of an approval that went unanswered - and hiding an absence of a d
 what the positive-evidence rule refuses. `fixtures/smoke.mjs` asserts the asymmetry rather than
 leaving it to be tidied into consistency later.
 
+**IT CAN TELL THEM APART SINCE 2026-09-09, AND THE ANSWER WAS BEING THROWN AWAY.** conduct's
+`_publication` holds the finished Windmill job and asked it one question - *is there a url* - so a
+declined approval and a timeout both closed the row with the same two NULLs. Windmill had recorded
+the decision all along: measured on `upskald-ship`'s `01a07cbd` of 2026-09-07, `canceled: true`,
+`canceled_by: "avs"`, `canceled_reason: "declined from the dashboard"`. `publication.outcome` is
+where it goes now - **a closed vocabulary and never a sentence**, which is what makes it readable
+here at all: `closed_why` beside it is prose written in another repository, and `roundOutcome`
+refuses to branch on that for exactly the reason this column exists.
+
+`declined`, `cancelled` and `settled` are DECISIONS and fold behind `show N finished`, in grey. A
+person answering is the strongest positive evidence there is. `published`, `ended`, `abandoned` and
+`unknown` are not: `ended` covers a gate timeout and a failed flow, which Windmill reports
+identically - `canceled` false, `success` false - so conduct does not claim to know which. **NULL is
+"nobody recorded" and never "nobody decided"** - conduct not yet migrated, a backfill that has not
+reached the row, a job Windmill has forgotten - so it keeps the amber row, which is the same
+fail-open rule `pr_state`'s `unknown` already follows.
+
+**AND THE CLASS WAS WRONG EVEN WHERE THE VISIBILITY WAS RIGHT.** `unmerged` is defined as the class
+`roundControls` offers nothing on, and the argument for that is a restart force-pushing over a
+branch an open pull request points at - **which was never true of a round that opened no pull
+request**. One word was answering two different questions, "keep this row" and "nothing can be done
+about it", and the row a person most wanted to act on was the one it silenced. `not published` is
+`recoverable` now.
+
 **NO FIXTURE HAD EVER CARRIED `pr_state: "closed"`.** The state was in `roundState` from the
 beginning and nothing had ever rendered it, so the class it belonged in was never a decision
 anybody made. There is one now, on its own worktree, so `shoot.mjs` draws it.
@@ -372,12 +396,29 @@ drift no fixture can see. **This is not the `closed_why` habit**: that rule refu
 written in another repository; this asks this application's own vocabulary, which is derived
 structurally two functions down.
 
-**NOTHING IS OFFERED ON A ROUND THAT REACHED THE PUBLISH PATH.** `unmerged` is on the board - its
-pull request is the thing a person acts on - but it is not a round the fleet can take up again: a
-restart would force-push over the branch an open pull request points at, which is the hazard the
-stable task-shaped branch name already carries. What to do about one of these is on GitHub, and the
-row links straight there. So `roundControls` returns nothing for `unmerged` and `finished` alike,
-and `fixtures/smoke.mjs` asserts that no hidden round has a button on it.
+**NOTHING IS OFFERED ON A ROUND THAT OPENED A PULL REQUEST.** `unmerged` is on the board - that pull
+request is the thing a person acts on - but it is not a round the fleet can take up again: a restart
+would force-push over the branch an open pull request points at, which is the hazard the stable
+task-shaped branch name already carries. What to do about one of these is on GitHub, and the row
+links straight there. So `roundControls` returns nothing for `unmerged` and `finished` alike, and
+`fixtures/smoke.mjs` asserts that no hidden round has a button on it.
+
+**`settle` IS THE ONE ACTION THAT DOES NOT NAME ITS ROUND BY THE LANE, and that is the whole reason
+it works.** Every other chip reaches conduct's `chain`, which holds ONE row per worktree and moves
+to whichever change ran last - so conduct refuses them on the task id and the board offers them only
+on a lane's newest round. Task 1640's round was declined on 2026-09-07, the work went in by hand as
+a different pull request, and the lane then ran three other tasks: all four chips answered *"this
+lane now holds task 1249, not task 1640"*, and the class it sat in offered none of them anyway. A
+`publication` row is keyed per flow job and is never reused, so `settle` names one round exactly
+however long ago it ran. It cancels no flow, starts no phase, touches no worktree and writes no
+tracker stage - it sets one field.
+
+**THE LANE TEST MOVED FROM `roundOutcome` TO `roundControls` WITH IT.** It used to be free: a
+non-current round was folded into `finished` and this function never saw one. Now a `not published`
+round stays actionable whatever its lane has done since, so the test has to sit where it can disable
+four chips and leave the fifth alone. Absence still reads as "not the latest" rather than "probably
+this one" - `undefined !== null` is the trap that once rendered `attempt  of 3`, and guessing in
+front of a button that closes a pull request is what it guards.
 
 **A ROUND CAN BE ACTED ON FROM THE ROW NOW, AND A STOPPED ONE COULD NOT BE AT ALL.**
 `roundControls` returned an empty list for anything closed, so the row a person most wants to act on
@@ -391,9 +432,16 @@ At 132px four of them wrapped onto four lines and made every row of the table 13
 list nobody can scan. `ControlOffer.primary` is a **declared property rather than two lists** - the
 board's row and the round's own page still read one derivation, because the last time this
 application derived one control two ways the two drawings disagreed, and here the disagreement would
-be a chip reading `cancel` that sent `restart`. Only `cancel+requeue` is non-primary: everything it
-does `cancel` does too except the one tracker write, and somebody deciding to put work back has gone
-to read the round first.
+be a chip reading `cancel` that sent `restart`. `cancel+requeue` is non-primary everywhere:
+everything it does `cancel` does too except the one tracker write, and somebody deciding to put work
+back has gone to read the round first.
+
+**AND `resume` GIVES WAY TO `settle` ON THE ONE STATE THAT OFFERS BOTH**, because the three is a
+width and not a preference. It is not an arbitrary choice between them: a round that reached the
+publish path finished EVERY phase, so a resume there skips all five and re-runs only the gate and
+the squash - it asks the same question about the same commits again, which is the rare intent after
+a decline, with `restart` beside it for the common one. On a `stopped` round `resume` is primary
+exactly as it was, because half its phases are unfinished and skipping them is the whole point.
 
 **A ROUND WAITING FOR YOUR ANSWER WILL NOT BE RESTARTED BY ONE CLICK.** conduct would accept it,
 which is exactly why the board must not offer it as though it were the obvious move: a restart
