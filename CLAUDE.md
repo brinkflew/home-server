@@ -1887,6 +1887,18 @@ signal read green.
   this repo documents as load-bearing. The ceiling is derived now, counted from `stacks/` and never
   from `podman ps`, or ephemeral CI lanes make it breathe.
 
+### A major arrived through a floating tag, and a pin nothing advanced
+- **A container that starts healthy defeats the rollback by design**: Jellyfin 10.11 -> 12.0.0 broke
+  only its CALLERS, so `Notify=healthy` had nothing to act on. Eleven images here follow `:latest`
+  because their registries publish no rolling major, so detection is what is left -
+  `update.image_major` records each leading integer locally and warns when one changes. Unlabelled
+  is reported separately, because it is not agreement.
+- **`stacks/README.md` said "nothing advances the minor but a person reading this row", and nothing
+  did** - windmill 1.792 against upstream 1.807.0, fifteen releases, on the fleet's control plane.
+  `update.pin_lag` grades it, one call a day with the marker as the cache and no new timer.
+- The pin is in **three files** and the check reads one; a half-done bump is two binaries against one
+  schema. `bin/lint-repo.sh`'s Windmill pin leg is what makes reading one of them sound.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

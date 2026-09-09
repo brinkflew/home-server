@@ -5619,3 +5619,40 @@ service on the rack read **memory starved**. Nothing on the host was.
   a different question every hour. A quadlet appears when somebody adds a service, which is exactly
   when the budget should move. The label-explosion property survives: hundreds of series arrive at
   once and still breach ten services of slack.
+
+## A major arrived through a floating tag, and a pin nothing advanced
+
+- **A CONTAINER THAT STARTS HEALTHY DEFEATS THE ROLLBACK BY DESIGN.** Jellyfin went 10.11 -> 12.0.0
+  overnight through `:latest`; every response SHAPE was unchanged, so it broke only its CALLERS, and
+  `Notify=healthy` - the thing that arms `podman auto-update`'s rollback - had nothing to act on.
+  Three collector sources 401'd, two of them GUARDING rather than raising, so `source_up` stayed 1
+  while their series stopped existing. `update.image_major` is the detector: it records each
+  auto-updating container's leading integer and warns when one changes.
+- **PINNING IS NOT AVAILABLE FOR ELEVEN OF THEM.** lscr.io and friends publish `latest` and pinned
+  builds and nothing between, so there is no rolling major to follow and the repo's usual major-tag
+  rule cannot apply. Detection is what is left, and the cost of this whole class was never the
+  breakage - it was not knowing a major had landed overnight.
+- **IT READS `podman image inspect`, WHICH IS LOCAL, AND MUST STAY THAT WAY.** `update.policy_count`
+  is on record for having spent three minutes a run asking every registry a question it could answer
+  from disk. The label is upstream's and its spelling is nobody's to control - `12.0ubu2604-ls48`,
+  `5.2.3_v2.0.14-ls475`, `dev_2.86.01_2026_08_05T...` - so only a LEADING integer is read and
+  anything else counts as unlabelled. **Unlabelled is not agreement**, and it is reported separately.
+- **WARN AND NEVER FAIL**, for the reason `deploy.image_digest` gives twice: a FAIL refuses the next
+  reboot window through `bin/reboot-when-staged.sh`'s battery gate. A major is a thing to go and look
+  at, not a fault.
+- **`stacks/README.md` SAID "NOTHING ADVANCES THE MINOR BUT A PERSON READING THIS ROW", AND NOTHING
+  DID.** Measured 2026-09-09: windmill pinned at 1.792 against upstream 1.807.0, fifteen releases
+  behind, on the control plane the whole agent fleet runs through. `update.pin_lag` grades it at ten
+  releases - derived, because windmill ships roughly a minor a week and ten is about a quarter
+  unattended, past which the changelog stops being readable in one sitting.
+- **ONE CALL A DAY AND NO NEW TIMER.** The marker IS the cache: the battery is hourly, the answer
+  changes weekly, and a 20-hour floor gets there without a unit to install, enable and then discover
+  had never fired because `Persistent=true` does not run on first enable. The GitHub releases API
+  rather than `skopeo list-tags`, because upstream has published 2,198 tags and only the newest
+  RELEASE is the question. **Only an explicit answer counts** - a rate limit or a DNS blip leaves
+  yesterday's answer in place rather than overwriting it with an empty one that would read as
+  "nothing has been released".
+- **THE PIN IS IN THREE FILES AND THE CHECK READS ONE.** A half-done bump is two binaries against one
+  schema, which is a corrupted control plane rather than a failed start, so nothing would go red.
+  `bin/lint-repo.sh`'s Windmill pin leg is what makes reading one of the three sound, and it was
+  planted with a disagreeing tag and made to FAIL before it was trusted.

@@ -928,6 +928,25 @@ else
 fi
 
 echo
+say "Windmill pin"
+# ------------------------------------------------------------------------------
+# THREE FILES AND ONE NUMBER, and a half-done bump is two binaries against one
+# schema - which is a corrupted control plane rather than a failed start, so
+# nothing would go red. stacks/README.md names the trap and nothing checked it;
+# update.pin_lag in bin/verify-host.sh grades how far behind the pin is and
+# reads ONE of the three, so this is what makes reading one of them sound.
+wm_tags=$(sed -n 's/^Image=.*windmill:\(.*\)$/\1/p' \
+	stacks/infra/windmill-*.container 2>/dev/null | sort -u)
+wm_n=$(printf '%s\n' "$wm_tags" | grep -c .)
+if [ "$wm_n" -eq 0 ]; then
+	skip "no windmill image pin found"
+elif [ "$wm_n" -eq 1 ]; then
+	ok "all windmill units pin $wm_tags"
+else
+	bad "windmill units disagree on the image tag: $(printf '%s' "$wm_tags" | tr '\n' ' ') - two binaries against one schema is a corrupted control plane, not a failed start"
+fi
+
+echo
 if [ "$fails" -gt 0 ]; then
 	printf '\033[31m%d check(s) FAILED\033[0m\n' "$fails"
 	exit 1

@@ -1569,6 +1569,142 @@ if [ -z "$GREENBOOT" ]; then
 		bad update.policy_count "${au_count:-0} of $au_expected containers carry an auto-update policy - a unit has lost AutoUpdate= or was never created"
 	fi
 
+	# A MAJOR VERSION ARRIVING THROUGH :latest, WHICH NOTHING COULD SEE.
+	# ------------------------------------------------------------------------------
+	# Jellyfin went 10.11 -> 12.0.0 overnight through its floating tag. Every
+	# response SHAPE was unchanged, so it was an auth break only - and the
+	# container STARTED HEALTHY, which is the whole problem: `Notify=healthy` is
+	# what arms the auto-update rollback, so a major that breaks its CALLERS and
+	# not itself has nothing for the rollback to act on. Three collector sources
+	# 401'd, two of them guarding rather than raising, so `source_up` stayed 1
+	# while their series simply stopped existing.
+	#
+	# Eleven images here follow a fully floating tag because their registries
+	# publish no rolling major - lscr.io ships `latest` and pinned builds and
+	# nothing between - so pinning is not available and DETECTION is what is
+	# left. A person who knows a major landed last night can check the callers;
+	# the cost of this whole class was not knowing.
+	#
+	# LOCAL, AND DELIBERATELY SO. `podman image inspect` reads metadata already
+	# on this disk. It must never become a registry round trip: update.policy_count
+	# spent three minutes a run asking every registry a local question, and
+	# deploy.image_digest's ONE call is already argued for at length above.
+	#
+	# The label is upstream's and its spelling is nobody's to control -
+	# `12.0ubu2604-ls48`, `5.2.3_v2.0.14-ls475`, `dev_2.86.01_2026_08_05T...` -
+	# so only a LEADING integer is read and anything else is unlabelled rather
+	# than zero. An unreadable label must not read as agreement.
+	majors_state="${HOME_SERVER_IMAGE_MAJORS:-$HOME/.cache/home-server/image-majors}"
+	mj_jumped="" mj_unlabelled=0 mj_seen=0 mj_new=""
+	while read -r cname cimage; do
+		[ -n "$cname" ] || continue
+		mj_seen=$((mj_seen + 1))
+		ver=$(podman image inspect "$cimage" \
+			--format '{{index .Labels "org.opencontainers.image.version"}}' 2>/dev/null)
+		case "$ver" in
+			[0-9]*) maj=${ver%%[!0-9]*} ;;
+			*)      maj="" ;;
+		esac
+		if [ -z "$maj" ]; then
+			mj_unlabelled=$((mj_unlabelled + 1))
+			continue
+		fi
+		mj_new="${mj_new}${cname}=${maj}"$'\n'
+		was=$(sed -n "s/^${cname}=//p" "$majors_state" 2>/dev/null | tail -1)
+		if [ -n "$was" ] && [ "$was" != "$maj" ]; then
+			mj_jumped="${mj_jumped}${mj_jumped:+, }${cname} ${was}->${maj}"
+		fi
+	done <<-EOF
+		$(podman ps --filter label=io.containers.autoupdate \
+			--format '{{.Names}} {{.Image}}' 2>/dev/null)
+	EOF
+
+	if [ "$mj_seen" -eq 0 ]; then
+		note update.image_major "no auto-updating container could be inspected - not measured"
+	elif [ -n "$mj_jumped" ]; then
+		# WARN, never FAIL. A major is not a fault - it is a thing to go and
+		# look at - and a FAIL here would refuse the next reboot window through
+		# bin/reboot-when-staged.sh's battery gate, which is the trap
+		# deploy.image_digest already documents twice.
+		warn update.image_major "a MAJOR version changed under a floating tag: $mj_jumped - the container can start healthy while its callers break, which is what the auto-update rollback cannot see. Check anything that speaks to it before assuming this is fine"
+	elif [ "$mj_unlabelled" -gt 0 ]; then
+		ok update.image_major "$((mj_seen - mj_unlabelled)) of $mj_seen images carry a readable major, unchanged since the last run"
+	else
+		ok update.image_major "all $mj_seen image majors unchanged since the last run"
+	fi
+	fact image_majors_seen       "$mj_seen"       num
+	fact image_majors_unlabelled "$mj_unlabelled" num
+
+	# RECORDED AFTER GRADING, so a jump is reported exactly once and the next
+	# run compares against what is actually running now. Written whole, and this
+	# file has no other writer - unlike boot-state, where rewriting it destroyed
+	# twelve keys belonging to somebody else.
+	if [ -n "$mj_new" ] && [ -z "${HOME_SERVER_IMAGE_MAJORS_RO:-}" ]; then
+		mkdir -p "$(dirname "$majors_state")" 2>/dev/null
+		printf '%s' "$mj_new" >"$majors_state.tmp" 2>/dev/null \
+			&& mv "$majors_state.tmp" "$majors_state" 2>/dev/null
+	fi
+
+	# THE ONE IMAGE A PERSON HAS TO ADVANCE BY HAND.
+	# ------------------------------------------------------------------------------
+	# windmill-server is pinned to a floating PATCH tag because upstream
+	# publishes no rolling major - `stacks/README.md` explains the shape - and
+	# that README says outright: "Nothing advances the minor but a person
+	# reading this row." Nothing did. Measured 2026-09-09 at 1.792 against
+	# upstream's 1.807.0, fifteen releases, on the control plane the whole agent
+	# fleet runs through.
+	#
+	# ONE CALL A DAY, NOT ONE AN HOUR, and no new timer to get there. The marker
+	# below is the cache: the battery runs hourly, the answer changes weekly, and
+	# update.policy_count is on record for having spent three minutes a run
+	# asking registries a question it could answer locally. Not under --greenboot
+	# for deploy.image_digest's reason - a rollback must never depend on DNS.
+	#
+	# The releases API rather than `skopeo list-tags`: upstream has published
+	# 2,198 tags and only the newest RELEASE is the question being asked.
+	pin_state="${HOME_SERVER_PIN_STATE:-$HOME/.cache/home-server/pin-state}"
+	pin_now=$(date -u +%s)
+	pin_checked=$(sed -n 's/^checked_at=//p' "$pin_state" 2>/dev/null | tail -1)
+	pin_latest=$(sed -n 's/^windmill_latest=//p' "$pin_state" 2>/dev/null | tail -1)
+	if [ -z "$GREENBOOT" ] \
+		&& [ "$(( pin_now - ${pin_checked:-0} ))" -ge 72000 ]; then
+		fresh=$(timeout 20 curl -sS --max-time 20 \
+			https://api.github.com/repos/windmill-labs/windmill/releases/latest \
+			2>/dev/null | jq -r '.tag_name // empty' 2>/dev/null)
+		fresh=${fresh#v}
+		# ONLY AN EXPLICIT ANSWER COUNTS - the same rule as the off-site delete
+		# probe and deploy.image_digest. A rate limit, a DNS blip or an API
+		# change must leave yesterday's answer in place, never overwrite it with
+		# an empty one that would read as "nothing has been released".
+		if [ -n "$fresh" ]; then
+			pin_latest="$fresh"
+			mkdir -p "$(dirname "$pin_state")" 2>/dev/null
+			{ echo "windmill_latest=$pin_latest"; echo "checked_at=$pin_now"; } \
+				>"$pin_state.tmp" 2>/dev/null && mv "$pin_state.tmp" "$pin_state" 2>/dev/null
+		fi
+	fi
+	pin_have=$(sed -n 's/^Image=.*windmill:\(.*\)$/\1/p' \
+		"$repo"/stacks/infra/windmill-server.container 2>/dev/null | tail -1)
+	# Minor number only. The patch floats by design and the major has been 1 for
+	# the life of the project, so the minor is the whole signal.
+	pin_have_n=$(printf '%s' "${pin_have:-}" | cut -d. -f2)
+	pin_latest_n=$(printf '%s' "${pin_latest:-}" | cut -d. -f2)
+	case "${pin_have_n:-x}${pin_latest_n:-x}" in
+		*[!0-9]*) pin_behind="" ;;
+		*)        pin_behind=$(( pin_latest_n - pin_have_n )) ;;
+	esac
+	if [ -z "${pin_latest:-}" ] || [ -z "${pin_behind:-}" ]; then
+		note update.pin_lag "the published windmill release could not be resolved - not measured"
+	elif [ "$pin_behind" -le 10 ]; then
+		ok update.pin_lag "windmill pinned at ${pin_have}, upstream ${pin_latest} - ${pin_behind} release(s) behind"
+	else
+		# TEN, DERIVED: windmill ships roughly a minor a week, so ten is about a
+		# quarter unattended - past which the changelog stops being readable in
+		# one sitting and the bump stops being a bump.
+		warn update.pin_lag "windmill is pinned at ${pin_have} and upstream is at ${pin_latest} - ${pin_behind} releases behind, and nothing advances this but a person. It is three files and one number; a half-done bump is two binaries against one schema, so bin/lint-repo.sh asserts they agree"
+	fi
+	fact pin_windmill_behind "${pin_behind:-}" num
+
 	# ------------------------------------------------------------------------------
 	say backup "Backups"
 	# ------------------------------------------------------------------------------
