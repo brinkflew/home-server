@@ -541,6 +541,38 @@ groups:
             try the same one again. `jq -r '.checks[]|select(.id=="update.rollback")'
             /var/lib/home-server/status.json`.
 
+      - alert: ImageMajorJumped
+        # THE SIBLING OF UpdateRolledBack, AND THE CASE IT CANNOT COVER. That
+        # rule fires when an image would not go healthy and the previous one was
+        # restored - which is the rollback WORKING. This one fires when the
+        # rollback had nothing to act on: Jellyfin 10.11 -> 12.0.0 started
+        # perfectly and broke only its callers, so `Notify=healthy` was
+        # satisfied and three collector sources 401'd in silence.
+        #
+        # 30m to match its sibling, and for the same reason: the callers may be
+        # failing tonight. This is the one finding here that is genuinely
+        # time-critical, because the remedy - look at what talks to it - is
+        # cheapest before somebody has spent an evening on the symptom.
+        #
+        # WARN, never FAIL, so it needs a targeted rule: `update` has no
+        # section-wide warn matcher, and a FAIL would refuse the next reboot
+        # window through bin/reboot-when-staged.sh's battery gate.
+        expr: home_server_check_status{id="update.image_major"} == 2
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A container's MAJOR version changed under a floating tag"
+          description: >-
+            Eleven images here follow `:latest` because their registries publish
+            no rolling major, so this is detection rather than prevention. The
+            container is healthy - that is the point, and why auto-update's
+            rollback cannot see it. Check what SPEAKS to it: the 10.11 -> 12.0.0
+            night was an auth break with every response shape unchanged.
+            `jq -r '.checks[]|select(.id=="update.image_major")'
+            /var/lib/home-server/status.json` names the container and both
+            versions.
+
       - alert: ProbeBinaryMissing
         # A SECOND WARN THAT HAS TO NOTIFY, for the same reason OsImageStale
         # does: CheckFailing is `== 3` and containers.probe_binaries is

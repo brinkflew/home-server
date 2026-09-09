@@ -425,10 +425,18 @@ which is WARN so that a stalled updater cannot block the OS updates it is compla
 getting - **the check needs a targeted rule of its own** (`OsImageStale`, `== 2`, `for: 6h`).
 Adding a WARN check and expecting the generic rule to carry it is the silent half of this.
 
-**Three more targeted rules landed on 2026-09-09, and the section-wide alternative was rejected.**
+**`update.pin_lag` is DELIBERATELY the exception, and it is the only WARN here with no rule.** Every
+other warn added on 2026-09-09 got one, because the sentence above is the rule. This one did not,
+and the distinction is whether the finding is an EVENT or a BACKLOG: a lagging pin is true
+continuously until somebody does an afternoon's work, so a rule would page on a schedule rather than
+on a change, which is the shape rejected for the advisory check one section down. It belongs in the
+MOTD and on the dashboard, where a standing obligation is read when somebody is deciding what to do
+next - and `ImageMajorJumped` beside it is the event half, which does page.
+
+**Four more targeted rules landed on 2026-09-09, and the section-wide alternative was rejected.**
 Only `capacity`, `agents` and `ci` carry a `home_server_check_status{section=...} == 2` matcher, so
 **nineteen of the twenty-two sections can WARN and page nobody** - `deploy`, `update` and `metrics`
-among them. `OsImageLagging`, `RebootWindowLost` and `MetricsSeriesBudget` are targeted for the same
+among them. `OsImageLagging`, `RebootWindowLost`, `MetricsSeriesBudget` and `ImageMajorJumped` are targeted for the same
 reason `OsImageStale` is. A `deploy` section matcher was considered and refused: unlike capacity,
 agents and ci, that section legitimately carries FAILs which `CheckFailing` already delivers, so a
 `== 2` catch-all would newly page for `deploy.pinned` and `deploy.image_tag` as well.
