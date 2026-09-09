@@ -5388,3 +5388,18 @@ service on the rack read **memory starved**. Nothing on the host was.
   place was applied to one staging path and to none of the three beside it, and in the year this
   repository has had backups nothing had ever looked. The check that found it had been running for
   eleven minutes.
+
+### A second cleanup() silently un-did the first, and only on the paths that worked
+- Adding a private password directory to `bin/verify-restore.sh` meant the EXIT trap had two things
+  to remove, so `cleanup()` and its `trap` moved to the top of the script - above the point where the
+  password is written, because a trap installed after it leaks the plaintext on every early `die`.
+  The ORIGINAL one-line `cleanup()` and its `trap cleanup EXIT` were left where they were, beside the
+  `mktemp` for the restored tree.
+- **So every run that got that far REDEFINED the function**, replacing the two-directory version with
+  the one-directory version it had started as. The restored tree was removed and the password
+  directory was not: three survived on tmpfs, each still holding a repository password.
+- **The failing paths were the ones that behaved correctly**, which is what made it hard to see. An
+  early `die` never reaches the second definition, so the leak appears only after a SUCCESSFUL run -
+  and the evidence for the diagnosis is that same asymmetry: trees cleaned, password directories not,
+  in the same runs. A forced early exit was the control, and it left nothing behind.
+- Bash keeps one EXIT trap and one definition per name, and neither redefinition warns.

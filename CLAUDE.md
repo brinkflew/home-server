@@ -1812,6 +1812,9 @@ signal read green.
 - **The backup declares `--exclude='*.lock'` and applied it to one staging path of four**, so
   upskald's coverage-ratchet write lock was in every snapshot. Found by the restore verification
   eleven minutes after it first ran, which is what that check is for.
+- **A second `cleanup()` further down the file silently un-did the first**, so a password directory
+  survived every SUCCESSFUL run while the failing paths cleaned up correctly. Bash keeps one
+  definition per name and one EXIT trap, and neither redefinition warns.
 
 ## Target architecture
 

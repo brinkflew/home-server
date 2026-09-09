@@ -287,9 +287,14 @@ case "$fstype" in
 esac
 echo "  scratch: $SCRATCH ($fstype, ${have_mb}M free, needs ~${need_mb}M)"
 
+# NO cleanup()/trap HERE. There used to be, and leaving it when the password
+# directory got its own handler above REDEFINED the function at exactly this line:
+# every run that got this far replaced the two-directory cleanup with the
+# one-directory one it started as, so the restored tree was removed and the
+# password directory was not. Three of them survived on tmpfs, each still holding
+# a repository password, and the only reason it was visible at all is that the
+# early-exit paths - which never reach this line - cleaned up correctly.
 TARGET=$(mktemp -d "$SCRATCH/home-server-restore.XXXXXX") || die "cannot create a scratch directory"
-cleanup() { [ -n "$KEEP" ] || rm -rf "$TARGET"; }
-trap cleanup EXIT
 
 say "repository: $RESTIC_REPOSITORY"
 echo "  chain: host $HOST_TAG, path $SNAP_PATH"
