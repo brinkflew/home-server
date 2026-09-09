@@ -436,10 +436,11 @@ next - and `ImageMajorJumped` beside it is the event half, which does page.
 **Four more targeted rules landed on 2026-09-09, and the section-wide alternative was rejected.**
 Only `capacity`, `agents` and `ci` carry a `home_server_check_status{section=...} == 2` matcher, so
 **nineteen of the twenty-two sections can WARN and page nobody** - `deploy`, `update` and `metrics`
-among them. `OsImageLagging`, `RebootWindowLost`, `MetricsSeriesBudget` and `ImageMajorJumped` are targeted for the same
-reason `OsImageStale` is. A `deploy` section matcher was considered and refused: unlike capacity,
-agents and ci, that section legitimately carries FAILs which `CheckFailing` already delivers, so a
-`== 2` catch-all would newly page for `deploy.pinned` and `deploy.image_tag` as well.
+among them. `OsImageLagging`, `RebootWindowLost`, `MetricsSeriesBudget` and `ImageMajorJumped` are
+targeted for the same reason `OsImageStale` is. A `deploy` section matcher was considered and
+refused: unlike capacity, agents and ci, that section legitimately carries FAILs which
+`CheckFailing` already delivers, so a `== 2` catch-all would newly page for `deploy.pinned` and
+`deploy.image_tag` as well.
 
 **`OsImageLagging` is NOT a widened `OsImageStale`**, which was the obvious economy. That rule's
 summary says "nothing has STAGED it" and its description recommends `rpm-ostree upgrade`; both are
