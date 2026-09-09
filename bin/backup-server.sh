@@ -572,7 +572,16 @@ if [ -z "$DRY" ]; then
 fi
 
 say "snapshots"
-restic snapshots --compact 2>/dev/null | tail -4
+# CAPTURED AND THEN PRINTED, rather than piped straight out. A pipeline whose last
+# stage is a child that block-buffers loses its flush when the unit's stdout is the
+# journal - measured in a transient unit, `printf X | tail -4` arrives empty while a
+# builtin printf arrives - so this summary had NEVER appeared in a nightly run's
+# journal: `==> snapshots` followed directly by `Finished`. Command substitution is
+# read by bash, so the printf below is a builtin write and cannot be buffered away.
+# Same defect found the same day in bin/verify-restore.sh, where it made a FAIL name
+# none of the files it had found.
+snaps=$(restic snapshots --compact 2>/dev/null | tail -4)
+printf '%s\n' "$snaps"
 
 # Exit non-zero only AFTER the marker is written, so the unit goes red and the
 # MOTD still knows the local copy is current. The backups themselves have all

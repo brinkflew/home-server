@@ -430,7 +430,38 @@ if [ -z "$strays" ]; then
 	ok "no stale WAL, lock or pid files in the snapshot"
 else
 	bad "excluded files present in the snapshot:"
-	echo "$strays" | sed "s|$CONFIG|  config|" | head -10
+	# BASH BUILTINS ONLY, AND THAT IS NOT A STYLE CHOICE. This was
+	# `echo "$strays" | sed "s|$CONFIG|  config|" | head -10`, which prints
+	# correctly to a terminal or a file and reaches the JOURNAL as nothing at all -
+	# so the first run from a timer emitted `FAIL excluded files present in the
+	# snapshot:` and then named none of them. A finding that sounds specific and
+	# identifies nothing, in a check whose only reader is the journal.
+	#
+	# MEASURED, IN A TRANSIENT UNIT, one stage at a time: with the unit's stdout
+	# going to the journal, `printf X | cat` and `printf X | head -10` both arrive
+	# EMPTY, while `printf X | sed ...`, `printf X | stdbuf -o0 head -10` and a bare
+	# builtin `printf` all arrive. The discriminator is not the program, it is WHEN
+	# it writes: a child that block-buffers and flushes at exit loses the flush,
+	# whereas one that writes as it goes does not. So the fix is to have no child at
+	# the end of the pipeline rather than to sprinkle `stdbuf` - a herestring and a
+	# builtin cannot be buffered away.
+	#
+	# The prefix is stripped with a `case` rather than assumed, so a path that is
+	# somehow not under $CONFIG prints as itself instead of being relabelled
+	# `config...`.
+	n=0
+	while IFS= read -r stray; do
+		[ -n "$stray" ] || continue
+		n=$((n + 1))
+		if [ "$n" -gt 10 ]; then
+			printf '  ... and more\n'
+			break
+		fi
+		case "$stray" in
+			"$CONFIG"*) printf '  config%s\n' "${stray#"$CONFIG"}" ;;
+			*)          printf '  %s\n' "$stray" ;;
+		esac
+	done <<<"$strays"
 fi
 
 # ------------------------------------------------------------------------------
