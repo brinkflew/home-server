@@ -2040,6 +2040,18 @@ signal read green.
   before a token lapsed stands with the leg dead. A 404 is neither answer nor failure - only this
   change reached old rows, and GitHub answers 404, not 403, for a repo a re-scoped token cannot see.
 
+### The mandate had two signals and neither could say "not this one"
+- The fleet's whole mandate was `Pending` OR `priority != 0`, and both answer "is this ready" rather
+  than "is this ready for an UNATTENDED round" - a round costs $4.88-$15.11 either way. The
+  `Conduct` tag is the per-task veto, ANDed onto that union so it can only ever take rows away.
+- The clause is in the DOMAIN and NOT in `shortlist`, because `limit=80` would let untagged rows
+  spend the cap - `FLEET_PR_MAX` one entry up, in a second place - and not in `judge_selection`
+  either, where it could only ever count zero. **A missing tag RAISES**: the narrower fallback,
+  every time, or one rename becomes a fleet that quietly takes everything.
+- `select.md` has ranked category "by tag" since it was written and no tag ever reached it; the
+  names are attached to the ROW so the two call sites cannot drift. `pool: 0` cannot tell an empty
+  backlog from an untagged one, and only the dry run pays to ask. No new check, no new series.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

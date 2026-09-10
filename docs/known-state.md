@@ -5998,3 +5998,40 @@ service on the rack read **memory starved**. Nothing on the host was.
   with this host's token attached. The owner and the repository are checked now, and the cache key
   is derived from the same parse - a key validated separately from the endpoint is a key that
   outlives the validation the endpoint enforces.
+
+### The mandate had two signals and neither could say "not this one"
+- **The fleet's whole mandate was `Pending` OR `priority != 0`**, both in `odoo.candidates()`'s
+  domain, and both answer "is this work ready". Neither answers the question a person actually has,
+  which is whether it is ready for an **unattended** round - a task can be perfectly triaged and
+  still be one somebody means to steer themselves. There was no per-task way to say so: the only
+  controls were the whole-fleet `intake` switch and `REVIEW_CAP`, and a round costs **$4.88 to
+  $15.11** whichever kind it picks up.
+- **The `Conduct` tag is ANDed onto that union and never replaces it**, so tagging is not a way to
+  start untriaged work - a tagged row sitting in Backlog at priority 0 is still invisible. That
+  keeps `candidates()`'s own "a fleet that took work from there would be inventing its own mandate"
+  argument intact and makes the tag purely a veto a person attaches to one row.
+- **The clause is in the DOMAIN and deliberately not in `shortlist`**, which is the one place this
+  splits from the rule that refusals live in the pure function. `candidates()` is `limit=80` ordered
+  priority-then-id, so narrowing in Python would let untagged rows spend the cap and starve a tagged
+  task sorting past position 80 - the `FLEET_PR_MAX` defect, one entry up, in a second place. And
+  **no clause in `judge_selection` beside the stage one for the mirror reason**: every row it can
+  see was tagged when the pool was read, so it would count zero for ever and stop being reviewed.
+- **A missing tag RAISES rather than falling back**, as `review_count()` refuses a project with no
+  `Review` stage. The absent-`Pending` branch one line up already sets the direction - "the honest
+  fallback is only starred work, never everything" - and for a tag the narrower way is nothing at
+  all. Falling back to an unfiltered pool would turn one rename into a fleet that quietly takes
+  everything, which is the single outcome the tag exists to prevent.
+- **`project.tags` carries no `project_id`**, so a domain naming one matches nothing rather than
+  fewer - and reads back as "the tag does not exist", which is now a refusal.
+- **`select.md` has ranked category "by tag" since it was written and no tag ever reached it.**
+  `candidates()` fetched `tag_ids` and `_candidate_table` dropped it, so that half of the
+  instruction pointed at data the phase could not see for its whole life. The names are resolved
+  onto the ROW rather than passed as a parameter, because `poll._intake_project` and `bin/conduct
+  intake` repeat the same query sequence verbatim and would otherwise drift over a second call each.
+  `Conduct` itself is stripped: every row on the list carries it, so it separates nothing.
+- **`pool: 0` cannot tell an empty backlog from an untagged one**, and they are different problems.
+  The dry run re-queries with the clause dropped and says how many are otherwise eligible - there
+  and nowhere else, because a person is watching and the poll cycle never runs it.
+- **No new check and no new series**, so the counted sentence in `conduct/marker.py` does not move.
+  `agents.intake` grades the AGE of the stamp and never the string, and its own comment already
+  names an empty pool as a legitimate `ok` reason - so a narrow tag cannot page anybody.

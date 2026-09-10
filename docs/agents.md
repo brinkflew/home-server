@@ -2154,10 +2154,32 @@ The `next-task` skill needs `mcp__odoo-mcp__*`, which no phase can hold, so the 
 the line this design already draws everywhere else.
 
 **conduct narrows, on the host, with the credential.** `odoo.milestones()` reads the ladder,
-`odoo.candidates()` the pool, `odoo.dependencies_closed()` the blockers, and `odoo.shortlist()` -
-a pure function over rows already read, so the whole narrowing is assertable without a network -
-drops epics, work already in `Planning` or `Implementation`, and anything blocked, then keeps the
-earliest milestone rung with open work and caps what survives at twenty.
+`odoo.tags()` the tag map, `odoo.candidates()` the pool, `odoo.dependencies_closed()` the blockers,
+and `odoo.shortlist()` - a pure function over rows already read, so the whole narrowing is
+assertable without a network - drops epics, work already in `Planning` or `Implementation`, and
+anything blocked, then keeps the earliest milestone rung with open work and caps what survives at
+twenty.
+
+**The pool is open work that is triaged AND tagged `Conduct`.** Triaged is the union that was always
+there - sitting in `Pending`, or starred above priority 0 - and the tag is ANDed onto it, so it can
+only ever take rows away. It is the one **per-task** control a person has, and the question it
+answers is not the one `Pending` answers: `Pending` says the work is ready, the tag says it is
+ready for an **unattended** round. Plenty of triaged work needs somebody steering the session, and a
+round costs $4.88 to $15.11 whichever kind it picks up.
+
+**The tag clause is in the DOMAIN and not in `shortlist`**, which is the one place this splits from
+the rule that refusals live in the pure function. `candidates()` is `limit=80` ordered by priority
+then id, so narrowing in Python would let untagged rows spend the cap and starve a tagged task
+sorting past position 80 - a filter bounding the wrong thing, which this repository has paid for
+once already in `FLEET_PR_MAX`. For the same reason there is no tag clause in `judge_selection`
+beside the stage one: every row it can see was tagged when the pool was read, so it would count zero
+for ever, and code that never runs stops being reviewed.
+
+**A missing tag raises rather than falling back**, exactly as `review_count()` refuses a project with
+no `Review` stage. `candidates()` already sets the direction one branch up, where a project with no
+`Pending` stage degrades to "only starred work, never everything": the honest fallback is always the
+narrower one, and for a tag that is nothing at all. An unfiltered pool would turn one rename into a
+fleet that quietly takes everything, which is the single outcome the tag exists to prevent.
 
 **The ladder is ordered by the M-number in the NAME and by nothing else.** `deadline` is unset on
 every milestone and `is_reached` is false on every milestone, so neither can order it - and the id
@@ -2171,6 +2193,14 @@ before the container starts. It holds no tracker credential, it is read-only, it
 rather than continuing one - "has this already been built?" is a question about current `main` - and
 it runs on **its own worktree**, because `prepare_worktree` resets and cleans, so choosing the next
 task on the ship worktree would delete the last one's commits.
+
+**The tags a task carries are on its line**, minus `Conduct` itself, which every row on the list has
+and which therefore separates nothing. `select.md` has ranked category "by tag or by what the title
+plainly says" since it was written, while `candidates()` fetched `tag_ids` and `_candidate_table`
+dropped it - so that half of the instruction pointed at data the phase could not see for as long as
+it existed. `candidates()` attaches the resolved names to the row rather than taking a parameter,
+which is what stops `poll._intake_project` and `bin/conduct intake` - two call sites that repeat the
+same query sequence verbatim - drifting apart over a second call each.
 
 **And nothing it answers is trusted.** `dispatch.judge_selection` re-checks the id against the
 shortlist conduct itself built, against the stages, and against the dependencies. A phase naming a
@@ -2206,6 +2236,17 @@ hold rather than a refusal, like the quota: nothing is consumed and merging one 
 
 ### Armed by hand, after watching it choose
 
+**There are three controls over what the fleet works on, and they answer different questions.** The
+`intake` switch below is whether it chooses at all; `REVIEW_CAP` above is how far ahead of a reader
+it may get; and the `Conduct` tag is which individual tasks are fit for an unattended round. Only
+the last is per-task, and it is the one to reach for when the answer is "not that one" rather than
+"not now" - the other two are all-or-nothing by construction.
+
+**Tagging is the cheapest of the three, and the only one that needs no restart.** It is a field on a
+row: tag a task and the next look can pick it up, untag one and it goes back to being a person's to
+start by hand. Nothing is read at import, nothing is cached, and `odoo.tags()` resolves the name
+every pass - which is also why a *renamed* tag stops the fleet outright rather than opening the gate.
+
 `"intake": False` sits beside `"autopublish"` in the descriptor and ships **off**, for the reason
 that one was armed only after the whole chain had run end to end and reached a person. `conduct
 intake --dry-run` runs the entire pass - ladder, pool, closure, cap, and the selection phase itself
@@ -2213,6 +2254,13 @@ intake --dry-run` runs the entire pass - ladder, pool, closure, cap, and the sel
 what it picks against the workstation `next-task` skill, and only then set the switch. There is
 deliberately no `--start` flag on it: starting a run by hand is what `conduct ship` is for, and a
 second, less careful way to spend twenty-eight dollars is not worth the convenience.
+
+**It is also the one thing that can tell an empty backlog from an untagged one.** `pool: 0` looks
+identical either way, and they are completely different problems - one means there is no work, the
+other means there is work nobody has cleared for an unattended round. So on an empty pool the dry
+run makes a second query with the tag clause dropped and reports how many tasks are otherwise
+eligible. That read is affordable **there and nowhere else**: a person is watching, it happens once,
+and the poll cycle never runs it.
 
 **`agents.intake` grades the LOOK and not the run**, because an intake that has stopped looks
 exactly like an empty backlog - both are "no run started", both leave every unit active and every
