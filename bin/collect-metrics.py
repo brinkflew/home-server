@@ -71,6 +71,7 @@ import subprocess
 import sys
 import time
 import unicodedata
+import urllib.error
 import urllib.request
 from urllib.parse import urlparse
 
@@ -78,6 +79,20 @@ CACHE = os.environ.get("DOCKER_VOLUME_CACHE", "/var/home-server/cache")
 TEXTFILE = os.path.join(CACHE, "textfile", "home-server.prom")
 TEXTFILE_SLOW = os.path.join(CACHE, "textfile", "home-server-slow.prom")
 MARKER = os.path.expanduser("~/.cache/home-server/metrics-state")
+
+# --print IS A DRY RUN AND HAS TO REACH THE SOURCES THAT WRITE. Most sources
+# here are read-only by nature, so `--print` costing nothing was a property
+# rather than a decision - but source_round_detail writes AND deletes, and the
+# fleet source remembers what GitHub answered, so a person running --print to
+# see what a round renders must not have the directory swept underneath them or
+# the cap's memory rewritten behind them.
+#
+# A LIST BECAUSE main() OWNS ARGUMENT PARSING AND A SOURCE IS NOT TOLD THE MODE.
+# A source is called with (m) or (m, doc) and nothing else, so the flag is read
+# at import; the one-element list is what lets a caller set it. It had a
+# round-specific name while there was one writer; there are two now, and a
+# second copy of `"--print" in sys.argv` would be a second thing to get wrong.
+_DRY_RUN = ["--print" in sys.argv]
 
 # THE TWO DOCUMENTS, AND WHY THEY ARE NOT SERIES.
 #
@@ -3389,7 +3404,56 @@ FLEET_ETA_MIN_SAMPLES = 5
 # document carries whose state is not already terminal are asked, so in practice
 # this is a handful; the cap is what stops a backlog of never-merged branches
 # turning a monitor into a crawler.
+#
+# THAT SENTENCE DESCRIBED A FILTER NOBODY HAD WRITTEN, and said so for twelve
+# days. The selection was every round with a pull request, in document order,
+# truncated here - and this file rebuilds its document from scratch every five
+# minutes, resetting pr_state on the way, so there was no terminal state in
+# memory to filter on either. The cap therefore bounded ROUNDS rather than
+# calls: the board draws FLEET_ROUNDS of them, thirteen carried a pull request,
+# and indices 10 through 12 were never asked at all.
+#
+# `unknown` IS DRAWN `published` AND KEPT VISIBLE ON PURPOSE, which is what made
+# that permanent rather than merely late. #270 merged on 2026-08-29 and was
+# hidden correctly for as long as it sat inside the cap; it came BACK to the
+# board on 2026-09-10, when #309 opened and pushed it to index 10.
 FLEET_PR_MAX = 10
+
+# Where the answers are remembered between runs, which is what lets the cap
+# above bound CALLS. Flat key=value, the metrics-state convention exactly.
+#
+# ITS OWN FILE RATHER THAN A KEY IN metrics-state. That one is a fixed key set,
+# rewritten whole by write_marker() and read from outside by bin/verify-host.sh;
+# every writer owns its own keys, and pull request ids are data rather than a
+# key set anybody declared. Losing this file costs one run of re-asking, which
+# is why it is a cache rather than state and is in nobody's backup.
+FLEET_PR_CACHE = os.path.expanduser("~/.cache/home-server/fleet-pr-state")
+
+# A MERGED PULL REQUEST IS A FACT AND A CLOSED ONE IS A BELIEF. GitHub cannot
+# un-merge, so `merged` is never asked twice; a person can reopen, so `closed`
+# is asked again once its record is a day old, which bounds how long a reopened
+# one can stay hidden. Everything else - `open`, an unreadable body, a call that
+# raised - is not an answer at all, and is remembered only as the moment the row
+# was last asked, which is what rotates it to the back of the queue.
+FLEET_PR_PERMANENT = "merged"
+FLEET_PR_REVERSIBLE = "closed"
+FLEET_PR_RECHECK_S = 86400
+
+# THE THREE ANSWERS GITHUB GIVES, and the only words a remembered one may be.
+# A state read back off the marker is text off a disk, so it is checked against
+# this before anything is drawn from it - which is also what keeps the file
+# ASCII by construction, since nothing else can ever be written into it.
+FLEET_PR_ANSWERS = (FLEET_PR_PERMANENT, FLEET_PR_REVERSIBLE, "open")
+
+# An owner and a repository, and nothing else may reach either an api.github.com
+# path or a key in a line-oriented file. _fleet_pr_api checked the SHAPE of the
+# url and never its segments, so `..` built `/repos/../../pulls/1` - which the
+# server resolves somewhere else entirely, with this host's token attached - and
+# a name carrying `=` or a newline would split a cache record in two. A GitHub
+# login is alphanumeric with hyphens; a repository may carry a dot but may not
+# begin with one, which is what excludes `.` and `..` themselves.
+FLEET_PR_OWNER = re.compile(r"\A[A-Za-z0-9-]{1,39}\Z")
+FLEET_PR_REPO = re.compile(r"\A[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}\Z")
 
 # GitHub's API, and the only host-side network call this collector makes.
 FLEET_GITHUB_API = "https://api.github.com"
@@ -4082,6 +4146,9 @@ def _fleet_pr_api(pr_url):
     segments = [seg for seg in parts.path.split("/") if seg]
     if len(segments) != 4 or segments[2] != "pull" or not segments[3].isdigit():
         return None
+    if not (FLEET_PR_OWNER.match(segments[0])
+            and FLEET_PR_REPO.match(segments[1])):
+        return None
     return "%s/repos/%s/%s/pulls/%s" % (FLEET_GITHUB_API, segments[0],
                                         segments[1], segments[3])
 
@@ -4118,6 +4185,107 @@ def _fleet_pr_state(api_url, token):
     return state if state in ("open", "closed") else None
 
 
+def _fleet_pr_key(api_url):
+    """The cache key for a pull request, or None when there is not one.
+
+    FROM THE VALIDATED ENDPOINT AND NEVER FROM THE STORED URL. _fleet_pr_api has
+    already refused everything that is not a github.com pull request AND checked
+    the owner and the repository against FLEET_PR_OWNER and FLEET_PR_REPO, so
+    what is left is `owner/repo/pulls/270`: ASCII, no `=`, no newline, and safe
+    in a line-oriented file. Deriving the key from the same parse is the point -
+    a key validated separately from the endpoint is a key that can outlive the
+    validation the endpoint enforces.
+    """
+    prefix = FLEET_GITHUB_API + "/repos/"
+    key = str(api_url or "")
+    return key[len(prefix):] if key.startswith(prefix) else None
+
+
+def _fleet_pr_remembered():
+    """What GitHub said last time, as {key: (state, asked_epoch)}.
+
+    IT REUSES _marker() BECAUSE THE FILE IS THE SHAPE EVERY OTHER MARKER HERE
+    IS, and a fourth key=value parser would be a fourth place for the parsing to
+    differ. A missing file, an unreadable one and a line without an `=` all read
+    as nothing, which is precisely a run with no memory: the cap then behaves
+    exactly as it did before any of this existed.
+
+    AN UNREADABLE CLOCK KEEPS THE ANSWER AND LOSES THE STAMP. The state is what
+    a row is drawn from; the stamp only decides when to ask again. So a record
+    whose stamp will not parse reads as never asked, which asks it - the
+    conservative direction, and the one that repairs a corrupt record rather
+    than trusting it.
+    """
+    out = {}
+    for key, raw in _marker(FLEET_PR_CACHE).items():
+        state, _, stamp = raw.partition(",")
+        if state not in FLEET_PR_ANSWERS:
+            # A WORD THIS FILE DID NOT WRITE IS NOT AN ANSWER. `unknown` is one
+            # of its own values and everything else is a hand-edited or
+            # half-written line; keeping the row rather than dropping it means
+            # the stamp still orders it, and the state cannot draw anything.
+            state = "unknown"
+        try:
+            asked = float(stamp)
+        except ValueError:
+            asked = 0.0
+        out[key] = (state, asked)
+    return out
+
+
+def _fleet_pr_due(state, asked, at):
+    """Whether this pull request has to be asked about again on this run."""
+    if state == FLEET_PR_PERMANENT:
+        return False
+    if state != FLEET_PR_REVERSIBLE:
+        # `open`, `unknown`, and a row nothing has ever answered for. None of
+        # them is an answer, so all of them are still questions.
+        return True
+    if asked <= 0 or asked > at:
+        # A CLOCK FROM THE FUTURE IS NOT A FRESH ANSWER. A step backwards would
+        # otherwise withhold the question until real time had caught up again.
+        return True
+    return (at - asked) >= FLEET_PR_RECHECK_S
+
+
+def _fleet_pr_remember(records):
+    """Write the answers back, pruned to the rounds this document still carries.
+
+    SELF-LIMITING BY CONSTRUCTION, which is degraded_sources()' argument in a
+    second place: only a pull request on a round the board still draws is
+    written, so a round ageing out of FLEET_ROUNDS takes its record with it and
+    the file cannot grow past the window it is about.
+
+    tmp+mv, ASCII, sorted keys - write_marker()'s convention exactly, and for
+    its reasons: a reader must never see half a file, and an OSError here is a
+    stderr line rather than a monitor that stopped.
+    """
+    if _DRY_RUN[0] or not records:
+        # AN ABSENCE MUST NOT ERASE A RECORD. No rounds at all is a transient
+        # empty query or a half-migrated database as readily as it is an idle
+        # fleet, and truncating the file over one would throw away every answer
+        # this collector has - which is the shape degraded_sources() carries
+        # the argument against.
+        return
+    body = "".join("%s=%s,%d\n" % (key, state, asked)
+                   for key, (state, asked) in sorted(records.items()))
+    try:
+        os.makedirs(os.path.dirname(FLEET_PR_CACHE), exist_ok=True)
+        tmp = FLEET_PR_CACHE + ".tmp"
+        with open(tmp, "w", encoding="ascii") as fh:
+            fh.write(body)
+        os.replace(tmp, FLEET_PR_CACHE)
+    except Exception as exc:  # noqa: BLE001 - see below
+        # `Exception` AND NOT `OSError`, WHICH IS THE ONE THING HERE THAT MUST
+        # NOT BE TIDIED. This runs inside source_fleet BEFORE doc.set("rounds"),
+        # so anything escaping costs the whole board its rows and draws the
+        # database as unreadable over a perfectly healthy fleet. A
+        # UnicodeEncodeError is not an OSError - which write_textfile's own
+        # docstring records as having been fatal once already.
+        print("collect-metrics: cannot write %s: %s" % (FLEET_PR_CACHE, exc),
+              file=sys.stderr)
+
+
 def _fleet_pull_requests(doc, rounds, env):
     """Fill in pr_state on every round that has a pull request.
 
@@ -4126,27 +4294,99 @@ def _fleet_pull_requests(doc, rounds, env):
     must leave `unknown` and keep every row visible. A round disappearing
     because a credential lapsed is the same class of error as an empty list
     reading as an idle fleet, and this file exists to prevent that one.
+
+    THAT IS ABOUT THE ABSENCE OF AN ANSWER AND NEVER ABOUT DISCARDING ONE. A
+    remembered `merged` stands with no token at all: the round did merge, it was
+    already hidden before the credential lapsed, and putting it back would be
+    inventing an uncertainty rather than reporting one. What a dead leg cannot
+    do is ANSWER - so a row nothing has ever answered for stays `unknown` and
+    stays on the board, which is the half the rule was written for.
+
+    AND THE CAP BOUNDS CALLS RATHER THAN ROWS, WHICH IS WHAT THE ORDER BUYS.
+    Candidates are asked oldest-answer-first and asking stamps the record, so a
+    run that reaches FLEET_PR_MAX delays a row by one run rather than excluding
+    it - which is the whole difference between this and the version that read
+    the first ten in document order for ever.
     """
-    wanted = [r for r in rounds if r.get("pr_url")][:FLEET_PR_MAX]
-    if not wanted:
+    at = now()
+    remembered = _fleet_pr_remembered()
+    records = {}
+    candidates = []
+    # ONE ENTRY PER PULL REQUEST AND NOT PER ROUND. Two rounds can carry the
+    # same one - a resume opens a second publication against a branch that
+    # already has one - and asking twice in a run would spend two of the ten on
+    # a question with one answer.
+    queued = set()
+    for row in rounds:
+        api_url = _fleet_pr_api(row.get("pr_url"))
+        key = _fleet_pr_key(api_url)
+        if key is None:
+            continue
+        state, asked = remembered.get(key, (None, 0.0))
+        if state is not None:
+            # CARRIED FORWARD WHETHER OR NOT IT IS ASKED THIS RUN, which is the
+            # half that is easy to leave out and fatal to leave out. Dropping
+            # the stamps of rows the cap did not reach makes every one of them
+            # read "never asked" on the next run, the order collapses back to
+            # the document's, and the starvation this was rewritten to remove
+            # comes straight back with a cache in front of it.
+            records[key] = (state, asked)
+            if state in FLEET_PR_ANSWERS:
+                # `open` IS APPLIED AS WELL, THOUGH IT IS ASKED AGAIN ANYWAY.
+                # On a run where the cap is reached it would otherwise fall back
+                # to `unknown`, and the row would alternate between "in review"
+                # and "published" every five minutes on a board where nothing
+                # had changed. A stale `open` can only be wrong in the direction
+                # that keeps the row visible, which is the safe one.
+                row["pr_state"] = state
+        if _fleet_pr_due(state, asked, at) and key not in queued:
+            queued.add(key)
+            candidates.append((asked, key, api_url, row))
+    if not candidates:
         # NOT A FAILURE AND NOT A SUCCESS EITHER. Nothing was asked, so nothing
         # can be reported; recording ok here would claim a credential works on a
-        # run that never used it.
+        # run that never used it. The write still happens - the pruning is about
+        # which rounds the board carries, not about who answered.
+        _fleet_pr_remember(records)
         return
     token = str(env.get("GITHUB_PR_READ_TOKEN") or "").strip()
     if not token:
+        _fleet_pr_remember(records)
         doc.note("github", False, "GITHUB_PR_READ_TOKEN is not set")
         return
+    # SORTED ON THE STAMP ALONE, never on the tuple: the fourth element is a
+    # round, and comparing two dicts to break a tie raises.
+    candidates.sort(key=lambda candidate: candidate[0])
     failure = None
-    for row in wanted:
-        api_url = _fleet_pr_api(row.get("pr_url"))
-        if api_url is None:
-            continue
+    for _asked, key, api_url, row in candidates[:FLEET_PR_MAX]:
+        answer = None
         try:
-            row["pr_state"] = _fleet_pr_state(api_url, token) or "unknown"
+            answer = _fleet_pr_state(api_url, token)
+        except urllib.error.HTTPError as exc:
+            # A 404 IS NEITHER AN ANSWER NOR A FAILURE, and this change is what
+            # makes that matter: the rotation reaches OLD rows for the first
+            # time, and an old row is exactly the one whose pull request was
+            # deleted or whose repository a re-scoped token can no longer see -
+            # GitHub answers 404 rather than 403 for the second. Calling either
+            # a failure would put "GitHub did not answer" on the board for ever
+            # over one dead row; caching it would make a scope change look
+            # permanent. So it stamps the clock and says nothing.
+            if exc.code not in (404, 410):
+                failure = failure or ("%s" % exc)
         except Exception as exc:  # noqa: BLE001 - a monitor may not raise
             failure = failure or ("%s" % exc)
+        if answer is None:
+            # NOT AN ANSWER - the call raised, or the body was not one this
+            # understands. The row keeps what it already had, because a failure
+            # to re-read a merge does not unmake it, and only the clock moves:
+            # so a pull request that 404s for ever costs one slot per rotation
+            # rather than one on every run for ever.
+            records[key] = (records.get(key, ("unknown", 0.0))[0], at)
+            continue
+        row["pr_state"] = answer
+        records[key] = (answer, at)
     doc.note("github", failure is None, failure)
+    _fleet_pr_remember(records)
 
 
 def _fleet_waiting(module_id):
@@ -4641,9 +4881,16 @@ def source_fleet(m, doc):
         # LAST, AND OUTSIDE THE ROW LOOP. It is the only network call in this
         # file and it must not sit between two database reads holding a
         # read-only connection open across eight seconds of someone else's
-        # latency. It fails open: every row stays visible and pr_state stays
-        # "unknown", because a round must never disappear because a token
-        # expired.
+        # latency. It fails open: a row nothing has answered for stays visible
+        # with pr_state "unknown", because a round must never disappear because
+        # a token expired. What it does NOT do is unmake an answer already
+        # given - a pull request read as merged stays merged with the whole leg
+        # dead, and that distinction is the function's own docblock.
+        #
+        # AFTER THE TRUNCATION AND BEFORE doc.set("rounds"), which is not an
+        # accident either way: the write-back is pruned to the rounds this
+        # document still carries, and the states have to be on the rows before
+        # they travel.
         _fleet_pull_requests(doc, rounds, env)
 
         doc.set("phase_stats", stats)
@@ -5000,13 +5247,6 @@ def _round_path(key):
     return os.path.join(DOC_DIR, "%s%s.json" % (ROUND_PREFIX, key))
 
 
-# --print IS A DRY RUN AND HAS TO REACH THIS SOURCE. Every other source here is
-# read-only by nature, so `--print` costing nothing was a property rather than a
-# decision; this one writes AND deletes, and a person running --print to see
-# what a round renders must not have the directory swept underneath them.
-_ROUND_DRY_RUN = ["--print" in sys.argv]
-
-
 def _round_windows(rounds):
     """{key: (worktree, start, end_exclusive)} - each round's slice of the log.
 
@@ -5128,7 +5368,7 @@ def source_round_detail(m):
                     pending += short
                     if body is None:
                         continue
-                    if _ROUND_DRY_RUN[0]:
+                    if _DRY_RUN[0]:
                         sys.stdout.write("# %s\n%s"
                                          % (os.path.basename(path), body))
                     else:
@@ -5180,7 +5420,7 @@ def _round_sweep(keep):
         names = os.listdir(DOC_DIR)
     except OSError:
         return 0, 0
-    if _ROUND_DRY_RUN[0]:
+    if _DRY_RUN[0]:
         # Count what is there; delete nothing.
         for name in names:
             if name.startswith(ROUND_PREFIX) and not name.endswith(".tmp"):
@@ -5244,7 +5484,7 @@ def _round_document(conn, row, window, index, spoken_for, pairs, budget):
             logs[run["id"]] = found
             claimed.add(found)
 
-    if _ROUND_DRY_RUN[0] or not _round_fresh(path, logs.values(), settled):
+    if _DRY_RUN[0] or not _round_fresh(path, logs.values(), settled):
         phases, short = _round_phases(runs, logs, pairs, budget,
                                       _round_previous(path))
         doc = Document()

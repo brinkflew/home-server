@@ -2022,6 +2022,24 @@ signal read green.
 - The general shape: **a script whose exit code encodes a FINDING cannot also use it to encode its
   own health**, and a `Type=oneshot` is graded on exactly that code.
 
+### The cap was written to bound calls and it bounded rounds instead
+- **`FLEET_PR_MAX`'s docblock described a filter nobody had written** - "only rounds whose state is
+  not already terminal are asked" - and the selection was the first ten rows with a pull request, in
+  document order, on a document rebuilt from scratch every five minutes. So it bounded ROWS: the
+  board draws forty, thirteen were published, and indices 10-12 were never asked at all.
+- **Which reads as rounds RESURFACING.** `unknown` is drawn `published` and kept visible on purpose,
+  so #270 - merged 2026-08-29, correctly hidden - came back the afternoon #309 pushed it past the
+  cap. Every new pull request pushes one more correct answer off the end, and nothing could see it:
+  the note is honest about the calls made and silent about the rows skipped.
+- **The fix is that filter, plus an order.** `merged` is remembered for ever, `closed` for a day,
+  and nothing else is an answer; longest-un-asked first turns the cap into a rate limit, so ten
+  delays a row by a run rather than excluding it. **Carrying the stamps of rows the cap did not
+  reach is the half that is easy to leave out** - without them the order collapses back to the
+  document's and the starvation returns with a cache in front of it.
+- **"Fails open" is about the ABSENCE of an answer, never about discarding one**: a merge read
+  before a token lapsed stands with the leg dead. A 404 is neither answer nor failure - only this
+  change reached old rows, and GitHub answers 404, not 403, for a repo a re-scoped token cannot see.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

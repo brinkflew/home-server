@@ -4461,7 +4461,11 @@ Recorded 2026-09-07, with the board's filter, the step rail and the three render
   after it. A worked example is only worth writing down if somebody checks it.
 - **The backfill makes them RESOLVABLE, not hidden.** `_fleet_pull_requests` fails open, so a lapsed
   `GITHUB_PR_READ_TOKEN` returns both to `unknown` and puts them back on the board as `published`.
-  That is the argument for repairing the data rather than special-casing the filter.
+  That is the argument for repairing the data rather than special-casing the filter. **That second
+  sentence stopped being true on 2026-09-10**, when the collector learned to remember an answer: a
+  lapsed token now leaves both rows exactly where they were. The argument it was making is
+  unaffected - the data was still the right thing to repair - and the entry at the end of this file
+  is why. Neither round was resolvable in practice either way: both sat past the cap.
 
 ### The fleet stopped for seven days and the reason was bookkeeping
 
@@ -5940,3 +5944,57 @@ service on the rack read **memory starved**. Nothing on the host was.
 - The general shape: **a script whose exit code encodes a FINDING cannot also use it to encode its
   own health**, and a `Type=oneshot` is graded on exactly that code. Anything here that reports
   findings on a timer needs either a success clause or an exit code reserved for "I could not run".
+
+## The cap was written to bound calls and it bounded rounds instead
+
+- **`FLEET_PR_MAX`'s own docblock described a filter nobody had written**, and said so for twelve
+  days: *"only rounds this document carries whose state is not already terminal are asked"*. The
+  selection was `[r for r in rounds if r.get("pr_url")][:FLEET_PR_MAX]` - every round with a pull
+  request, in document order, truncated at ten - and `source_fleet` rebuilds its document from
+  scratch every five minutes, resetting `pr_state` on the way, so there was no terminal state in
+  memory to filter on either. Both halves shipped in one commit on 2026-08-28.
+- **So the cap bounded ROWS, and the eleventh published round was never asked at all.** The board
+  draws `FLEET_ROUNDS = 40`, thirteen of them carried a pull request, and indices 10 through 12 kept
+  `pr_state: "unknown"` for ever - which `src/fleet.ts` draws as `published`, classes `unmerged`, and
+  keeps permanently visible with no control on the row.
+- **It reads as rounds RESURFACING, because that is exactly what happens.** #270 merged on
+  2026-08-29 and was correctly hidden for as long as it sat inside the cap; #309 opened at 17:13Z on
+  2026-09-10, pushed it to index ten, and it was back on the board that afternoon. Every new pull
+  request pushes one more correct answer off the end. #252 and #250 had already gone the same way,
+  and all three were terminal on GitHub the whole time - asked directly, one merged and two closed.
+- **Nothing could see it, and the silence was structural.** `doc.note("github", ...)` is honest
+  about the ten calls it made and says nothing about the rows it skipped; `sourceNotes` excludes
+  `github` deliberately; and the board's own banner renders only when the leg FAILED, which it had
+  not. A cap that excludes is indistinguishable from a fleet with nothing to report.
+- **The fix is the filter the docblock promised.** `merged` is remembered for ever, because GitHub
+  cannot un-merge; `closed` for a day, because a person can reopen and `pr closed` FOLDS the row
+  rather than merely re-toning it; and `open`, a 404 and a call that raised are not answers at all -
+  only a record of when the row was last asked. **The order is what turns the cap from a cliff into
+  a rate limit**: longest-un-asked first, so a run that reaches ten delays a row by one run instead
+  of excluding it for ever. Measured against a thirteen-row document: the tail is reached on run
+  two, and the steady state falls from ten calls a run to one.
+- **Carrying the stamps of rows the cap did NOT reach is the half that is easy to leave out.** Drop
+  them and every one of those rows reads "never asked" on the next run, the order collapses back to
+  the document's, and the starvation comes straight back with a cache sitting in front of it.
+- **"Fails open" is about the ABSENCE of an answer and never about discarding one.** A merge read
+  before a token lapsed stands with the whole leg dead: the round did merge, it was folded away
+  before the credential went, and putting it back would invent an uncertainty rather than report
+  one. `.env.sample`, `docs/dashboard.md` and the board's banner all said otherwise, and the banner
+  had been contradicted by its own fixture since the day it was written - `github: {ok: false}` has
+  always shipped beside a round reading `pr_state: "merged"`.
+- **A 404 is neither an answer nor a failure, and only this change made it reachable.** The rotation
+  touches old rows for the first time, and an old row is exactly the one whose pull request was
+  deleted or whose repository a re-scoped token can no longer see - GitHub answers **404 rather than
+  403** for the second. Calling either a failure would put "GitHub did not answer" on the board for
+  ever over one dead row; caching it would make a scope change look permanent.
+- **The writer may not raise and may not truncate on an absence.** It runs inside `source_fleet`
+  BEFORE `doc.set("rounds", ...)`, so anything escaping costs the whole board its rows and draws the
+  database as unreadable over a perfectly healthy fleet - and a `UnicodeEncodeError` is not an
+  `OSError`, which `write_textfile`'s docstring already records as having been fatal once. An empty
+  round list is a transient query as readily as an idle fleet, so it writes nothing rather than
+  erasing every answer this collector holds.
+- **`_fleet_pr_api` validated the SHAPE of a url and never its segments**, which the key derivation
+  made worth closing: `..` built `/repos/../../pulls/1`, a path the server resolves somewhere else
+  with this host's token attached. The owner and the repository are checked now, and the cache key
+  is derived from the same parse - a key validated separately from the endpoint is a key that
+  outlives the validation the endpoint enforces.

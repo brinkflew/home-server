@@ -692,10 +692,18 @@ function rail(tone: Tone): string {
       </p>
 
       <!-- The GitHub leg fails OPEN, so this is the sentence that explains why
-           a merged round is still on the board rather than a silent filter. -->
+           a merged round is still on the board rather than a silent filter.
+
+           IT USED TO SAY "no round could be confirmed merged - none is hidden",
+           and the collector learned to remember an answer on 2026-09-10: a
+           merge it has already read stands with the leg dead, because GitHub
+           cannot un-merge and putting the round back would invent an
+           uncertainty rather than report one. So the claim is about what is
+           NEW. The fixture has always shipped this note beside a round with
+           pr_state "merged", which is the state the old sentence denied. -->
       <StaleNote
         v-if="fleet.doc?.sources.github && !fleet.doc.sources.github.ok"
-        :reason="`GitHub did not answer (${fleet.doc.sources.github.error}), so no round could be confirmed merged - none is hidden`"
+        :reason="`GitHub did not answer (${fleet.doc.sources.github.error}), so nothing new could be confirmed merged - rounds already confirmed stay folded, and everything else is on the board`"
       />
 
       <!-- A notice with no matching round is still an unanswered approval, and

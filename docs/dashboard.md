@@ -785,6 +785,15 @@ could not be asked, and an unknown round **stays**. A row disappearing because a
 be the same class of error as an empty list reading as an idle fleet, which is what this whole
 document exists to prevent. The board says so on screen rather than filtering silently.
 
+**THAT IS ABOUT THE ABSENCE OF AN ANSWER AND NEVER ABOUT DISCARDING ONE**, which is the distinction
+`FLEET_PR_CACHE` turned from an implication into code on 2026-09-10. The collector remembers what it
+has read - `merged` for ever, because GitHub cannot un-merge; `closed` for a day, because a person
+can reopen - so a settled round stays folded through an outage while a row nothing ever answered for
+stays up. `FLEET_PR_MAX` is what that memory buys: it was a cap on ROWS, so with more than ten
+published rounds on the board the eleventh was never asked at all and read `published` permanently.
+It bounds CALLS now, the queue is longest-un-asked first, and every round is reached within
+`ceil(FLEET_ROUNDS / FLEET_PR_MAX)` runs.
+
 **`github` IS THE ONE SOURCE `sourceNotes` DOES NOT SPEAK FOR.** Every other upstream supplies rows,
 so "absent, not zero" is exactly right for it; GitHub supplies one *field* on rows that are already
 present and can only ever cost a merged state. The generic sentence would send a reader looking for
