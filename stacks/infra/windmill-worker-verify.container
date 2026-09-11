@@ -55,7 +55,7 @@ StartLimitBurst=20
 
 [Container]
 # THREE FILES, ONE NUMBER - see windmill-worker.container.
-Image=ghcr.io/windmill-labs/windmill:1.792
+Image=ghcr.io/windmill-labs/windmill:1.808
 AutoUpdate=registry
 ContainerName=windmill-worker-verify
 Network=net-agents.network

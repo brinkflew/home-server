@@ -930,20 +930,44 @@ fi
 echo
 say "Windmill pin"
 # ------------------------------------------------------------------------------
-# THREE FILES AND ONE NUMBER, and a half-done bump is two binaries against one
+# FOUR PLACES AND ONE NUMBER, and a half-done bump is two binaries against one
 # schema - which is a corrupted control plane rather than a failed start, so
-# nothing would go red. stacks/README.md names the trap and nothing checked it;
-# update.pin_lag in bin/verify-host.sh grades how far behind the pin is and
-# reads ONE of the three, so this is what makes reading one of them sound.
+# nothing would go red. update.pin_lag in bin/verify-host.sh grades how far
+# behind the pin is and reads ONE of the four, so this is what makes reading one
+# of them sound.
+#
+# THE FOURTH IS stacks/README.md's OWN ROW, and until 2026-09-11 it was the copy
+# nothing checked. That file names the three-files trap at length and was not
+# itself counted, so a correct three-file bump left the one piece of prose a
+# person actually reads before bumping quietly describing the previous version.
+# It is the most valuable of the four to keep honest and was the only one with
+# no guard at all.
 wm_tags=$(sed -n 's/^Image=.*windmill:\(.*\)$/\1/p' \
 	stacks/infra/windmill-*.container 2>/dev/null | sort -u)
+
+# THE ROW'S TAG, AND AN ABSENT ONE MUST FAIL RATHER THAN BE SKIPPED. This is
+# prose, so the extraction is shape-dependent in a way the quadlets' is not: it
+# wants the first bolded code span in the second cell of the `windmill-server`
+# row. Reword that cell and this stops matching - and if an empty answer merely
+# dropped out of the `sort -u` below, the count would still be 1 and the leg
+# would PASS having checked three files and called it four. Absence is the
+# finding, which is the rule this repository states about greps generally.
+# shellcheck disable=SC2016  # the backticks are markdown code spans in a single-quoted sed script, not command substitution
+wm_doc=$(sed -n 's/^| `windmill-server` | \*\*`:\([^`]*\)`\*\*.*/\1/p' \
+	stacks/README.md 2>/dev/null | head -1)
+
 wm_n=$(printf '%s\n' "$wm_tags" | grep -c .)
 if [ "$wm_n" -eq 0 ]; then
 	skip "no windmill image pin found"
-elif [ "$wm_n" -eq 1 ]; then
-	ok "all windmill units pin $wm_tags"
+elif [ -z "$wm_doc" ]; then
+	bad "stacks/README.md's windmill-server row carries no \`:tag\` this leg can read - reword it back or fix the extraction, because a row that cannot be checked is the state it was in before this leg existed"
 else
-	bad "windmill units disagree on the image tag: $(printf '%s' "$wm_tags" | tr '\n' ' ') - two binaries against one schema is a corrupted control plane, not a failed start"
+	wm_all=$(printf '%s\n%s\n' "$wm_tags" "$wm_doc" | sort -u)
+	if [ "$(printf '%s\n' "$wm_all" | grep -c .)" -eq 1 ]; then
+		ok "all windmill units and stacks/README.md pin $wm_all"
+	else
+		bad "the windmill units and stacks/README.md disagree on the image tag: $(printf '%s' "$wm_all" | tr '\n' ' ') - two binaries against one schema is a corrupted control plane, not a failed start, and a stale README row is the bump nobody notices was half done"
+	fi
 fi
 
 echo

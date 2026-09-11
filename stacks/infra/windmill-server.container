@@ -56,7 +56,7 @@ StartLimitIntervalSec=600
 StartLimitBurst=20
 
 [Container]
-Image=ghcr.io/windmill-labs/windmill:1.792
+Image=ghcr.io/windmill-labs/windmill:1.808
 AutoUpdate=registry
 ContainerName=windmill-server
 Network=net-agents.network

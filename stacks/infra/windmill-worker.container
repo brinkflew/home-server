@@ -62,7 +62,7 @@ StartLimitBurst=20
 # THIS TAG MUST EQUAL windmill-server's. THREE FILES, ONE NUMBER. Mixed versions
 # would be two binaries with different schema expectations against one database.
 # stacks/README.md carries the row explaining why a human has to advance it.
-Image=ghcr.io/windmill-labs/windmill:1.792
+Image=ghcr.io/windmill-labs/windmill:1.808
 AutoUpdate=registry
 ContainerName=windmill-worker
 Network=net-agents.network
