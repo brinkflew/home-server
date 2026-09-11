@@ -2056,6 +2056,44 @@ signal read green.
   names are attached to the ROW so the two call sites cannot drift. `pool: 0` cannot tell an empty
   backlog from an untagged one, and only the dry run pays to ask. No new check, no new series.
 
+### The lever was named in three files and pulled in none of them
+- `ci.artifact_store` breached at 53,659MB of 40,960 with no smaller window available - 7 is a hard
+  floor. The open question the sweep refused to guess at was answered by READING upskald's
+  workflows: raw nyc has exactly one consumer, in the SAME run, minutes later.
+- The seven-day floor's own justification does not apply here - the merge-time consumer reads
+  **GitHub** artifacts, not this store. nyc measured **99.96%**, so no single window could ever have
+  fitted it. Two windows: `*-nyc` 3 days, everything else back at 30. The price is whole-run
+  granularity for one class, and a second class means answering the question again.
+
+### The pin was in four places and the check read one of them
+- `stacks/README.md`'s row is a FOURTH copy of the Windmill tag and nothing asserted it, so a correct
+  three-file bump left the one piece of prose a person reads quietly stale. An empty extraction
+  folded into `sort -u` would have PASSED having checked three and called it four.
+- After a bump, watch `agents.worker_lanes`, `agents.approvals_pending` and `agents.control_lag`:
+  they query Windmill's own Postgres rather than its API, so a migration surfaces there and nowhere.
+
+### The backlog had a name, a count, and no way to act on it
+- Three things blocked a media re-queue and each fails silently: `skipIfHevcBelowBitrate` stream-
+  copies the backlog and MOVES it, `aDelete` takes `originalFile`, and a file in `transcoded/` is
+  invisible to every Tdarr library by construction.
+- **It COPIES and never moves**, so the \*arr apps never see the file absent - Tdarr's move node is
+  `fs.promises.rename()`, which is atomic. The plugin recognises the siding BY PATH, so no flow
+  changed and `checkout.tdarr_flows` stays green. A bad `skipIfHevcBelowBitrate` used to mean
+  "re-encode everything", silently.
+
+### A three-day deadline had a once-a-week way to meet it, and the deploy command applied it
+- The reboot window widened to `Mon..Sat 06..09:00` for a staged CRITICAL advisory only. **06 and
+  not 05 because four timers were placed at 05:20-05:40 specifically to dodge this window** while it
+  was Sunday-only.
+- The first gate PASSED the no-critical case: `case "${adv_critical:-0}"` defaults inside the case
+  EXPRESSION and assigns nothing, so the bare `[ -eq ]` errored and fell through. Same shape as the
+  `boot_free` guard in the same file.
+- **`git pull && systemctl --user daemon-reload` rebooted the host**, one second after the reload,
+  at 00:46, outside every declared window. **The mechanism is unexplained** - `Persistent=no`, no
+  clock step, nothing `Wants=` it, and a same-shape reproduction did not fire twice - and the timer
+  comment claiming `Persistent=false` prevents it was falsified within the minute. A window is a
+  window whatever started the unit, so the gate now refuses outside its hours.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

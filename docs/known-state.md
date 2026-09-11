@@ -6035,3 +6035,100 @@ service on the rack read **memory starved**. Nothing on the host was.
 - **No new check and no new series**, so the counted sentence in `conduct/marker.py` does not move.
   `agents.intake` grades the AGE of the stamp and never the string, and its own comment already
   names an empty pool as a legitimate `ok` reason - so a narrow tag cannot page anybody.
+
+### The lever was named in three files and pulled in none of them
+- `ci.artifact_store` breached at **53,659 MB of a 40,960 MB budget** and the advice it gave was
+  spent: the window had already gone 30 -> 13 and 7 is a hard floor, so there was no smaller window
+  to reach for. Both `bin/ci-artifacts-sweep.sh` and `docs/ci.md` named the real lever and both
+  declined it for the same stated reason - *"an unverified assumption about what in upskald reads
+  raw nyc output. Answer that question first."*
+- **Answered by reading upskald's workflows rather than reasoning about them.** `-nyc` is fetched by
+  exactly one consumer, `e2e-and-coverage-report`, in the SAME run minutes later; `artifact-fetch`
+  defaults `run-id` to `github.run_id` and no workflow passes a foreign one; the outputs a person
+  opens go to GitHub at `retention-days: 7`.
+- **And the seven-day floor's own justification does not apply here.** The merge-time consumer that
+  wants a pull request's LAST run is `coverage-baseline.yml`, which reads `actions/download-artifact`
+  against **GitHub** artifacts at `retention-days: 30`. It never opens `$CI_ARTIFACT_STORE` at all.
+- Measured over 106 run-attempts: nyc **53,638 MB**, blob 270, apicov 202 - **99.96%**. The whole
+  store minus nyc is 472 MB for a fortnight of CI, so no single window could ever have fitted it.
+  Two windows now: `*-nyc` at 3 days (floor 2), everything else back at the 30 upskald asked for.
+  Three rather than seven because seven is 25 GB at the measured 7.07 runs/day and breaches again at
+  the 17/day this store has been seen to do.
+- **The price is whole-run granularity, for one class, and it is stated rather than left to be
+  found.** Adding a second class means answering the same question again for that one. The deeper
+  lever stays upskald's: 506 MB a run of raw Istanbul JSON compresses 10-20x.
+- One removal loop for both passes, because two copies of `rm -rf` in a loop is two places for the
+  prefix guard to be forgotten; it reports through a global, or `log`'s warnings fold into the count.
+  The whole-run pass runs FIRST or `nyc_swept` counts what the run pass was about to delete anyway.
+
+### The pin was in four places and the check read one of them
+- `stacks/README.md`'s own row carries a FOURTH copy of the Windmill tag - the row whose entire job
+  is to be what a person reads before bumping - and nothing asserted it. The lint leg compared three
+  quadlets to each other and `update.pin_lag` reads `windmill-server.container` alone, so a correct
+  three-file bump left the one piece of prose that misleads somebody quietly stale.
+- **An empty extraction folded into `sort -u` would have PASSED**, having checked three files and
+  called it four, so absence is its own `bad` arm. Negative-tested four ways; only the clean one
+  passes.
+- 1.792 -> 1.808, sixteen minors, no `BREAKING CHANGE`. What to watch is `agents.worker_lanes`,
+  `agents.approvals_pending` and `agents.control_lag` - the three checks that query Windmill's own
+  Postgres (`worker_ping`, `v2_job_queue`, `v2_job`) rather than its API, so a migration that moves a
+  column surfaces there and nowhere else. All three still correct afterwards.
+
+### The backlog had a name, a count, and no way to act on it
+- `media.keyframe_drift` reported 690 of 725 for weeks. Three things blocked a re-queue and each
+  fails SILENTLY: `skipIfHevcBelowBitrate` is 8000000 and the backlog is HEVC at ~4.5 Mbps, so every
+  file would be stream-copied and MOVED, arriving with the identical broken grid and a green job;
+  `aDelete` is `fileToDelete: originalFile`; and the libraries watch `queued/<type>` only while
+  `filejsondb` drains to zero, so a file in `transcoded/` is invisible to Tdarr by construction.
+- **It COPIES and never moves.** `transcoded/` keeps the old, playable file for the whole transcode
+  and Tdarr's move node replaces it at the end - `fs.promises.rename()`, read out of
+  `FlowHelpers/1.0.0/fileMoveOrCopy.js` in the container - so the replacement is ATOMIC and the *arr
+  apps never see the file absent. Moving opens a window of tens of minutes in which a rescan marks
+  the episode missing and invites a re-download. `--reflink=auto` makes the copy free on XFS.
+- **The plugin recognises the siding BY PATH, which is why no flow changed.** A per-library variable
+  through the flow's `inputsDB` costs a Tdarr UI edit plus a re-export, and `checkout.tdarr_flows` is
+  wrong in git until both have happened. Not a codec or bitrate test either: nothing in `ffProbeData`
+  says how far apart keyframes are, so "is this drifting" is not a question the plugin can answer.
+- **A bad value for `skipIfHevcBelowBitrate` meant "re-encode everything", silently.**
+  `parseInt(x, 10) || 0` turned a typo, an empty box or an unexpanded `{{{...}}}` template into 0,
+  the documented spelling of *always re-encode*. Proved both directions against the real plugin.
+- `keepRelativePath` is relative to the LIBRARY'S OWN watch folder, which is what lands the round
+  trip back in place; a flat destination would have collapsed every series into one directory.
+- `--bad-list` is a second output rather than a wider marker key - the marker caps names at ten
+  because `status.json` is read whole by the dashboard - and is written only by a run that FINISHED,
+  because its consumer copies files from it.
+- `media.rework_stuck` grades the AGE of the oldest file and not the count, because a failed Tdarr
+  job leaves no failed unit and no unhealthy container: serving is what `tdarr-node-01` is probed for.
+
+### A three-day deadline had a once-a-week way to meet it, and the deploy command applied it
+- `deploy.image_age` gives a staged CRITICAL advisory three days; the only unattended path was
+  Sunday. `ESCALATE_STAGED_D` relaxes the ENCODER gate and never added a window. A timer cannot be
+  conditional, so the calendar widened to `Mon..Sat 06..09:00` and the SCRIPT refuses.
+- **06 and not 05, which is the half that is not obvious.** Four timers were placed at 05:20-05:40
+  SPECIFICALLY to sit outside this window while it was Sunday-only - `verify-segmentation` Tue 05:20,
+  `verify-restore` Wed 05:30, `verify-restore-offsite` Mon 05:30, `verify-media` Thu 05:40 - and
+  three say so in their own headers. Starting at 06 preserves what all four were placed for, at the
+  cost of one attempt.
+- **The first version of the gate passed the NO-critical case**, which is the unsafe direction:
+  `case "${adv_critical:-0}"` defaults inside the case EXPRESSION and assigns nothing, so an absent
+  `SecAdvisories` line left it empty, the bare `[ -eq ]` failed with "integer expected", and with no
+  `set -e` the gate fell through and PROCEEDED. Same shape as the `boot_free` guard forty lines down,
+  which this file already carried a note about. Only driving BOTH directions found it.
+- **`git pull && systemctl --user daemon-reload` is the deploy command, and it rebooted the host.**
+  One second after the reload that added the calendar, the service started and applied the update -
+  at 00:46, outside every window the timer declares. Every gate it passed it passed correctly, so the
+  outcome was right and the timing was nobody's decision.
+- **The mechanism is UNEXPLAINED and the fix does not depend on knowing it.** `Persistent=no`
+  confirmed on the live unit, no clock step, nothing `Wants=` the service, the timer its only
+  declared activator - and a throwaway timer built to the same shape (a second `OnCalendar` added by
+  a reload, `Persistent=false`, `RandomizedDelaySec=10min`, already triggered once this boot) did NOT
+  fire, twice. The `Persistent=true` catch-up trap is NOT what happened. The timer comment asserting
+  otherwise was written and falsified within the minute, and is corrected in place.
+- **A window is a window, whatever started the unit.** The gate now refuses outside the hours the
+  timer declares, which covers this, a person running `systemctl --user start` at the wrong moment,
+  and whatever the real mechanism turns out to be. Recorded as `outside_window` rather than skipped,
+  unlike the weekday no-critical case, which is the absence of work. `10#$hour`, or `08` and `09` are
+  invalid octal.
+- `HOME_SERVER_DOW` and `HOME_SERVER_HOUR` exist for `HOME_SERVER_STATUS_JSON`'s reason: without them
+  the Sunday branch is unreachable six days a week and the weekday branch on the seventh, so half the
+  gate is a branch nobody has seen run whichever day it is tested on.

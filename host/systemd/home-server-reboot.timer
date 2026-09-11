@@ -62,11 +62,26 @@
 # refusals to the script instead would be four new failure modes for a constraint
 # one character already satisfies.
 #
-# Persistent=false IS ALREADY SET BELOW, so widening this calendar does NOT fire
-# it on the next daemon-reload. That trap is real and this repository has paid for
-# it - a Persistent=true timer's new schedule creates missed elapses in the past
-# and elapses immediately - but it belongs to the other kind of timer. Said out
-# loud because the next reader will reasonably worry.
+# THIS COMMENT USED TO SAY "Persistent=false IS ALREADY SET, SO WIDENING THIS
+# CALENDAR DOES NOT FIRE IT ON THE NEXT daemon-reload", AND WITHIN THE MINUTE IT
+# DID. One second after the reload that added the line above, home-server-reboot
+# .service started and rebooted the host - at 00:46, outside every window this
+# timer declares. Every gate it then passed it passed correctly, so the outcome
+# was right and the timing was nobody's decision.
+#
+# THE MECHANISM IS STILL UNEXPLAINED, and saying so is the point. Persistent=no
+# confirmed on the live unit, no clock step in the journal, nothing Wants= or
+# Requires= that service, and this timer is its only declared activator - yet a
+# throwaway timer built to the same shape (a second OnCalendar added by a reload,
+# Persistent=false, RandomizedDelaySec=10min, already triggered once this boot)
+# did NOT fire, twice. So the Persistent=true catch-up trap this repository has
+# paid for before is NOT what happened here, and nothing else has been proved.
+#
+# WHAT PROTECTS THE HOST IS NOT IN THIS FILE. bin/reboot-when-staged.sh refuses
+# outside the hours below whatever started it, because a window is a window -
+# which covers this, a person running `systemctl --user start` by hand, and
+# whatever the real mechanism turns out to be. Do not replace that gate with a
+# confident sentence here.
 # ==============================================================================
 
 [Unit]

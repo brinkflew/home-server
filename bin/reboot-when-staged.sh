@@ -177,6 +177,43 @@ case "$dow" in
 	[1-7]) ;;
 	*) refuse dow_unreadable "the day of the week read as '$dow', and a gate that cannot tell Sunday from Tuesday must not choose either" ;;
 esac
+
+# AND THE HOUR, BECAUSE THE TIMER IS NOT THE ONLY THING THAT CAN START THIS UNIT.
+# Learned on 2026-09-11 and the hard way: `git pull && systemctl --user
+# daemon-reload` is THE deploy command for this repository, and one second after a
+# reload that added the weekday calendar below, this service started and rebooted
+# the host at 00:46. Every gate it passed it passed correctly - a critical
+# advisory was staged, the host was healthy, nothing was mid-transcode - so the
+# outcome was the right one, taken at the wrong time by nobody's decision.
+#
+# THE MECHANISM IS UNEXPLAINED AND THIS GATE DOES NOT DEPEND ON KNOWING IT.
+# Persistent=no, no clock step in the journal, nothing Wants= or Requires= this
+# service, and the timer is its only declared activator - yet a throwaway timer
+# built to the same shape (two OnCalendars added by a reload, Persistent=false,
+# RandomizedDelaySec=10min, already triggered once this boot) did NOT fire, twice.
+# So what is written here is what was measured, not a cause.
+#
+# A WINDOW IS A WINDOW, WHATEVER STARTED THE UNIT. 00:46 is outside every window
+# this timer declares, so the honest answer at 00:46 is no - and that is true of a
+# person running `systemctl --user start` by hand at the wrong moment too, which
+# is the same hole and was always open. --dry-run is how you exercise it out of
+# hours; bin/reboot-host.sh is how you reboot deliberately.
+#
+# RECORDED AS A REFUSAL, unlike the weekday skip below. This one is not the
+# absence of work - something asked for a reboot at a time nothing should have -
+# and reboot.window_refused naming `outside_window` is how that reaches a reader
+# rather than scrolling past in the journal.
+hour="${HOME_SERVER_HOUR:-$(date +%H)}"
+case "$hour" in
+	0[0-9]|1[0-9]|2[0-3]) ;;
+	*) refuse hour_unreadable "the hour read as '$hour', and a window gate that cannot tell 06 from 00 must not choose either" ;;
+esac
+# Strip the leading zero before comparing, or `08` and `09` are invalid octal.
+hour_n=$((10#$hour))
+if [ "$dow" = 7 ]; then win_from=05; else win_from=06; fi
+if [ "$hour_n" -lt "$win_from" ] || [ "$hour_n" -gt 9 ]; then
+	refuse outside_window "it is ${hour}:xx, and this morning's window is ${win_from}:00-09:59 - something started this unit outside it. The timer is the only thing that should, so check what did: journalctl --user -u home-server-reboot.service"
+fi
 if [ "$dow" != 7 ]; then
 	if [ -n "${HOME_SERVER_RPM_OSTREE_TEXT:-}" ]; then
 		status_text=$(cat "$HOME_SERVER_RPM_OSTREE_TEXT" 2>/dev/null)
