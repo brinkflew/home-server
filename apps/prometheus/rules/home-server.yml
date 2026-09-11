@@ -390,9 +390,11 @@ groups:
         # else did either: five refusals spent a whole week's window and left
         # only journal lines, which nothing grades and which rotate.
         #
-        # 6h because a window is a Sunday morning: anything shorter would fire
-        # between the five attempts of the same morning, which is the system
-        # working. The check itself already waits seven days before warning.
+        # 6h because a window is one morning: anything shorter would fire between
+        # the attempts of that same morning, which is the system working. Five on a
+        # Sunday, four on a weekday carrying a staged critical advisory since
+        # 2026-09-11, and 6h is longer than either - so the value did not move.
+        # The check itself already waits seven days before warning.
         expr: home_server_check_status{id="reboot.window_refused"} == 2
         for: 6h
         labels:

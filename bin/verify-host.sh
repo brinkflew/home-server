@@ -1446,9 +1446,11 @@ if [ -z "$GREENBOOT" ]; then
 		bad reboot.timer_enabled "home-server-reboot.timer is not enabled - a staged deployment would never be applied"
 	fi
 
-	# A WEEK, not a night. The unit fires five times on a Sunday morning and in
-	# the ordinary case refuses on all five, because nothing is staged; what this
-	# asserts is that the group ran at all. Possible only since check_timer_run
+	# A WEEK, not a night. The unit fires five times on a Sunday morning - and four
+	# times on any other morning carrying a staged critical advisory, since
+	# 2026-09-11 - and in the ordinary case declines on all of them, because nothing
+	# is staged; what this asserts is that the group ran at all. The weekday window
+	# can only make this fresher, never staler, so the period is unchanged. Possible only since check_timer_run
 	# started deriving its staleness threshold from the period it is given.
 	check_timer_run reboot.window_run "unattended reboot window" 604800 home-server-reboot.service --user
 

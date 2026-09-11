@@ -14,7 +14,9 @@
 # the two longest-running jobs on this host never share a morning.
 #
 # NOT SUNDAY, and that is the one hard constraint rather than a preference. The
-# unattended reboot window is hourly from 05:00 to 09:00 on Sundays and it
+# unattended reboot window is hourly from 05:00 to 09:00 on Sundays - and, since
+# 2026-09-11, 06:00 to 09:00 on any morning with a staged CRITICAL advisory, which
+# starts at 06 rather than 05 exactly so this 05:40 slot stays outside it - and it
 # refuses while a transcode is running; a ninety-minute sweep of the media disk
 # landing in the middle of it is one more thing to rule out when a window is
 # refused, on the one morning of the week that cannot be repeated.

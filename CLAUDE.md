@@ -220,7 +220,8 @@ outlive the machine they are talking about:
 **Updates are automatic, in two independent tracks.** Containers: `podman-auto-update.timer`
 nightly, following tags, rolling back on a failed start. Host: `rpm-ostreed-automatic.timer`
 nightly, which **stages and never reboots**. Applying it is either a deliberate human act via
-`bin/reboot-host.sh`, or `home-server-reboot.timer` hourly from 05:00 to 09:00 on Sundays - which
+`bin/reboot-host.sh`, or `home-server-reboot.timer` hourly from 05:00 to 09:00 on Sundays, and from
+06:00 to 09:00 on any other morning when the staged deployment carries a **critical** advisory - which
 applies a staged deployment only when greenboot is armed to undo it and refuses on anything else.
 **Five attempts rather than one, because the refusal that actually fires is transient**: the
 encoder gate means a Tdarr job running at 05:08 used to cost the deployment a whole week. A
@@ -2149,7 +2150,8 @@ Remaining, in order:
 2. ~~greenboot, and only then an unattended reboot window.~~ **Done, 2026-08-14.** See
    `host/greenboot/README.md`. greenboot is layered - the one package on this host, and a
    deliberate exception to the rule below - and a rejected deployment rolls itself back. The
-   reboot window is `home-server-reboot.timer`, hourly from 05:00 to 09:00 on Sundays, driven by
+   reboot window is `home-server-reboot.timer`, hourly from 05:00 to 09:00 on Sundays and from 06:00
+   to 09:00 on any other morning carrying a staged **critical** advisory, driven by
    `bin/reboot-when-staged.sh`, which is nothing but refusals - with one deliberate exception.
 
    **A gate that is correct every time can still be wrong in aggregate, and the encoder gate

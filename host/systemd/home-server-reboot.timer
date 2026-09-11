@@ -34,15 +34,49 @@
 # reboot is simply next week, and catching one up means a machine that was off
 # all weekend reboots itself the moment it comes back - exactly when someone is
 # most likely to be doing something to it.
+#
+# ------------------------------------------------------------------------------
+# A SECOND WINDOW, FOR A CRITICAL ADVISORY ONLY, AND IT STARTS AN HOUR LATER
+# ------------------------------------------------------------------------------
+# deploy.image_age gives a staged CRITICAL advisory a THREE-DAY deadline and the
+# only unattended path to apply one was weekly, so a critical landing on a Monday
+# warned for three of the six days before this timer next fired and the remedy was
+# always a person running bin/reboot-host.sh. ESCALATE_STAGED_D in the script
+# relaxes the ENCODER gate; it does not add a window. Measured on 2026-09-11: 23
+# days behind, one critical staged, /boot with room, nothing refusing, every
+# signal green.
+#
+# THE TIMER CANNOT BE CONDITIONAL, so the calendar widens and the SCRIPT refuses.
+# reboot-when-staged.sh exits 0 on any weekday morning whose staged deployment
+# carries no critical advisory, before the expensive gates and without recording a
+# refusal - it is the absence of work, the same category refuse() already exempts
+# nothing_staged for.
+#
+# 06 AND NOT 05, AND THAT IS THE WHOLE REASON THIS IS NOT A ONE-LINE CHANGE. Four
+# timers were placed at 05:20-05:40 SPECIFICALLY to sit outside this window, on
+# the assumption it was Sunday-only, and three of them say so in their own
+# headers: verify-segmentation Tue 05:20, verify-restore Wed 05:30,
+# verify-restore-offsite first Mon 05:30 (~4.6 GB of egress), verify-media Thu
+# 05:40 (a ~25-minute library sweep). Starting at 06:00 preserves the property all
+# four were placed for, and costs one attempt - four rather than five. Adding four
+# refusals to the script instead would be four new failure modes for a constraint
+# one character already satisfies.
+#
+# Persistent=false IS ALREADY SET BELOW, so widening this calendar does NOT fire
+# it on the next daemon-reload. That trap is real and this repository has paid for
+# it - a Persistent=true timer's new schedule creates missed elapses in the past
+# and elapses immediately - but it belongs to the other kind of timer. Said out
+# loud because the next reader will reasonably worry.
 # ==============================================================================
 
 [Unit]
-Description=Weekly window for applying a staged OS deployment
+Description=Window for applying a staged OS deployment: weekly, or any morning for a critical advisory
 
 [Timer]
-# The jitter is well inside the hourly gap, so the five attempts cannot collide
+# The jitter is well inside the hourly gap, so the attempts cannot collide
 # or reorder.
 OnCalendar=Sun *-*-* 05..09:00
+OnCalendar=Mon..Sat *-*-* 06..09:00
 Persistent=false
 RandomizedDelaySec=10min
 AccuracySec=1min

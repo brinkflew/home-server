@@ -20,6 +20,12 @@
 # already a chain of refusals; six containers starting inside it is one more
 # thing to rule out on the one morning of the week that cannot be repeated.
 #
+# AND 05:20 IS NOW LOAD-BEARING RATHER THAN ARBITRARY. On 2026-09-11 the reboot
+# timer gained a second window, Mon..Sat 06..09:00, for a staged CRITICAL
+# advisory - and it starts at 06 rather than 05 precisely so this timer, and the
+# two restore verifications, and the media sweep all stay outside it. Moving this
+# any later than 06:00 puts it back inside a window on a Tuesday.
+#
 # Persistent=true SO A HOST THAT WAS OFF DOES NOT SILENTLY SKIP A FORTNIGHT, and
 # because the deploy that would change this is exactly the kind of thing that
 # happens around a reboot.

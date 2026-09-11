@@ -576,7 +576,9 @@ The OS stages a deployment nightly and **never applies it**. That is the whole p
 has no console and no BMC, so a deployment that does not boot, or that boots without sshd, would be
 a car journey - which is what greenboot now prevents: a deployment that fails its health check
 rolls itself back, proven end to end on 2026-08-14. `home-server-reboot.timer` applies a staged
-deployment on Sunday mornings, hourly from 05:00 to 09:00, when it is safe to; the procedure below
+deployment on Sunday mornings, hourly from 05:00 to 09:00 - and on any other morning from 06:00 to
+09:00 when the staged deployment carries a **critical** advisory, because `deploy.image_age` gives
+one a three-day deadline that a weekly window cannot meet - when it is safe to; the procedure below
 is still how you do it by hand, and is still worth doing on a day you could reach the machine.
 
 **The reboot procedure. Do it on a day you could physically reach the machine.**

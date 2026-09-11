@@ -17,6 +17,11 @@
 # permissive: a person is reading its output and can decide, so it warns where
 # this refuses.
 #
+# THERE ARE TWO WINDOWS. Sunday 05:00-09:00 applies anything staged; Mon..Sat
+# 06:00-09:00 applies only a staged deployment carrying a CRITICAL advisory, and
+# the gate for that is the first thing past nothing_staged below. A weekday
+# morning with no critical is a note and an exit 0, never a recorded refusal.
+#
 # THE NAMED EXCEPTIONS ARE THE THREE MID-FLIGHT GATES, and they exist because a
 # gate that is correct every time can still be wrong in aggregate. The window is
 # five attempts on one Sunday morning; a Tdarr queue spanning all five costs the
@@ -125,6 +130,83 @@ fi
 # Sunday, for ever, with no human in the loop. Found on 2026-08-18.
 staged=$(jq -r '.deployments[0] | select(.booted | not) | .version // empty' <<<"$status_json")
 [ -n "$staged" ] || refuse nothing_staged "nothing is waiting to boot"
+
+# ------------------------------------------------------------------------------
+# Is this morning's window mine to use?
+# ------------------------------------------------------------------------------
+# THE TIMER FIRES SIX MORNINGS MORE THAN IT USED TO, AND ONLY A CRITICAL ADVISORY
+# EARNS ONE. home-server-reboot.timer gained `Mon..Sat 06..09:00` because
+# deploy.image_age gives a staged critical a THREE-DAY deadline while the only
+# unattended path to apply one was weekly - so a critical landing on a Monday
+# warned for three of the six days before Sunday and the remedy was always a
+# person. A timer cannot be conditional, so the calendar widened and this gate is
+# the condition.
+#
+# note() AND exit 0, NEVER refuse(). An ordinary weekday morning is the ABSENCE OF
+# WORK, not a refusal to do it - exactly the category refuse() already exempts
+# nothing_staged for, and for the same reason it gives: four attempts a morning,
+# six mornings a week, would overwrite the last real refusal before anybody read
+# it, and reboot.window_refused would permanently report "not my window".
+#
+# AND IT IS PLACED HERE ON PURPOSE: after nothing_staged, so a quiet night still
+# answers the way it always did, and BEFORE the red-boot, health and /boot gates,
+# which cost a full verify-host.sh --greenboot run. Six extra mornings of that for
+# nothing is the kind of cost that gets a gate removed later by somebody who never
+# learns why it was cheap to keep.
+#
+# THE ADVISORY COMES FROM THE TEXT FORM, because there is none in the JSON -
+# bin/verify-host.sh records that it checked. That is a second rpm-ostree call, but
+# the --json call above has already started the daemon, so it costs a round trip
+# rather than a daemon start. HOME_SERVER_RPM_OSTREE_TEXT is spelled exactly as
+# verify-host.sh spells it, or the two drift and only one of them is testable.
+#
+# NOT the escalation, deliberately. ESCALATE_STAGED_D below lets an old deployment
+# outrank a running transcode; a critical advisory buys a WINDOW and nothing more.
+# Compounding them would mean a critical advisory could also kill a transcode on a
+# Tuesday, which is a second decision wearing the first one's clothes.
+#
+# HOME_SERVER_DOW EXISTS FOR THE SAME REASON HOME_SERVER_STATUS_JSON DOES. Without
+# it the Sunday branch - which is the MAIN path, the one that applies an ordinary
+# deployment - is unreachable six days a week and the weekday branch is
+# unreachable on the seventh, so whichever day somebody tests on, half of this
+# gate is a branch nobody has ever seen run. That is the shape of a check that
+# cannot fail, and the header above already says this repository has found enough
+# of those.
+dow="${HOME_SERVER_DOW:-$(date +%u)}"   # 1..7, Monday..Sunday
+case "$dow" in
+	[1-7]) ;;
+	*) refuse dow_unreadable "the day of the week read as '$dow', and a gate that cannot tell Sunday from Tuesday must not choose either" ;;
+esac
+if [ "$dow" != 7 ]; then
+	if [ -n "${HOME_SERVER_RPM_OSTREE_TEXT:-}" ]; then
+		status_text=$(cat "$HOME_SERVER_RPM_OSTREE_TEXT" 2>/dev/null)
+	else
+		status_text=$(rpm-ostree status 2>/dev/null)
+	fi
+	# "SecAdvisories: 4 moderate, 2 important, 1 critical" - the count immediately
+	# before the word, and absent entirely when there are none.
+	adv_critical=$(sed -n 's/.*SecAdvisories:.*[^0-9]\([0-9]\+\) critical.*/\1/p' \
+		<<<"$status_text" | tail -1)
+	# GUARDED ON THE VARIABLE, NOT ON AN EXPANSION OF IT, and the first version of
+	# this was written the wrong way: `case "${adv_critical:-0}"` defaults inside
+	# the case EXPRESSION and assigns nothing, so an absent SecAdvisories line left
+	# adv_critical empty, `[ "$adv_critical" -eq 0 ]` failed with "integer
+	# expected", and - there being no `set -e` here - the gate fell through and
+	# PROCEEDED. That is the unsafe direction, and it is the same shape as the
+	# boot_free guard further down, which this file already carries a note about
+	# for the same reason: a bare -lt on an unreadable df once let this gate pass
+	# as if there were room. Caught by driving both directions through
+	# HOME_SERVER_RPM_OSTREE_TEXT; it reads as a pass on the no-critical case,
+	# which is exactly what it would have done at 06:00 unattended.
+	case "$adv_critical" in
+		''|*[!0-9]*) adv_critical=0 ;;
+	esac
+	if [ "$adv_critical" -eq 0 ]; then
+		note "$staged is waiting but carries no critical advisory, and today is not Sunday - the weekday window exists for a critical advisory only. The Sunday window will apply it."
+		exit 0
+	fi
+	note "today is not Sunday, but $staged carries $adv_critical CRITICAL advisory(s) - this window is for exactly that"
+fi
 
 # WOULD THIS REBOOT APPLY IT, OR ROLL BACK? custom.cfg selects the PREVIOUS
 # deployment whenever boot_counter is set and boot_success is 0, and boot_success

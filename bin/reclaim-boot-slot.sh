@@ -114,7 +114,8 @@ if [ "$(id -u)" = 0 ]; then priv() { "$@"; }; else priv() { sudo -n "$@"; }; fi
 #
 # ITS OWN TEMP NAME, NOT THE BARE "$STATE.tmp". This file has five other writers
 # and bin/reboot-when-staged.sh is one of them, refusing on Sunday mornings
-# between 05:00 and 09:00 - which is when a reclaim refusing for want of a slot
+# between 05:00 and 09:00 - and on any other morning between 06:00 and 09:00 when
+# a critical advisory is staged - which is when a reclaim refusing for want of a slot
 # is at its most likely, and its timer fires at :04 and :34 through exactly that
 # window. Two writers sharing one temp path can truncate each other's work;
 # bin/verify-restore.sh records that in as many words and takes the same way
