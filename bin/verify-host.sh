@@ -4304,14 +4304,23 @@ if [ -z "$GREENBOOT" ]; then
 	# journal 10,797, the TSDB 16,000 - and 46,392 MB is what is left. 40960
 	# is that rounded down, leaving about 5 GB for the uncapped set to drift.
 	#
-	# AND IT CLOSES ON THE RETENTION WINDOW, WHICH IS THE NUMBER THAT HAS TO
-	# MOVE. At the measured 5.8 runs/day and 506 MB/run, 40960 MB is 14 days;
-	# bin/ci-artifacts-sweep.sh keeps 13 and refuses below 7 for a reason it
-	# states at length. So this check reaching its budget is not a fault in
-	# the store - it is the sentence "30 days at 506 MB/run does not fit this
-	# filesystem", said by a check rather than by a person with an ssh
-	# session. Raising the number is only defensible after re-running the
-	# arithmetic above, which capacity.var_commitment now does every hour.
+	# IT USED TO CLOSE ON THE RETENTION WINDOW AND THAT ADVICE IS SPENT. This
+	# comment told a reader the window was the number that had to move, and it
+	# moved twice - 30 to 13 on 2026-09-09, and there was nowhere further to
+	# go, because 7 is a hard floor the sweep refuses below. What actually
+	# fitted was the OTHER lever this check kept naming: 99.96% of the store
+	# is one artifact class. bin/ci-artifacts-sweep.sh now keeps *-nyc for 3
+	# days and everything else for the 30 upskald asked for, which is about
+	# 11 GB at the measured 7.07 runs/day against this same 40960.
+	#
+	# SO A BREACH NOW MEANS SOMETHING DIFFERENT, and the message below says
+	# the new thing rather than the old one. Before the split it meant "thirty
+	# days does not fit this filesystem". After it, with nyc bounded at three
+	# days, it means either that the arrival rate has risen far past the 17
+	# runs/day this was sized to survive, or that a SECOND large artifact
+	# class has appeared - and that second one is the likely reading, because
+	# nothing else in the store has ever been above 1 MB a run. Measure the
+	# classes before touching either window.
 	#
 	# THE SWEEP'S OWN HEADER PRICED THIS AT 2.5 MB/RUN. It was never right:
 	# the mean is 506 MB and was stable at 400-530 on every one of the 13
@@ -4373,7 +4382,7 @@ if [ -z "$GREENBOOT" ]; then
 		elif [ -n "$ci_swept_age" ] && [ "$ci_swept_age" -gt 3 ]; then
 			warn ci.artifact_store "the artifact store holds ${ci_state_bytes} bytes of baseline and ${ci_runs_mb:-?}MB of run scratch, but the sweep last ran ${ci_swept_age} days ago against a daily timer - check home-server-ci-artifacts-sweep.timer"
 		elif [ -n "$ci_runs_mb" ] && [ "$ci_runs_mb" -gt "$ci_artifact_budget_mb" ]; then
-			warn ci.artifact_store "the artifact store holds ${ci_runs_mb}MB of run scratch, over its ${ci_artifact_budget_mb}MB budget - unlike a CI lane nothing clears this on its own, and the sweep is working: it takes whole runs at CI_ARTIFACT_KEEP_DAYS and the store simply arrives faster than that. That window was cut from 30 to 13 on 2026-09-09 to fit this budget at 6.07 runs a day; if it is breaching again the arrival rate has risen and the lever is what is IN a run, not the window - it must not go below 7. See bin/ci-artifacts-sweep.sh, docs/ci.md and capacity.var_commitment"
+			warn ci.artifact_store "the artifact store holds ${ci_runs_mb}MB of run scratch, over its ${ci_artifact_budget_mb}MB budget - unlike a CI lane nothing clears this on its own. The window is no longer the lever: the sweep keeps *-nyc for CI_ARTIFACT_NYC_KEEP_DAYS and everything else for CI_ARTIFACT_KEEP_DAYS, and on 2026-09-11 nyc was 99.96% of the store, so three days of it is about 11 GB at 7.07 runs a day and 26 GB at 17. Reaching this budget now means either a far higher arrival rate than that, or a SECOND large artifact class - measure the classes before moving either window, because nothing but nyc has ever been above 1MB a run. See bin/ci-artifacts-sweep.sh, docs/ci.md and capacity.var_commitment"
 		elif [ -z "$ci_swept_at" ]; then
 			note ci.artifact_store "the artifact store holds ${ci_state_bytes} bytes of baseline and ${ci_runs_mb:-?}MB of run scratch; the sweep has never recorded a run, which on a fresh install means the one-time start in host/systemd/README.md was skipped"
 		else

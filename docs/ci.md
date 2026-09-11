@@ -551,6 +551,7 @@ to do it. One directory, mounted into every lane at `/opt/ci-artifacts` and expo
 ```
 $FLEET_ROOT/artifacts/            -> /opt/ci-artifacts
   runs/   <owner>/<repo>/<run_id>/<run_attempt>/<name>/   swept at 30 days
+                                        ...<name> = *-nyc   swept at 3 days
   state/  <owner>/<repo>/baselines.json                   swept by nothing, backed up
 ```
 
@@ -585,16 +586,21 @@ turns their pull requests red rather than quietly passing every surface at once.
 set-but-absent case cannot arise from the mount itself, because podman does not create a missing
 bind-mount source - it refuses to start the container.
 
-**Thirteen days on `runs/`, and seven would fail in the worst possible distribution.** One of
+**Two windows on `runs/` since 2026-09-11: thirty days for a whole run, three for `*-nyc`.** The
+paragraphs below are the road to that, in order, and they are kept because the arithmetic in them is
+what proves the split was the only lever left rather than the clever one.
+
+**Thirty days for a whole run, and seven would fail in the worst possible distribution.** One of
 their consumers runs when a pull request merges and reads the artifacts of that pull request's LAST
 CI run, which may be weeks old if the branch sat. A 7-day sweep would break exactly the slow-moving
 pull requests and nothing else, which is why the floor is seven and the refusal below it is hard.
 
-**Thirty is what they asked for and thirty does not fit, which was settled by measurement on
-2026-09-09.** The sizing in this paragraph used to read "about 2.5 MB per run against 153 GB free"
-and was never right. Measured over the 85 runs then in the store, spanning 2026-08-27 to that
-morning: a mean of **506 MB a run at 6.07 runs a day**. So `40960 / 506 / 6.07 = 13.3 days`, and
-the window is thirteen.
+**Thirty is what they asked for, and for two days in September it did not fit, which was settled by
+measurement on 2026-09-09.** The sizing in this paragraph used to read "about 2.5 MB per run against
+153 GB free" and was never right. Measured over the 85 runs then in the store, spanning 2026-08-27
+to that morning: a mean of **506 MB a run at 6.07 runs a day**. So `40960 / 506 / 6.07 = 13.3 days`,
+and the window went to thirteen. It is back at thirty now, on everything a whole run means; what
+changed is not the arithmetic but the denominator, once nyc stopped being counted against it.
 
 **The store had never reached steady state when that was found, which is why nothing looked
 wrong.** It began on 2026-08-27, so at day fourteen of a thirty-day window *nothing had yet been
@@ -602,25 +608,66 @@ evicted* - and it was already 42,976 MB against a 40,960 MB budget. Thirty days 
 about 92 GB on a volume with 88 GB free. A sweep reporting "swept 0 runs" was correct and told
 nobody anything.
 
-**Better than 99% of a run is one artifact class, and that is the lever this did not pull.** Of a
-536 MB run: 325 MB and 212 MB in the two `e2e-shard-N-nyc` directories - raw per-context Playwright
-coverage JSON, about 130 files of 4 MB - against 1 MB each for `-blob` and `-apicov`. Keeping
-`nyc` for a week and the rest for thirty would put the store near 11 GB. It is **not** done,
-because it breaks the whole-run granularity the next paragraph argues for, on an unverified
-assumption about what in upskald reads raw `nyc` output. Answer that question before taking it.
-
-**The arrival rate is not flat, so `ci.artifact_store` warning again is not this number being
+**The arrival rate is not flat, so `ci.artifact_store` warning again was not that number being
 wrong.** 2026-09-02 to 09-06 saw no runs at all; the three days to 09-09 ran at fifteen a day. At
-fifteen, thirteen days is 98 GB. If it breaches again the answer is the paragraph above, not a
-smaller window.
+fifteen, thirteen days is 98 GB. It warned again on 2026-09-11 at **53,659 MB**, exactly as that
+sentence predicted, and the answer was the lever below rather than a smaller window - there was no
+smaller window available, because seven is a floor.
+
+**Better than 99% of a run is one artifact class, and on 2026-09-11 that lever was finally
+pulled.** Measured over the 106 run-attempts then in the store, spanning 2026-08-27 to 09-10:
+
+| class | size | share |
+|---|---|---|
+| `e2e-shard-N-nyc` | 53,638 MB | **99.96%** |
+| `e2e-shard-N-blob` | 270 MB | |
+| `e2e-shard-N-apicov` | 202 MB | |
+| total | 53,659 MB | against a 40,960 MB budget |
+
+The entire store *minus* nyc is **472 MB for fifteen days of CI**. So thirty days of everything else
+costs about 1 GB, three days of nyc is about 11 GB at the measured 7.07 runs a day and about 26 GB
+at the 17 a day this store has been seen to do - and seven days of nyc, the number that would have
+matched upskald's own `retention-days` everywhere else, is 25 GB at the mean and breaches again on
+the very next burst. Hence three, with a floor of two.
+
+**What made it takeable was answering the question this file had been refusing to guess at.** It
+read: *"an unverified assumption about what in upskald reads raw `nyc` output. Answer that question
+before taking it."* Answered by reading their workflows rather than reasoning about them:
+
+- `-nyc` is stored by `e2e-tests` in `ci.yml` and fetched by **exactly one** consumer,
+  `e2e-and-coverage-report` - **the same run's fan-in, minutes later**.
+- `.github/actions/artifact-fetch` defaults `run-id` to `github.run_id` and **no workflow passes a
+  foreign one**. Six store/fetch call sites exist in that repository and all six are in `ci.yml`.
+- The outputs a *person* opens - `coverage-report-e2e`, `playwright-report` - go to **GitHub** at
+  `retention-days: 7`, never to this store.
+
+**And the seven-day floor's own justification turned out not to apply here.** The merge-time
+consumer described three paragraphs up is `coverage-baseline.yml`, and it reads
+`actions/download-artifact` against **GitHub** artifacts at `retention-days: 30`. It never opens
+`$CI_ARTIFACT_STORE` at all. The floor stays anyway on everything but nyc, because their runbook
+says *"we will move the rest as their consuming workflows move onto the lanes"* - so the next
+cross-run artifact to arrive lands in the 30-day class by default, and is covered without anyone
+having to remember this section.
+
+**The price is stated rather than left to be discovered: whole-run granularity now has one
+exception.** Sweeping a class out of a live run leaves it half-present, which reads to a consumer as
+"this artifact was never uploaded" rather than "this run has expired" - and that is exactly what nyc
+gets. It is affordable only because of the measurement above. **Adding a second class means
+answering the same question again for that one.**
+
+**What would change the shape rather than the threshold is still not ours.** 506 MB a run is raw
+per-context Istanbul JSON, about 130 files of 4 MB a shard, which compresses roughly 10-20x;
+compressing `.nyc_output` in upskald's `scripts/local_artifacts.py` would make this window academic.
+Recorded so it is not rediscovered as a new idea - it is another repository.
 
 **The sweep is `bin/ci-artifacts-sweep.sh` on its own daily timer, not part of `gc_lane`.** Every
 other reclaim in `bin/github-runner.sh` operates on a `$LANE_ROOT` exactly one process owns; this
 tree is shared, and two drivers sweeping it on independent schedules have no lock between them. It
-sweeps at whole-run granularity, because a run's artifacts are written by several jobs at several
-times and a half-swept run reads to a consumer as "never uploaded" rather than "expired". It
-refuses a retention under seven days, refuses to operate on any path not ending in `/runs`, and
-writes its own timestamp - `ExecMainExitTimestamp` is wiped by a reboot, so "has never run" and
+sweeps at whole-run granularity for every class but `*-nyc`, because a run's artifacts are written by
+several jobs at several times and a half-swept run reads to a consumer as "never uploaded" rather
+than "expired". It refuses a whole-run retention under seven days and an nyc retention under two,
+refuses an nyc window longer than the run window, refuses to operate on any path not ending in
+`/runs`, and writes its own timestamp - `ExecMainExitTimestamp` is wiped by a reboot, so "has never run" and
 "has not run since boot" read alike through it.
 
 **`state/` is why the backup treats an empty capture as fatal.** `scripts/check_coverage.py` in

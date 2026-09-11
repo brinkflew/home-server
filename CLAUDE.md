@@ -945,9 +945,10 @@ signal read green.
   one". `state/` is staged into the backup the way the TSDB snapshot already is.
 - **`CI_ARTIFACT_STORE` is in the image's `ENV`, never an `-e`** - the driver passes no environment
   into a lane, and the value is a container path. Always being set is the point.
-- Thirty days on `runs/`, because a merge-time consumer reads a pull request's LAST run; a sweep on
-  its own timer, because two drivers over one shared tree have no lock; and `podman unshare` or the
-  copy reports success having copied nothing.
+- **Two windows on `runs/`** - thirty days for a whole run, three for `*-nyc` - because nyc measured
+  **99.96%** of the store and its only reader is the same run's fan-in; a sweep on its own timer,
+  because two drivers over one shared tree have no lock; and `podman unshare` or the copy reports
+  success having copied nothing.
 - **A live-but-unseeded store gives a pipeline exactly as green as a seeded one**, so `ci.artifact_store`
   grading `du -sb state/` could not tell: any stray file made the bytes non-zero while a consumer
   opening its own `baselines.json` got `absent` and PASSED. It counts baselines now, an unseeded

@@ -1202,7 +1202,8 @@ groups:
             If every capped consumer reached the limit it is configured with,
             /var would cross FilesystemAlmostFull's line. Fix a ceiling rather
             than deleting once by hand - CI_ARTIFACT_KEEP_DAYS,
-            GITHUB_RUNNER_LANE_MAX_MB, SystemMaxUse, retention.size - and note
+            CI_ARTIFACT_NYC_KEEP_DAYS, GITHUB_RUNNER_LANE_MAX_MB, SystemMaxUse,
+            retention.size - and note
             that whatever is uncapped contributes only what it holds today, so
             this is a floor. topk(5, home_server_var_consumer_bytes) names the
             largest consumers; /system/storage draws them.

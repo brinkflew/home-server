@@ -8,10 +8,13 @@
 # after it means the night's copy is taken from a store nothing has just been
 # deleting from, which makes a torn read impossible rather than unlikely.
 #
-# DAILY RATHER THAN WEEKLY, even though the retention is thirty days. A daily
-# sweep removes roughly a day's worth each time; a weekly one removes seven days'
-# worth in a single pass, which is the same bytes in a burst against the disk the
-# lanes are working from. There is nothing to gain by batching it.
+# DAILY RATHER THAN WEEKLY, and daily is what the short window now requires
+# rather than merely preferring. A daily sweep removes roughly a day's worth each
+# time; a weekly one removes seven days' worth in a single pass, which is the
+# same bytes in a burst against the disk the lanes are working from. With *-nyc
+# held for three days and the rest for thirty, a weekly cadence would also mean
+# the nyc window was effectively seven - the sweep cannot take what it is not
+# running to look at.
 #
 # Persistent=true so a machine that was off overnight sweeps when it comes back.
 #
