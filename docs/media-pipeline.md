@@ -9,8 +9,9 @@ at the other end. Several entries here record failures where every visible signa
 
 **The library is a pipeline, not a folder.** `library/queued/<type>` is where the \*arr apps import
 to, Tdarr transcodes, and Jellyfin serves *only* `library/transcoded/<type>`. `<type>` is one of
-`anime`, `documentaries`, `movies`, `series`; `review/` is the manual siding and `.recycle` is the
-\*arr recycle bin, deliberately outside every Jellyfin library path. A root folder that omits the
+`anime`, `documentaries`, `movies`, `series`; `review/` is the manual siding, `rework/` is the
+re-transcode siding (see *Re-transcoding the backlog* below) and `.recycle` is the \*arr recycle bin,
+all three deliberately outside every Jellyfin library path. A root folder that omits the
 `queued/` or `transcoded/` level exists nowhere on disk - which is how Jellyseerr came to file every
 request into three paths that did not exist, so nothing requested through it could import at all.
 **Check a new root folder against the disk, not against what looks plausible.**
@@ -277,6 +278,124 @@ decision, not a technical one. `v_cq=18` was the old value and is near-lossless.
 **A subtitle-inclusive benchmark cannot use `-t`.** Copying sparse PGS streams makes ffmpeg read the
 *whole* file to flush them, so a 60-second test of a 22 GB film took 131 s instead of 9 s. Production
 encodes the whole file anyway and pays nothing. Measure video-only, or measure the real thing.
+
+## Re-transcoding the backlog
+
+**690 of 725 library files drift in a browser, and every one of them was produced here.** The first
+sweep `home-server-verify-media.timer` ever ran found them: keyframes anywhere from 0.2 s to 10.4 s
+apart, which is NVENC's 250-frame cap plus adaptive I-frames at scene cuts - i.e. every file this
+flow transcoded *before* `-no-scenecut 1` reached it. A native client direct-plays and is unaffected;
+a browser drifts, accumulating, and the subtitles detach. `media.keyframe_drift` is deliberately
+unalerted, because this is a **standing backlog and not an incident** - days of GPU time and a
+decision, on `update.pin_lag`'s precedent.
+
+**Nothing could act on it at all until 2026-09-11.** `bin/verify-media.sh` named the backlog and
+`docs/known-state.md` recorded that it was days of work; there was no mechanism. Three things stood
+in the way, and each one fails *silently*:
+
+- **`skipIfHevcBelowBitrate` is 8000000 and the backlog is HEVC at ~4.5 Mbps.** Fed back through
+  `queued/<type>` unchanged, every file hits `hevcIsFine`, is **stream-copied** and **moved** - so it
+  arrives in `transcoded/` with the identical broken grid and a green job. Then it looks fixed.
+- **`aDelete` deletes `originalFile`.** On a re-run whose source is the library file itself, that is
+  the path Radarr and Sonarr hold a record of.
+- **There is no re-queue mechanism.** The libraries watch `queued/<type>` only, `filejsondb` drains
+  to zero as each file is promoted, and `jobsjsondb` is history nothing consults for eligibility. A
+  file in `transcoded/` is invisible to every Tdarr library by construction.
+
+### The siding, and the one rule that makes it safe
+
+`library/rework/<type>` is a sibling of `queued/` and `transcoded/`, outside every Jellyfin library
+path. `bin/requeue-drifting.sh` **copies** into it and **never moves**:
+
+**`transcoded/` keeps the old, drifting, perfectly playable file for the whole transcode.** Tdarr's
+move node replaces it at the end, and its first method is `fs.promises.rename()` - verified by
+reading `FlowHelpers/1.0.0/fileMoveOrCopy.js` in the container - so within the one filesystem the
+replacement is **atomic** and the \*arr apps never see the file absent, not even for an instant.
+Nothing to promote, nothing to reconcile, and the rule at the top of this file - *"Do not add a step
+that moves media directly"* - is respected rather than worked around.
+
+Moving instead would open a window of tens of minutes in which a rescan sees the file **missing**,
+which marks the episode missing and invites a re-download. That window is the only real data hazard
+in the whole idea, and copying removes it rather than narrowing it.
+
+**The copy is usually free.** `--reflink=auto` on XFS shares the extents, so a 4 GB film costs
+metadata, and Tdarr deleting the siding copy at the end drops a reference. It falls back to a real
+copy where reflink is unavailable, which is what the script's 50 GB free-space refusal is sized for.
+
+**`keepRelativePath` is what lands the round trip back in the right place.** All three move nodes set
+it, and it is relative to *the library's own watch folder* - so `rework/series/Show/Season 01/ep.mkv`
+has relative path `Show/Season 01/ep.mkv`, and an `output_dir_done` of
+`/media/library/transcoded/series` puts it back exactly where it came from. A flat destination would
+have collapsed every series into one directory.
+
+### The plugin recognises the siding by PATH, and that is why no flow changed
+
+`reworkPathMarker` defaults to `/library/rework/`; a file whose path contains it ignores
+`skipIfHevcBelowBitrate` entirely and says so in the job log.
+
+**The obvious implementation was a per-library user variable through the flow's `inputsDB`, the way
+`audioLanguages` is wired, and it was not taken.** `inputsDB` lives in the flow, the flow lives in
+Tdarr's own database and is edited in its UI, and `checkout.tdarr_flows` compares the two - so that
+route costs a UI edit **plus** a re-export into `apps/tdarr/flows/`, and git is wrong until both have
+happened. Reading the path costs nothing, shows up in `git diff`, and deploys by the `ExecStartPre=`
+copy on `tdarr-server.container` like every other change to that file.
+
+**It is deliberately not a codec or bitrate test.** Nothing in `ffProbeData` says how far apart a
+file's keyframes are - that needs a packet read, which is `bin/verify-media.sh`'s job on the host - so
+*"is this file drifting"* is not a question the plugin can answer. What it can know is that somebody
+put the file in the siding on purpose, and that is the whole signal.
+
+**A bad value for `skipIfHevcBelowBitrate` used to mean "re-encode everything", silently.**
+`parseInt(x, 10) || 0` turned a typo, a stray space, an empty box or an unexpanded `{{{...}}}`
+template into `0`, which is the documented spelling of *always re-encode*. It now falls back to the
+declared default and logs that it did; only a literal `0` disables the gate. The log line is the
+load-bearing half - the failure was never that the number was wrong, it was that it was wrong in
+silence.
+
+### The one-time Tdarr setup, which is not in any script
+
+A Tdarr library is a row in Tdarr's own database, created in its UI, so this cannot be automated from
+git and `bin/requeue-drifting.sh` **refuses rather than guessing** if the siding is absent - a
+directory nothing watches would swallow the files. One library per type, or one per type you intend
+to rework:
+
+| Field | Value |
+|---|---|
+| Source folder | `/media/library/rework/<type>` |
+| Flow | `avsOnePass1` - the same one, unchanged |
+| `output_dir_done` | `/media/library/transcoded/<type>` - the same as the ordinary library |
+| `output_dir_review` | `/media/library/review/<type>` |
+| `audio_languages` | the same as the ordinary library for that type |
+| `processLibrary` | true |
+| `processHealthChecks` | false - the flow health-checks its own output on the NVMe cache |
+| `scanOnStart` | true |
+
+Then create the directory and re-export nothing: no flow changed.
+
+### Running it
+
+```bash
+# the list is written weekly by home-server-verify-media.service; to refresh it now:
+./bin/verify-media.sh --library --marker ~/.cache/home-server/media-state \
+                      --bad-list ~/.cache/home-server/media-bad-list
+./bin/requeue-drifting.sh --dry-run          # what it would copy, and why it would skip
+./bin/requeue-drifting.sh                    # three files, which is the default deliberately
+./bin/verify-media.sh --full "<file, at its transcoded/ path>"   # a flat 6.047s grid is the pass
+```
+
+**`--limit` defaults to three and that is not timidity.** Queueing 470 health checks once wedged this
+whole host while it still answered ICMP. Two NVENC sessions already pin the encoder block at 100%, so
+a bigger batch buys no throughput - it only makes the siding somewhere work piles up, buries a failed
+job under later ones, and keeps a sustained encoder load that is a veto in
+`bin/reboot-when-staged.sh` and a deferral for the nightly container update.
+
+**`media.rework_stuck` is the witness, because nothing else would be.** The flow deletes each file as
+it promotes the output, so the siding's only correct resting state is empty - and a failed Tdarr job
+leaves **no failed unit and no unhealthy container**: `tdarr-node-01` goes on reporting healthy,
+because serving is what it is probed for. The check grades the **age** of the oldest file, not the
+count, so a batch in flight reads as work; six hours reads as stuck. It is a `note` on
+`media.keyframe_drift`'s precedent, and never a `FAIL`, because a FAIL in that battery blocks an OS
+security update - which is the mistake `SuccessExitStatus=1` was added to undo.
 
 ## The Radarr [VO] profile encodes one rule: VO now, French when it appears
 

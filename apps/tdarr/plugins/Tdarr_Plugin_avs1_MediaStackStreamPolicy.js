@@ -97,7 +97,21 @@ const details = () => ({
       inputUI: { type: 'text' },
       tooltip:
         'Bits/s. A file that is ALREADY HEVC and below this is left alone - re-encoding it is '
-        + 'generation loss for no saving. Set 0 to always re-encode.',
+        + 'generation loss for no saving. Set 0 to always re-encode. A value that is not a whole '
+        + 'number falls back to this default rather than to 0, because 0 means re-encode the '
+        + 'entire library and a typo should not be able to say that silently.',
+    },
+    {
+      name: 'reworkPathMarker',
+      type: 'string',
+      defaultValue: '/library/rework/',
+      inputUI: { type: 'text' },
+      tooltip:
+        'Path fragment marking the rework siding. A file whose path contains it IGNORES '
+        + 'skipIfHevcBelowBitrate and is always re-encoded - that siding exists to repair a '
+        + 'keyframe grid, and every file in it is already HEVC at a bitrate that would otherwise '
+        + 'be skipped and moved with the same defect. Set empty to disable the exception. See '
+        + 'bin/requeue-drifting.sh and docs/media-pipeline.md.',
     },
     {
       name: 'opusBitrateStereo', type: 'string', defaultValue: '128k', inputUI: { type: 'text' }, tooltip: 'Opus bitrate for 1-2 channel tracks.',
@@ -164,6 +178,15 @@ const opusBitrateFor = (channels, inputs) => {
   return String(inputs.opusBitrateStereo);
 };
 
+// A DECLARED DEFAULT, READ BACK RATHER THAN RESTATED. Inputs above is the one
+// copy of every number in this file, and a second copy of one in the code below
+// is a constant that only means anything because of a constant somewhere else -
+// a shape this repository has paid for more than once.
+const declaredDefault = (name) => {
+  const found = details().Inputs.filter((i) => i.name === name)[0];
+  return found ? String(found.defaultValue) : '';
+};
+
 const plugin = (file, librarySettings, inputs, otherArguments) => {
   const lib = require('../methods/lib')(); // eslint-disable-line global-require
   inputs = lib.loadDefaultValues(inputs, details);
@@ -204,7 +227,62 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   const video = videos[0];
 
   // ---- Should we touch the video at all? -----------------------------------
-  const skipBelow = parseInt(String(inputs.skipIfHevcBelowBitrate), 10) || 0;
+  // A BAD VALUE HERE MEANT "RE-ENCODE EVERYTHING", SILENTLY, and that is what
+  // this replaces. skipIfHevcBelowBitrate is hand-editable in Tdarr's UI, and
+  // `parseInt(x, 10) || 0` turned every unparseable value - a typo, a stray
+  // space, an unexpanded `{{{...}}}` template, an empty box - into 0, which is
+  // the documented spelling of "always re-encode". One slip and every file in
+  // that library takes a full NVENC pass it did not need, at generation loss,
+  // with nothing anywhere saying why.
+  //
+  // So anything that is not a whole number of bits/s falls back to the DECLARED
+  // default and says so in the log, and only a literal 0 disables the gate. The
+  // log line is the load-bearing half: the failure was never that the number was
+  // wrong, it was that it was wrong in silence.
+  const skipRaw = (inputs.skipIfHevcBelowBitrate === undefined
+    || inputs.skipIfHevcBelowBitrate === null)
+    ? '' : String(inputs.skipIfHevcBelowBitrate).trim();
+  let skipBelow;
+  if (/^[0-9]+$/.test(skipRaw)) {
+    skipBelow = parseInt(skipRaw, 10);
+  } else {
+    const declared = parseInt(declaredDefault('skipIfHevcBelowBitrate'), 10);
+    skipBelow = isNaN(declared) ? 0 : declared;
+    response.infoLog += `skipIfHevcBelowBitrate was '${skipRaw}', which is not a whole number of `
+      + `bits/s - using the declared default ${skipBelow}. Set it to 0 explicitly if this library `
+      + 'is meant to re-encode everything.\n';
+  }
+
+  // THE REWORK SIDING DEFEATS THAT GATE BY PATH, AND THE PATH IS WHY THERE IS NO
+  // SECOND LIBRARY VARIABLE AND NO FLOW EDIT. The keyframe backlog is files this
+  // plugin itself produced before `-no-scenecut 1` existed: already HEVC, around
+  // 4.5 Mbps, so every one of them is exactly what skipIfHevcBelowBitrate is
+  // built to leave alone. Fed back through unchanged they would be stream-copied
+  // and MOVED, arriving with the identical broken grid and a green job.
+  //
+  // The obvious fix was a per-library user variable through the flow's inputsDB,
+  // the way audioLanguages is wired. It was not taken: inputsDB lives in the
+  // flow, the flow lives in Tdarr's own database and is edited in its UI, and
+  // checkout.tdarr_flows compares the database to apps/tdarr/flows/ - so that
+  // route costs a UI edit plus a re-export, and is wrong in git until both have
+  // happened. Reading the path costs nothing, is visible in `git diff`, and
+  // deploys by the ExecStartPre copy on tdarr-server.container like every other
+  // change to this file.
+  //
+  // IT IS DELIBERATELY NOT A CODEC OR BITRATE TEST. Nothing in ffProbeData says
+  // how far apart a file's keyframes are - that needs a packet read, which is
+  // bin/verify-media.sh's job on the host - so "is this file drifting" is not a
+  // question this plugin can answer. What it can know is that somebody put the
+  // file in the siding on purpose, which is the whole signal.
+  const reworkMarker = String(inputs.reworkPathMarker || '').trim();
+  const inRework = reworkMarker !== '' && String(file.file).indexOf(reworkMarker) !== -1;
+  if (inRework && skipBelow > 0) {
+    response.infoLog += `File is under ${reworkMarker}, so skipIfHevcBelowBitrate `
+      + `(${skipBelow}) is ignored and the video is re-encoded - that siding exists to fix a `
+      + 'keyframe grid, and every file in it is already HEVC at a bitrate this would otherwise '
+      + 'skip.\n';
+    skipBelow = 0;
+  }
   const overallBitrate = parseInt(
     (file.ffProbeData.format && file.ffProbeData.format.bit_rate) || file.bit_rate || 0, 10,
   ) || 0;

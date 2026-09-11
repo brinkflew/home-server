@@ -45,6 +45,7 @@
 #   bin/verify-media.sh --full <file>      every keyframe, not three windows
 #   bin/verify-media.sh --min-gap 6 ...    the segment length to check against
 #   bin/verify-media.sh --marker <path>    write a machine-readable record
+#   bin/verify-media.sh --bad-list <path>  write EVERY drifting path, uncapped
 #   bin/verify-media.sh --gate             exit 1 if somebody is watching
 #
 # --marker EXISTS BECAUSE THIS IS ON A TIMER NOW, and a timer needs a durable
@@ -75,6 +76,7 @@ SWEEP_TYPE=""
 LIMIT=0
 MARKER=""
 GATE=""
+BAD_LIST=""
 
 usage() { sed -n '2,/^# ===/p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
@@ -91,6 +93,8 @@ while [ $# -gt 0 ]; do
 		--gate)      GATE=1; shift ;;
 		--marker)    MARKER="${2:-}"; shift 2 ;;
 		--marker=*)  MARKER="${1#*=}"; shift ;;
+		--bad-list)   BAD_LIST="${2:-}"; shift 2 ;;
+		--bad-list=*) BAD_LIST="${1#*=}"; shift ;;
 		--full)      FULL=1; shift ;;
 		--library)   SWEEP=1; shift
 		             case "${1:-}" in -*|'') ;; *) SWEEP_TYPE="$1"; shift ;; esac ;;
@@ -166,6 +170,29 @@ bad()  { printf '  \033[31mFAIL\033[0m  %s\n' "$*"; fails=$((fails + 1)); }
 # 's/^k=//p'` and a value spanning lines would be silently truncated to its
 # first one.
 bad_names=""
+
+# --bad-list IS THE UNCAPPED HALF, AND THE CAP ABOVE IS WHY IT EXISTS. The marker
+# keeps ten basenames because status.json is read whole by the dashboard and by
+# every consumer of --json, so a sweep that found 690 drifting files must not put
+# 690 paths into it. But a remedy needs all 690, and FULL HOST PATHS rather than
+# basenames - two films can share a name and a basename cannot be acted on.
+#
+# A FILE ON DISK HAS NEITHER CONSTRAINT, so this is a separate output rather than
+# a wider marker key. bin/requeue-drifting.sh is the consumer.
+#
+# WRITTEN ONLY BY A RUN THAT FINISHED, via the same .tmp-then-mv the marker uses.
+# A partial list is worse than none here, because its consumer COPIES FILES from
+# it: a sweep that died at file 40 of 725 would otherwise publish a 39-line list
+# that looks exactly like a complete one. die() therefore does not write it, and
+# leaves whatever the last complete sweep produced in place.
+bad_paths=""
+write_bad_list() {
+	[ -n "$BAD_LIST" ] || return 0
+	mkdir -p "$(dirname "$BAD_LIST")" 2>/dev/null
+	printf '%s' "$bad_paths" > "$BAD_LIST.tmp" 2>/dev/null &&
+		mv "$BAD_LIST.tmp" "$BAD_LIST"
+}
+
 write_marker() {  # <error-or-empty>
 	[ -n "$MARKER" ] || return 0
 	mkdir -p "$(dirname "$MARKER")" 2>/dev/null
@@ -322,6 +349,9 @@ check_file() {
 		# Ten, matching write_marker's own cap - accumulating four hundred and
 		# truncating at the end would build the whole string first.
 		[ "$fails" -lt 10 ] && bad_names="$bad_names $name"
+		# UNCAPPED, and the full host path - see write_bad_list.
+		[ -n "$BAD_LIST" ] && bad_paths="$bad_paths$host
+"
 		bad "$name: $short of $n keyframe intervals below ${MIN_GAP}s - $detail
           Jellyfin will merge segments for this file and browser playback will drift."
 	else
@@ -352,6 +382,7 @@ fi
 
 printf '\n'
 write_marker ""
+write_bad_list
 if [ "$fails" -gt 0 ]; then
 	printf '\033[31m%d of %d file(s) will drift in a browser.\033[0m ' "$fails" "$checked"
 	printf 'Re-transcode them, or watch those in a native client, which direct-plays.\n'

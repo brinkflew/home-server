@@ -4654,6 +4654,55 @@ if [ -z "$GREENBOOT" ]; then
 		ok media.keyframe_drift "${media_checked:-0} library file(s) checked, none with keyframes closer than the HLS segment"
 	fi
 
+	# THE REWORK SIDING, WHOSE ONLY CORRECT STATE IS EMPTY. bin/requeue-drifting.sh
+	# copies drifting files into library/rework/<type>, a Tdarr library watches it,
+	# and the flow's last node DELETES each file as it promotes the output - so a
+	# file still sitting there is one the flow did not finish with.
+	#
+	# AND NOTHING ELSE ON THIS HOST WOULD SAY SO. That is the whole reason this
+	# check exists rather than being left to Tdarr: a failed Tdarr job leaves no
+	# failed unit and no unhealthy container - tdarr-node-01 goes on reporting
+	# healthy, because serving is what it is probed for - and the job sits on the
+	# Jobs tab where only somebody already looking would find it. The siding is the
+	# witness, the way the agent fleet's marker is.
+	#
+	# AGE, NOT COUNT, IS THE FINDING. A batch in flight is the ordinary state for
+	# tens of minutes at a time and must read as work rather than as a fault; two
+	# NVENC sessions at 100% is what that looks like. Six hours is well past the
+	# slowest single file this flow has produced and comfortably inside a batch,
+	# so it separates "encoding" from "stuck" without knowing Tdarr's queue.
+	#
+	# NOTE AND NEVER WARN, on media.keyframe_drift's own precedent one gate up: the
+	# backlog it belongs to is deliberately unalerted, and a stuck file is a thing
+	# to notice while deciding what to do next rather than a page. It is also a
+	# FAIL that must not exist - a FAIL here would block an OS security update over
+	# a film, which is the mistake SuccessExitStatus=1 was added to undo.
+	rework_dir="${HOME_SERVER_REWORK_DIR:-${DOCKER_VOLUME_MEDIA:-/mnt/media}/library/rework}"
+	rework_n="" rework_oldest_h=""
+	if [ -d "$rework_dir" ]; then
+		rework_n=$(find "$rework_dir" -type f ! -name '.*' 2>/dev/null | grep -c . || true)
+		case "$rework_n" in ''|*[!0-9]*) rework_n=0 ;; esac
+		if [ "$rework_n" -gt 0 ]; then
+			rework_old=$(find "$rework_dir" -type f ! -name '.*' -printf '%T@\n' 2>/dev/null \
+				| sort -n | head -1 | cut -d. -f1)
+			case "${rework_old:-}" in
+				''|*[!0-9]*) ;;
+				*) rework_oldest_h=$(( ( $(date +%s) - rework_old ) / 3600 )) ;;
+			esac
+		fi
+	fi
+	fact media_rework_queued "${rework_n:-}" num
+	fact media_rework_oldest_h "${rework_oldest_h:-}" num
+	if [ ! -d "$rework_dir" ]; then
+		note media.rework_stuck "no rework siding at $rework_dir - nothing has been re-queued, which is the ordinary state; bin/requeue-drifting.sh refuses rather than creating it, because a directory nothing watches would swallow the files"
+	elif [ "$rework_n" -eq 0 ]; then
+		ok media.rework_stuck "the rework siding is empty - nothing is mid-re-transcode and nothing has been left behind"
+	elif [ -n "$rework_oldest_h" ] && [ "$rework_oldest_h" -ge 6 ]; then
+		note media.rework_stuck "$rework_n file(s) have been in the rework siding for ${rework_oldest_h}h - the flow deletes each one as it promotes the output, so this long means a job failed and left it. A failed Tdarr job leaves no failed unit and no unhealthy container, so nothing else here would say so: read Tdarr's Jobs tab, and 'find $rework_dir -type f -printf \"%T+ %p\\n\" | sort | head'"
+	else
+		ok media.rework_stuck "$rework_n file(s) in the rework siding, oldest ${rework_oldest_h:-0}h - a batch in flight, which is what this looks like while the encoder is working"
+	fi
+
 	# --------------------------------------------------------------------------
 	# Logs. The policy, and whether it is actually in force.
 	# --------------------------------------------------------------------------

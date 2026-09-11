@@ -189,6 +189,8 @@ jq -r '.checks[]|select(.status!="pass")|"\(.status)  \(.id)  \(.message)"' \
 bin/collect-metrics.py --print | grep container_network   # the per-segment counters
 ./bin/verify-media.sh "/mnt/media/library/transcoded/movies/<film>/<film>.mkv"
 ./bin/verify-media.sh --library movies        # will these drift in a browser?
+./bin/requeue-drifting.sh --dry-run           # the keyframe backlog: what it would re-transcode
+./bin/requeue-drifting.sh                     # three files; COPIES, never moves - see docs/media-pipeline.md
 podman auto-update --dry-run                  # 17 rows with a policy, not an empty table
 systemctl --user list-timers                  # verify hourly, backup + auto-update + search nightly,
                                               # restore-verify weekly Wed + off-site first Mon

@@ -50,6 +50,13 @@
 # sweep that found drift, and a die() that could not run at all. The script's
 # header says so; media.verify_run reads media_error rather than the code.
 #
+# --bad-list IS A SECOND OUTPUT AND NOT A WIDER MARKER, because the marker caps
+# its names at ten - status.json is read whole by the dashboard, so 690 paths
+# cannot go in it - while the remedy needs all of them, as full paths. It is
+# written here rather than on demand so that bin/requeue-drifting.sh never has to
+# start by running a 25-minute sweep off the one spindle Jellyfin also reads,
+# which is the cost that would make somebody do it by hand instead.
+#
 # SuccessExitStatus=1, AND THE FIRST FULL SWEEP IS WHY. It found 690 drifting
 # files of 725 - a real backlog - exited 1 as designed, and systemd put the unit
 # in `failed`. That is wrong in three directions at once: it leaves a permanent
@@ -81,7 +88,8 @@ Documentation=file:/var/home-server/bin/verify-media.sh
 Type=oneshot
 ExecCondition=/var/home-server/bin/verify-media.sh --gate
 ExecStart=/var/home-server/bin/verify-media.sh --library \
-          --marker %h/.cache/home-server/media-state
+          --marker %h/.cache/home-server/media-state \
+          --bad-list %h/.cache/home-server/media-bad-list
 TimeoutStartSec=90min
 SuccessExitStatus=1
 
