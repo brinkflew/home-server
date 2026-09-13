@@ -571,6 +571,8 @@ fi
 if [ -n "$SYNTHETIC" ]; then
 	say "Synthetic Container DB Verification"
 	if command -v podman >/dev/null 2>&1; then
+		# Ensure restored config files are readable by unprivileged container users
+		chmod -R a+r "$CONFIG" 2>/dev/null || true
 		pgdump="$CONFIG/windmill-db/dumpall.sql"
 		if [ -f "$pgdump" ]; then
 			if podman run --rm --net=none \
@@ -585,7 +587,8 @@ if [ -n "$SYNTHETIC" ]; then
 		if [ -f "$CONFIG/pocket-id/pocket-id.db" ]; then
 			if podman run --rm --net=none \
 				-v "$CONFIG/pocket-id/pocket-id.db:/pocket-id.db:ro,z" \
-				docker.io/library/alpine:latest sh -c "apk add --no-cache sqlite >/dev/null 2>&1 && sqlite3 /pocket-id.db 'SELECT count(*) FROM sqlite_master;'" >/dev/null 2>&1; then
+				docker.io/oven/bun:1 \
+				bun -e "import { Database } from 'bun:sqlite'; const res = new Database('/pocket-id.db').query('SELECT count(*) FROM sqlite_master;').get(); if (!res) process.exit(1);" >/dev/null 2>&1; then
 				ok "Pocket ID SQLite DB operational query verified in synthetic container"
 			else
 				bad "Pocket ID synthetic container query test failed"
