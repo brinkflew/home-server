@@ -21,7 +21,7 @@ Network=net-agents.network
 
 NoNewPrivileges=true
 
-Volume=/var/home-server/apps/egress-proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+Volume=/var/home-server/apps/egress-proxy/Caddyfile:/etc/caddy/Caddyfile:z,ro
 
 Environment=PUID=0
 Environment=PGID=0
