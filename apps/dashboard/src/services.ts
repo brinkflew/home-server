@@ -819,7 +819,7 @@ export function conditionRows(rows: ServiceRow[]): ConditionRow[] {
  * only when the two disagree, or the column would print "0 / 0" on 28 rows.
  */
 export function restartLine(row: ServiceRow): string | null {
-  if (!Number.isFinite(row.podmanRestarts) || row.podmanRestarts === 0) return null;
+  if (!row || !Number.isFinite(row.podmanRestarts) || row.podmanRestarts === 0) return null;
   return `${fmt.number(row.podmanRestarts)} by podman`;
 }
 

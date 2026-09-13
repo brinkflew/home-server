@@ -363,12 +363,12 @@ const summary = computed(() => {
             vector-effect="non-scaling-stroke"
             v-bind="tip.hover(`grp-${g.id}`, groupTip(g.id))"
           />
-          <circle :cx="g.x + 14" :cy="g.y + 17" r="3.5" :fill="`var(--${groupTone(g.id)})`" />
-          <text :x="g.x + 24" :y="g.y + 21" class="g-name">{{ g.id }}</text>
-          <text :x="g.x + 12" :y="g.y + 34" class="g-sub">
+          <circle :cx="g.x + 11" :cy="g.y + 13" r="2.5" :fill="`var(--${groupTone(g.id)})`" />
+          <text :x="g.x + 18" :y="g.y + 16" class="g-name">{{ g.id }}</text>
+          <text :x="g.x + 9" :y="g.y + 27" class="g-sub">
             {{ fitRole(segById.get(g.id)?.subnet || g.purpose, g.w) }}
           </text>
-          <text :x="g.x + g.w - 12" :y="g.y + 21" class="g-count" text-anchor="end">
+          <text :x="g.x + g.w - 9" :y="g.y + 16" class="g-count" text-anchor="end">
             {{ segById.get(g.id)?.members.length ?? g.members.length }}
           </text>
 
@@ -379,32 +379,32 @@ const summary = computed(() => {
               :y="m.y"
               :width="m.w"
               :height="m.h"
-              rx="6"
+              rx="5"
               fill="var(--surface-high)"
               stroke="var(--line)"
               vector-effect="non-scaling-stroke"
               v-bind="tip.hover(`node-${m.name}`, nodeTip(m.name))"
             />
-            <circle :cx="m.x + 11" :cy="m.y + 13" r="3" :fill="`var(--${tone(m.name)})`" />
-            <text :x="m.x + 20" :y="m.y + 16" class="n-name">{{ fitName(m.name, m.w) }}</text>
-            <text :x="m.x + 9" :y="m.y + 27" class="n-role">{{ fitRole(m.role, m.w) }}</text>
+            <circle :cx="m.x + 9" :cy="m.y + 10" r="2.5" :fill="`var(--${tone(m.name)})`" />
+            <text :x="m.x + 15" :y="m.y + 12" class="n-name">{{ fitName(m.name, m.w) }}</text>
+            <text :x="m.x + 7" :y="m.y + 21" class="n-role">{{ fitRole(m.role, m.w) }}</text>
 
             <!-- The pod: three containers with no stack of their own. -->
             <g v-if="m.pod.length">
               <rect
-                :x="m.x + 6"
-                :y="m.y + 32"
-                :width="m.w - 12"
-                :height="m.pod.length * 13 + 4"
-                rx="4"
+                :x="m.x + 4"
+                :y="m.y + 24"
+                :width="m.w - 8"
+                :height="m.pod.length * 12 + 3"
+                rx="3"
                 fill="oklch(0 0 0 / 0.25)"
                 stroke="var(--line)"
                 stroke-dasharray="2 3"
                 vector-effect="non-scaling-stroke"
               />
               <g v-for="(pm, i) in m.pod" :key="pm">
-                <circle :cx="m.x + 15" :cy="m.y + 41 + i * 13" r="2.5" :fill="`var(--${tone(pm)})`" />
-                <text :x="m.x + 22" :y="m.y + 44 + i * 13" class="p-name">{{ pm }}</text>
+                <circle :cx="m.x + 11" :cy="m.y + 31 + i * 12" r="2" :fill="`var(--${tone(pm)})`" />
+                <text :x="m.x + 16" :y="m.y + 33 + i * 12" class="p-name">{{ pm }}</text>
               </g>
             </g>
           </g>
@@ -425,7 +425,7 @@ const summary = computed(() => {
             :y="s.y"
             :width="s.w"
             :height="s.h"
-            rx="8"
+            rx="6"
             fill="var(--surface-high)"
             :stroke="focus === s.name ? 'var(--accent)' : 'var(--line-strong)'"
             :stroke-width="focus === s.name ? 1.8 : 1"
@@ -435,15 +435,15 @@ const summary = computed(() => {
           />
           <circle
             v-if="s.kind === 'service'"
-            :cx="s.x + 11"
-            :cy="s.y + 15"
-            r="3"
+            :cx="s.x + 9"
+            :cy="s.y + 12"
+            r="2.5"
             :fill="`var(--${tone(s.name)})`"
           />
-          <text :x="s.kind === 'service' ? s.x + 20 : s.x + 10" :y="s.y + 18" class="n-name">
+          <text :x="s.kind === 'service' ? s.x + 16 : s.x + 8" :y="s.y + 14" class="n-name">
             {{ fitName(s.name, s.w) }}
           </text>
-          <text :x="s.x + 10" :y="s.y + 32" class="n-role">
+          <text :x="s.x + 8" :y="s.y + 26" class="n-role">
             {{ fitRole(s.networks.length ? `${s.networks.length} segments` : s.role, s.w) }}
           </text>
         </g>
@@ -496,34 +496,40 @@ const summary = computed(() => {
 }
 
 .g-name {
-  font: var(--t-mono-sm);
+  font-size: 11px;
+  font-family: var(--font-mono);
   font-weight: 600;
   fill: var(--fg);
 }
 
 .g-sub {
-  font: var(--t-mono-xs);
+  font-size: 9.5px;
+  font-family: var(--font-mono);
   fill: var(--fg-4);
 }
 
 .g-count {
-  font: var(--t-mono-xs);
+  font-size: 9.5px;
+  font-family: var(--font-mono);
   fill: var(--fg-3);
 }
 
 .n-name {
-  font: var(--t-mono-sm);
+  font-size: 11px;
+  font-family: var(--font-mono);
   font-weight: 500;
   fill: var(--fg-2);
 }
 
 .n-role {
-  font: var(--t-mono-xs);
+  font-size: 9.5px;
+  font-family: var(--font-mono);
   fill: var(--fg-5);
 }
 
 .p-name {
-  font: var(--t-mono-xs);
+  font-size: 9px;
+  font-family: var(--font-mono);
   fill: var(--fg-4);
 }
 

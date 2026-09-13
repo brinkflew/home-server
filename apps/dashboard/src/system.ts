@@ -62,7 +62,7 @@ export const BACKUPS: BackupSpec[] = [
   { label: "off-site", key: "backup_offsite_at", limit: 72 * 3600 },
   { label: "policy proof", key: "backup_offsite_policy_ok_at", limit: 48 * 3600 },
   { label: "off-site prune", key: "backup_offsite_pruned_at", limit: 30 * 86400 },
-  { label: "synthetic restore", key: "restore_synthetic_verified_server_at", limit: 336 * 3600 },
+  { label: "synthetic restore", key: "backup_restore_synthetic_verified_server_at", limit: 336 * 3600 },
 ];
 
 /**

@@ -665,7 +665,10 @@ if (batteryNet === null) {
   console.log("SKIP  bin/verify-host.sh is not readable from here");
 } else {
   const emitted = new Set(
-    [...batteryNet.matchAll(/\b(?:ok|warn|fail|note) ([a-z_]+\.[a-z_0-9]+)/g)].map((mm) => mm[1]),
+    [
+      ...batteryNet.matchAll(/\b(?:ok|warn|fail|note) ([a-z_]+(?:\.[a-z_0-9]+)?)/g),
+      ...batteryNet.matchAll(/check_backup_age\s+[^\n]+\s+([a-z_]+_at)\b/g),
+    ].map((mm) => mm[1]),
   );
   check("every finding id the network page names is one the battery emits",
     N.FINDING_IDS.filter((id) => !emitted.has(id)), []);
@@ -2737,7 +2740,7 @@ if (battery === null) {
   check("podman's is 0 on that row, as it is on the host", by("bazarr").podmanRestarts, 0);
   check("a looping unit with a healthy container is a finding", by("ntfy-alertmanager").tone, "warn");
   check("...and it names the state", by("ntfy-alertmanager").state, "restarting");
-  check("podman's count is only stated when it differs", svc.restartLine(by("joal")), "2 by podman");
+  check("podman's count is only stated when it differs", svc.restartLine(by("unpackerr")), "2 by podman");
   check("...and never otherwise", svc.restartLine(by("caddy")), null);
 
   // --- absent is not zero, still ---------------------------------------------

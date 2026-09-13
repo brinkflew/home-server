@@ -49,21 +49,21 @@
 import { PATHS, isPseudo } from "@/paths";
 
 // --- the group grid -----------------------------------------------------------
-export const GROUP_W = 292;
-export const GROUP_GAP_X = 26;
+export const GROUP_W = 220;
+export const GROUP_GAP_X = 20;
 /** The group header: id, then purpose and subnet on a second line. */
-export const GROUP_HEAD = 42;
-export const GROUP_PAD = 9;
+export const GROUP_HEAD = 34;
+export const GROUP_PAD = 7;
 /** A member row inside a group. */
-export const MEMBER_H = 34;
-export const MEMBER_GAP = 5;
+export const MEMBER_H = 26;
+export const MEMBER_GAP = 4;
 /** A pod member, nested under the container that holds the namespace. */
-export const POD_H = 13;
+export const POD_H = 12;
 
 // --- the spine ----------------------------------------------------------------
-export const SPINE_W = 168;
-export const SPINE_H = 42;
-export const SPINE_GAP = 14;
+export const SPINE_W = 140;
+export const SPINE_H = 34;
+export const SPINE_GAP = 10;
 
 // --- routing ------------------------------------------------------------------
 /** One vertical lane per spine node, in the left margin. */
@@ -484,8 +484,8 @@ export function gridWidth(columns: number, lanes = 6): number {
   return marginL + columns * GROUP_W + (columns - 1) * GROUP_GAP_X + LANE_PAD;
 }
 
-/** The widest layout for a panel, 3 columns down to 1. */
-export const MAX_COLUMNS = 3;
+/** The widest layout for a panel, up to 5 columns on desktop. */
+export const MAX_COLUMNS = 5;
 
 /**
  * The column count for a measured panel width.
@@ -561,8 +561,8 @@ export function flowDuration(rate: number): number {
  * --t-mono-xs is 11px and --t-mono-md is 13px, and Spline Sans Mono advances
  * 0.6em, so 6.6 and 7.8.
  */
-const ADV_ROLE = 6.6; // --t-mono-xs, 11px
-const ADV_NAME = 7.8; // --t-mono-md, 13px
+const ADV_ROLE = 5.7; // --t-mono-xs, 9.5px
+const ADV_NAME = 6.6; // --t-mono-sm, 11px
 
 function fit(text: string, budget: number, advance: number): string {
   const max = Math.floor(budget / advance);

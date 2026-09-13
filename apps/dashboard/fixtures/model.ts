@@ -407,7 +407,7 @@ patch("sonarr", { memory: 384 * 1024 ** 2, refault: 0, stallSome: 0.071, stallFu
 // A CONTAINER THAT RESTARTED WITHOUT ITS UNIT RESTARTING, which is podman's own
 // doing and the one thing podman's counter can say that systemd's cannot. It is
 // 0 on every other row here, exactly as it is on the live host.
-patch("joal", { restarts: 2 });
+patch("unpackerr", { restarts: 2 });
 
 // -----------------------------------------------------------------------------
 // The units, which are the half podman cannot see
