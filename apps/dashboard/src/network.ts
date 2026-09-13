@@ -1050,9 +1050,15 @@ export function graphModel(segments: SegmentRow[]): GraphModel {
     });
   }
 
-  // Busiest first, terminals and the tunnel last: the spine reads as "these are
-  // the things that are not inside one segment", worst offender leading.
-  const rank = (s: GraphSpine): number => (s.kind === "service" ? 0 : 1);
+  // Reads left-to-right starting with the public ingress node (wan -> caddy),
+  // multi-homed services, the VPN tunnel, and outbound internet egress.
+  const rank = (s: GraphSpine): number => {
+    if (s.name === "wan") return 0;
+    if (s.name === "caddy") return 1;
+    if (s.kind === "service") return 2;
+    if (s.kind === "tunnel") return 3;
+    return 4; // internet
+  };
   const spine = [...spineBy.values()].sort(
     (a, b) => rank(a) - rank(b) || b.networks.length - a.networks.length || a.name.localeCompare(b.name),
   );

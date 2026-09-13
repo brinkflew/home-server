@@ -607,7 +607,7 @@ check("it is on the spine instead", spineNames.includes("caddy"), true);
 check("prowlarr, the one hop out of net-solver, is too", spineNames.includes("prowlarr"), true);
 check("the tunnel finally has a box", spineNames.includes("tunnel"), true);
 check("and so do the two terminals", spineNames.includes("wan") && spineNames.includes("internet"), true);
-check("the spine leads with the worst offender", netModel.spine[0].name, "caddy");
+check("the spine leads with the public ingress node", netModel.spine[0].name, "wan");
 
 // EVERY RUNG, because the layout is the one thing here that changes shape with
 // the viewport - and the version this replaces did not reflow at all, it shrank.
@@ -747,7 +747,7 @@ if (batteryNet === null) {
 check("three columns need the most room", G.columnsFor(G.gridWidth(3)), 3);
 check("one pixel under drops to two", G.columnsFor(G.gridWidth(3) - 1), 2);
 check("a phone gets one", G.columnsFor(390), 1);
-check("an unmeasured panel assumes the widest", G.columnsFor(0), 3);
+check("an unmeasured panel assumes the widest", G.columnsFor(0), G.MAX_COLUMNS);
 
 
 // --- the two fleets ----------------------------------------------------------
