@@ -518,8 +518,16 @@ export function smartLine(d: Drive): { text: string; tone: Tone } {
   if (Number.isFinite(d.realloc) && d.realloc > 0) {
     return { text: `${d.realloc} reallocated sector(s)`, tone: "warn" };
   }
+
+  const parts: string[] = [];
+  if (Number.isFinite(d.nvmeCriticalWarning)) {
+    parts.push(`NVMe status 0x${(d.nvmeCriticalWarning ?? 0).toString(16)} (OK)`);
+  }
   if (Number.isFinite(d.wear)) {
-    return { text: `${fmt.percent(d.wear, 0)} of rated write endurance used`, tone: "ok" };
+    parts.push(`${fmt.percent(d.wear, 0)} wear`);
+  }
+  if (parts.length > 0) {
+    return { text: parts.join(" - "), tone: "ok" };
   }
   return { text: "no reallocated, pending or media errors", tone: "ok" };
 }

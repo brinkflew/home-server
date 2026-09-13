@@ -260,9 +260,21 @@ const commitment = computed(() => {
         <span class="reading mono">{{ lead.text }}</span>
       </div>
       <p class="lead-sub mono">{{ lead.sub }}</p>
-      <p v-if="Number.isFinite(scratchTotal) && scratchTotal > 0" class="scratch-sub mono">
-        scratch buffer {{ fmt.bytes(scratchFree) }} free of {{ fmt.bytes(scratchTotal) }}
-      </p>
+      <div v-if="Number.isFinite(scratchTotal) && scratchTotal > 0" class="scratch-box">
+        <div class="scratch-label mono">
+          <span>scratch buffer (transcode)</span>
+          <span class="scratch-read">{{ fmt.bytes(scratchFree) }} free of {{ fmt.bytes(scratchTotal) }}</span>
+        </div>
+        <div class="bar">
+          <span
+            class="fill"
+            :style="{
+              width: `${Math.min(100, Math.max(0, ((scratchTotal - scratchFree) / scratchTotal) * 100)).toFixed(1)}%`,
+              background: 'var(--ok)',
+            }"
+          />
+        </div>
+      </div>
     </PanelBox>
   </Band>
 
@@ -493,9 +505,23 @@ const commitment = computed(() => {
   color: var(--fg-5);
 }
 
-.scratch-sub {
-  margin-top: 4px;
+.scratch-box {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.scratch-label {
+  display: flex;
+  justify-content: space-between;
   font: var(--t-mono-xs);
+  color: var(--fg-3);
+}
+
+.scratch-read {
   color: var(--fg-5);
 }
 
