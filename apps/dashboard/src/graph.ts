@@ -276,7 +276,33 @@ function groupHeight(g: GraphGroup): number {
 export function layout(model: GraphModel, columns = 3): Layout {
   const cols = Math.max(1, Math.floor(columns));
 
-  // --- place the groups on a grid ---------------------------------------------
+  const routing = model.spine.filter((s) => s.networks.length > 0);
+  const laneIndex = new Map<string, number>();
+  routing.forEach((s, i) => laneIndex.set(s.name, i));
+
+  // --- the left margin, one vertical lane per routing spine node --------------
+  const marginL = routing.length ? LANE_PAD + routing.length * LANE_X + 6 : LANE_PAD;
+
+  // --- the spine (PLACED AT TOP SO PUBLIC INGRESS wan -> caddy LEADS) ---------
+  const spineTop = TOP_PAD;
+  // Estimate grid width to calculate perRow for spine
+  const estimatedGridW = marginL + cols * GROUP_W + (cols - 1) * GROUP_GAP_X + LANE_PAD;
+  const perRow = Math.max(1, Math.floor((estimatedGridW - marginL) / (SPINE_W + SPINE_GAP)));
+  const spine: PlacedSpine[] = model.spine.map((s, i) => ({
+    name: s.name,
+    role: s.role,
+    kind: s.kind,
+    x: marginL + (i % perRow) * (SPINE_W + SPINE_GAP),
+    y: spineTop + Math.floor(i / perRow) * (SPINE_H + SPINE_GAP),
+    w: SPINE_W,
+    h: SPINE_H,
+    networks: s.networks,
+    pod: s.pod,
+  }));
+  const spineRows = Math.ceil(model.spine.length / perRow) || 1;
+  const spineBottom = spineTop + spineRows * SPINE_H + (spineRows - 1) * SPINE_GAP;
+
+  // --- place the groups on a grid below the spine ----------------------------
   const heights = model.groups.map(groupHeight);
   const rowCount = Math.ceil(model.groups.length / cols) || 1;
   const rowH: number[] = [];
@@ -292,13 +318,6 @@ export function layout(model: GraphModel, columns = 3): Layout {
   model.groups.forEach((g, i) => rowOf.set(g.id, Math.floor(i / cols)));
 
   // --- work out how many lanes each band needs --------------------------------
-  // A BAND IS SIZED BY WHAT ACTUALLY ROUTES THROUGH IT, not by the spine's
-  // length. Reserving six lanes above every row would add ~78px of white space
-  // four times over for the two rows that carry one line each.
-  const routing = model.spine.filter((s) => s.networks.length > 0);
-  const laneIndex = new Map<string, number>();
-  routing.forEach((s, i) => laneIndex.set(s.name, i));
-
   const bandLanes: Map<number, string[]> = new Map();
   for (let r = 0; r < rowCount; r += 1) bandLanes.set(r, []);
   for (const s of routing) {
@@ -315,11 +334,8 @@ export function layout(model: GraphModel, columns = 3): Layout {
     bandH.push(Math.max(BAND_MIN, (bandLanes.get(r)?.length ?? 0) * LANE_Y + 8));
   }
 
-  // --- the left margin, one vertical lane per routing spine node --------------
-  const marginL = routing.length ? LANE_PAD + routing.length * LANE_X + 6 : LANE_PAD;
-
   const rowY: number[] = [];
-  let y = TOP_PAD;
+  let y = spineBottom + BAND_MIN;
   for (let r = 0; r < rowCount; r += 1) {
     y += bandH[r] ?? BAND_MIN;
     rowY.push(y);
@@ -330,7 +346,7 @@ export function layout(model: GraphModel, columns = 3): Layout {
     const col = i % cols;
     const row = Math.floor(i / cols);
     const gx = marginL + col * (GROUP_W + GROUP_GAP_X);
-    const gy = rowY[row] ?? TOP_PAD;
+    const gy = rowY[row] ?? y;
 
     let my = gy + GROUP_HEAD;
     const members: PlacedMember[] = g.members.map((m) => {
@@ -363,30 +379,10 @@ export function layout(model: GraphModel, columns = 3): Layout {
   });
 
   const gridW = marginL + cols * GROUP_W + (cols - 1) * GROUP_GAP_X + LANE_PAD;
-
-  // --- the spine --------------------------------------------------------------
-  const spineTop = y + BAND_MIN;
-  const perRow = Math.max(1, Math.floor((gridW - marginL) / (SPINE_W + SPINE_GAP)));
-  const spine: PlacedSpine[] = model.spine.map((s, i) => ({
-    name: s.name,
-    role: s.role,
-    kind: s.kind,
-    x: marginL + (i % perRow) * (SPINE_W + SPINE_GAP),
-    y: spineTop + Math.floor(i / perRow) * (SPINE_H + SPINE_GAP),
-    w: SPINE_W,
-    h: SPINE_H,
-    networks: s.networks,
-    pod: s.pod,
-  }));
-  const spineRows = Math.ceil(model.spine.length / perRow) || 1;
-  const spineBottom = spineTop + spineRows * SPINE_H + (spineRows - 1) * SPINE_GAP;
-
   const byName = new Map(spine.map((s) => [s.name, s]));
   const byId = new Map(groups.map((g) => [g.id, g]));
 
   // --- the elbows -------------------------------------------------------------
-  // Anchors are shared out along a group's top edge so two lines never enter it
-  // at the same point, which would read as one line.
   const incoming = new Map<string, string[]>();
   for (const s of routing) {
     for (const net of s.networks) {
@@ -410,7 +406,7 @@ export function layout(model: GraphModel, columns = 3): Layout {
 
       const lanes = bandLanes.get(g.row) ?? [];
       const slot = lanes.indexOf(s.name);
-      const bandTop = (rowY[g.row] ?? TOP_PAD) - (bandH[g.row] ?? BAND_MIN);
+      const bandTop = (rowY[g.row] ?? y) - (bandH[g.row] ?? BAND_MIN);
       const laneY = bandTop + 5 + Math.max(0, slot) * LANE_Y;
 
       const peers = incoming.get(net) ?? [];
@@ -434,35 +430,45 @@ export function layout(model: GraphModel, columns = 3): Layout {
     }
   }
 
-  // Spine-to-spine, routed UNDER the spine row so it cannot cross a node box.
-  const underY = spineBottom + 9;
+  // Spine-to-spine links (e.g. wan -> caddy).
+  // Side-by-side direct connection when adjacent, or routed along top.
   for (const s of model.spine) {
     const from = byName.get(s.name);
     if (!from) continue;
     for (const link of s.links) {
       const to = byName.get(link);
       if (!to) continue;
+      const cyFrom = from.y + from.h / 2;
+      const cyTo = to.y + to.h / 2;
+      let d: string;
+      if (Math.abs(cyFrom - cyTo) < 5 && to.x > from.x) {
+        d = roundedPath([
+          [from.x + from.w, cyFrom],
+          [to.x, cyTo],
+        ]);
+      } else {
+        const topY = Math.min(from.y, to.y) - 6;
+        d = roundedPath([
+          [from.x + from.w / 2, from.y],
+          [from.x + from.w / 2, topY],
+          [to.x + to.w / 2, topY],
+          [to.x + to.w / 2, to.y],
+        ]);
+      }
       elbows.push({
         key: `${s.name}>${link}`,
         node: s.name,
         target: link,
-        d: roundedPath([
-          [from.x + from.w / 2, from.y + from.h],
-          [from.x + from.w / 2, underY],
-          [to.x + to.w / 2, underY],
-          [to.x + to.w / 2, to.y + to.h],
-        ]),
-        tickX: (from.x + to.x + from.w) / 2,
-        tickY: underY,
+        d,
+        tickX: (from.x + from.w + to.x) / 2,
+        tickY: cyFrom,
       });
     }
   }
 
-  const hasUnder = model.spine.some((s) => s.links.length > 0);
-
   return {
     width: gridW,
-    height: (hasUnder ? underY + 6 : spineBottom) + BOTTOM_PAD,
+    height: y + BOTTOM_PAD,
     columns: cols,
     groups,
     spine,
