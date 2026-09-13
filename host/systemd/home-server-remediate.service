@@ -1,0 +1,16 @@
+# ==============================================================================
+# Self-healing remediation for transient status findings
+# ------------------------------------------------------------------------------
+# Executed on a timer to automatically resolve transient findings recorded in
+# /var/lib/home-server/status.json (e.g. recycling Flaresolverr, re-pushing VPN
+# port forwards, clearing stalled downloads).
+# ==============================================================================
+
+[Unit]
+Description=Self-healing remediation for transient status findings
+Documentation=file:/var/home-server/bin/remediate-findings.sh
+
+[Service]
+Type=oneshot
+ExecStart=/var/home-server/bin/remediate-findings.sh
+SuccessExitStatus=0

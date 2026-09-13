@@ -1,0 +1,14 @@
+# ==============================================================================
+# Run self-healing remediation every 15 minutes
+# ==============================================================================
+
+[Unit]
+Description=Self-healing remediation timer, every 15 minutes
+
+[Timer]
+OnCalendar=*:0,15,30,45
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
