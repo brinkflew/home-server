@@ -62,6 +62,7 @@ export const BACKUPS: BackupSpec[] = [
   { label: "off-site", key: "backup_offsite_at", limit: 72 * 3600 },
   { label: "policy proof", key: "backup_offsite_policy_ok_at", limit: 48 * 3600 },
   { label: "off-site prune", key: "backup_offsite_pruned_at", limit: 30 * 86400 },
+  { label: "synthetic restore", key: "restore_synthetic_verified_server_at", limit: 336 * 3600 },
 ];
 
 /**
@@ -481,6 +482,8 @@ export interface Drive {
   realloc: number;
   pending: number;
   mediaErrors: number;
+  nvmeCriticalWarning?: number;
+  nvmeCompositeTemp?: number;
 }
 
 /**
@@ -503,6 +506,9 @@ export function smartLine(d: Drive): { text: string; tone: Tone } {
     return { text: "no SMART health reported for this device", tone: "off" };
   }
   if (!d.healthy) return { text: "SMART reports the drive as failing", tone: "fail" };
+  if (Number.isFinite(d.nvmeCriticalWarning) && (d.nvmeCriticalWarning ?? 0) > 0) {
+    return { text: `NVMe critical warning (0x${(d.nvmeCriticalWarning ?? 0).toString(16)})`, tone: "fail" };
+  }
   if (Number.isFinite(d.pending) && d.pending > 0) {
     return { text: `${d.pending} pending sector(s)`, tone: "fail" };
   }

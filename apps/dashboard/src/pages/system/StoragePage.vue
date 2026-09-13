@@ -46,7 +46,7 @@ const metricsStale = useMetricsStale();
 // Drives, filesystems and SMART
 // ---------------------------------------------------------------------------
 const storage = usePoll(async (signal) => {
-  const [info, health, temp, hours, wear, realloc, pending, media, size, avail] = await Promise.all([
+  const [info, health, temp, hours, wear, realloc, pending, media, nvmeWarn, nvmeTemp, scratchFree, scratchTotal, size, avail] = await Promise.all([
     labelsBy(SYSTEM.disksInfo, "device", signal),
     instantBy(SYSTEM.diskHealth, "device", signal),
     instantBy(SYSTEM.diskTemp, "device", signal),
@@ -55,6 +55,10 @@ const storage = usePoll(async (signal) => {
     instantBy(SYSTEM.diskReallocated, "device", signal),
     instantBy(SYSTEM.diskPending, "device", signal),
     instantBy(SYSTEM.diskMediaErrors, "device", signal),
+    instantBy(SYSTEM.diskNvmeCriticalWarning, "device", signal),
+    instantBy(SYSTEM.diskNvmeCompositeTemp, "device", signal),
+    instant(SYSTEM.scratchFreeBytes, signal).then((r) => value(r[0]?.value)),
+    instant(SYSTEM.scratchTotalBytes, signal).then((r) => value(r[0]?.value)),
     instant(SYSTEM.filesystems, signal),
     instantBy(SYSTEM.filesystemAvail, "mountpoint", signal),
   ]);
@@ -73,24 +77,29 @@ const storage = usePoll(async (signal) => {
   // in red as the first. See src/system.ts.
   const drives: sys.Drive[] = [...info.entries()].map(([device, labels]) => {
     const h = health.get(device);
+    const dTemp = temp.get(device) ?? nvmeTemp.get(device) ?? Number.NaN;
     return {
       device,
       model: labels.model ?? "",
       healthy: h === undefined ? null : h === 1,
-      temp: temp.get(device) ?? Number.NaN,
+      temp: dTemp,
       hours: hours.get(device) ?? Number.NaN,
       wear: wear.get(device) ?? Number.NaN,
       realloc: realloc.get(device) ?? Number.NaN,
       pending: pending.get(device) ?? Number.NaN,
       mediaErrors: media.get(device) ?? Number.NaN,
+      nvmeCriticalWarning: nvmeWarn.get(device),
+      nvmeCompositeTemp: nvmeTemp.get(device),
     };
   });
 
-  return { drives, filesystems };
+  return { drives, filesystems, scratchFree, scratchTotal };
 }, 60_000);
 
 const mounts = computed(() => storage.data.value?.filesystems ?? []);
 const drives = computed(() => storage.data.value?.drives ?? []);
+const scratchFree = computed(() => storage.data.value?.scratchFree ?? Number.NaN);
+const scratchTotal = computed(() => storage.data.value?.scratchTotal ?? Number.NaN);
 
 const backupRows = computed(() =>
   sys.BACKUPS.map((b) => ({
@@ -251,6 +260,9 @@ const commitment = computed(() => {
         <span class="reading mono">{{ lead.text }}</span>
       </div>
       <p class="lead-sub mono">{{ lead.sub }}</p>
+      <p v-if="Number.isFinite(scratchTotal) && scratchTotal > 0" class="scratch-sub mono">
+        scratch buffer {{ fmt.bytes(scratchFree) }} free of {{ fmt.bytes(scratchTotal) }}
+      </p>
     </PanelBox>
   </Band>
 
@@ -478,6 +490,12 @@ const commitment = computed(() => {
 .lead-sub {
   margin-top: 7px;
   font: var(--t-mono-sm);
+  color: var(--fg-5);
+}
+
+.scratch-sub {
+  margin-top: 4px;
+  font: var(--t-mono-xs);
   color: var(--fg-5);
 }
 

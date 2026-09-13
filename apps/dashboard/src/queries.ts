@@ -154,6 +154,10 @@ export const SYSTEM = {
   diskReallocated: "home_server_disk_reallocated_sectors",
   diskPending: "home_server_disk_pending_sectors",
   diskMediaErrors: "home_server_disk_media_errors_total",
+  diskNvmeCriticalWarning: "home_server_disk_nvme_critical_warning",
+  diskNvmeCompositeTemp: "home_server_disk_nvme_composite_temp_celsius",
+  scratchFreeBytes: "home_server_scratch_free_bytes",
+  scratchTotalBytes: "home_server_scratch_total_bytes",
 
 } as const;
 

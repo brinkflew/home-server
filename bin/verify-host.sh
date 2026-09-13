@@ -4744,6 +4744,22 @@ if [ -z "$GREENBOOT" ]; then
 		ok media.rework_stuck "$rework_n file(s) in the rework siding, oldest ${rework_oldest_h:-0}h - a batch in flight, which is what this looks like while the encoder is working"
 	fi
 
+	# Scratch space check for Tdarr NVMe cache
+	tdarr_scratch="${DOCKER_VOLUME_CACHE:-/var/home-server/cache}/tdarr"
+	if [ -d "$tdarr_scratch" ]; then
+		sc_total=$(df -P "$tdarr_scratch" | awk 'NR==2 {print $2}' 2>/dev/null || true)
+		sc_avail=$(df -P "$tdarr_scratch" | awk 'NR==2 {print $4}' 2>/dev/null || true)
+		if [ -n "$sc_total" ] && [ "$sc_total" -gt 0 ]; then
+			sc_pct=$(( (sc_avail * 100) / sc_total ))
+			fact media_scratch_free_pct "$sc_pct" num
+			if [ "$sc_pct" -lt 15 ]; then
+				warn media.scratch_space "NVMe transcode scratch buffer has only ${sc_pct}% free headroom (<15%)"
+			else
+				ok media.scratch_space "NVMe transcode scratch buffer has ${sc_pct}% free headroom"
+			fi
+		fi
+	fi
+
 	# --------------------------------------------------------------------------
 	# Logs. The policy, and whether it is actually in force.
 	# --------------------------------------------------------------------------
@@ -5697,6 +5713,7 @@ if [ -z "$GREENBOOT" ]; then
 	fact ingress_ddns_age_s "${ing_ddns_age:-}" num
 
 	say verify "Self"
+	check_timer_run remediate.run "self-healing remediation" 1800 home-server-remediate.service --user
 	if [ "$(systemctl --user is-enabled home-server-verify.timer 2>/dev/null)" = enabled ]; then
 		ok verify.timer_enabled "home-server-verify.timer enabled"
 	else

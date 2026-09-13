@@ -31,9 +31,15 @@ import ChipLink from "@/components/ChipLink.vue";
 import FindingsPanel from "@/components/FindingsPanel.vue";
 import PanelBox from "@/components/PanelBox.vue";
 import StatusDot from "@/components/StatusDot.vue";
+import UptimeBars from "@/components/UptimeBars.vue";
 
+import { usePoll } from "@/composables/usePoll";
 import { useMetricsStale } from "@/composables/useStaleness";
 import { useServiceRack } from "@/composables/useServiceRack";
+import { range } from "@/api/prometheus";
+import { AVAILABILITY } from "@/queries";
+import { toPoints } from "@/charts";
+import { dailyRatios, ratioSummary } from "@/uptime";
 import { appHome } from "@/links";
 import * as svc from "@/services";
 import type { Tone } from "@/types";
@@ -45,6 +51,19 @@ const attention = computed(() => svc.needsAttention(rows.value));
 const tally = computed(() => svc.serviceTally(rows.value));
 const lead = computed(() => svc.servicesLead(rows.value));
 const conds = computed(() => svc.conditionRows(rows.value));
+
+const availability = usePoll(async (signal) => {
+  const matrix = await range(AVAILABILITY.containerHourly, { window: 30 * 86400, step: 3600, signal });
+
+  return matrix
+    .map((s) => {
+      const days = dailyRatios(toPoints(s.values), 30);
+      const known = days.filter(Number.isFinite);
+      const worst = known.length ? Math.min(...known) : 1;
+      return { name: s.metric.container ?? "?", days, worst, summary: ratioSummary(days) };
+    })
+    .sort((a, b) => a.worst - b.worst);
+}, 300_000);
 
 /** A tone on a value, without a fourth colour: fail and warn speak, ok is the
  *  ordinary body colour and off is the dim one. The System views' rule. */
@@ -156,6 +175,26 @@ function open(row: svc.ServiceRow): string | null {
         they are absent from every table here. That is what
         home_server_container_identity_unresolved counts.
       </p>
+    </PanelBox>
+  </Band>
+
+  <Band label="Uptime, 30 days">
+    <template #aside>
+      <span class="mono">
+        <span class="count">{{ availability.data.value?.length ?? 0 }}</span> services
+      </span>
+    </template>
+
+    <PanelBox :stale="metricsStale">
+      <div class="uptime">
+        <div v-for="row in availability.data.value ?? []" :key="row.name" class="uprow">
+          <div class="uphead mono">
+            <span>{{ row.name }}</span>
+            <span :style="{ color: row.worst < 0.999 ? 'var(--warn)' : 'var(--ok)' }">{{ row.summary }}</span>
+          </div>
+          <UptimeBars :days="row.days" />
+        </div>
+      </div>
     </PanelBox>
   </Band>
 
@@ -307,6 +346,20 @@ function open(row: svc.ServiceRow): string | null {
   padding-top: 11px;
   border-top: 1px solid var(--border-divider);
   color: var(--warn);
+}
+
+.uptime {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.uphead {
+  display: flex;
+  justify-content: space-between;
+  font: var(--t-mono-sm);
+  color: var(--fg-3);
+  margin-bottom: 5px;
 }
 
 /* --- the tone classes, LAST ---------------------------------------------

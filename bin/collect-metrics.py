@@ -1534,6 +1534,20 @@ def source_smart(m):
                       entry[1])
 
 
+def source_scratch(m):
+    """Monitor NVMe scratch buffer headroom and reclaimed bytes."""
+    scratch_dir = os.path.join(CACHE, "tdarr")
+    if os.path.exists(scratch_dir):
+        try:
+            total, used, free = shutil.disk_usage(scratch_dir)
+            m.add("home_server_scratch_free_bytes", free,
+                  {"path": "tdarr"}, "Free disk space in scratch buffer.")
+            m.add("home_server_scratch_total_bytes", total,
+                  {"path": "tdarr"}, "Total disk space in scratch buffer.")
+        except OSError:
+            pass
+
+
 # ------------------------------------------------------------------------------
 # status.json as series
 # ------------------------------------------------------------------------------
@@ -5890,6 +5904,7 @@ SOURCES = (
     # moves once a quarter.
     ("ingress", source_ingress, True, None),
     ("smart", source_smart, True, None),
+    ("scratch", source_scratch, True, None),
     ("arr", source_arr, True, None),
     ("jellyfin", source_jellyfin, True, None),
     ("torrent", source_torrent, True, None),

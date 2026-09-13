@@ -29,16 +29,13 @@ import Band from "@/components/Band.vue";
 import FindingsPanel from "@/components/FindingsPanel.vue";
 import PanelBox from "@/components/PanelBox.vue";
 import StatusDot from "@/components/StatusDot.vue";
-import UptimeBars from "@/components/UptimeBars.vue";
 
 import { usePoll } from "@/composables/usePoll";
 import { useMetricsStale } from "@/composables/useStaleness";
 import { useHostStore } from "@/stores/host";
-import { instant, instantBy, range, value } from "@/api/prometheus";
+import { instant, instantBy, value } from "@/api/prometheus";
 import { bySeverityThenTime, fetchAlerts, isHeartbeat } from "@/api/alerts";
-import { AVAILABILITY, SYSTEM } from "@/queries";
-import { toPoints } from "@/charts";
-import { dailyRatios, ratioSummary } from "@/uptime";
+import { SYSTEM } from "@/queries";
 import * as sys from "@/system";
 import * as fmt from "@/format";
 import type { Tone } from "@/types";
@@ -139,29 +136,6 @@ const heartbeatLost = computed(
     alerts.data.value !== null &&
     !alerts.data.value.some(isHeartbeat),
 );
-
-// ---------------------------------------------------------------------------
-// Thirty days of availability
-// ---------------------------------------------------------------------------
-const AVAILABILITY_ROWS = 5;
-
-const availability = usePoll(async (signal) => {
-  // An HOURLY step, deliberately: dailyRatios buckets into local days and needs
-  // samples inside them to do it. See the comment on the query itself.
-  const matrix = await range(AVAILABILITY.containerHourly, { window: 30 * 86400, step: 3600, signal });
-
-  return matrix
-    .map((s) => {
-      const days = dailyRatios(toPoints(s.values), 30);
-      const known = days.filter(Number.isFinite);
-      const worst = known.length ? Math.min(...known) : 1;
-      return { name: s.metric.container ?? "?", days, worst, summary: ratioSummary(days) };
-    })
-    // Worst first: a strip of five perfect rows tells you nothing, and the
-    // one that dipped is the only reason to look.
-    .sort((a, b) => a.worst - b.worst)
-    .slice(0, AVAILABILITY_ROWS);
-}, 300_000);
 </script>
 
 <template>
@@ -224,22 +198,6 @@ const availability = usePoll(async (signal) => {
         The alerting heartbeat is not firing, so the notification chain is unproven. Check
         alertmanager, then ntfy-alertmanager, then ntfy, in that order.
       </p>
-    </PanelBox>
-  </Band>
-
-  <Band label="Uptime, 30 days">
-    <template #aside><span>worst five</span></template>
-
-    <PanelBox :stale="metricsStale">
-      <div class="uptime">
-        <div v-for="row in availability.data.value ?? []" :key="row.name" class="uprow">
-          <div class="uphead mono">
-            <span>{{ row.name }}</span>
-            <span :style="{ color: row.worst < 0.999 ? 'var(--warn)' : 'var(--ok)' }">{{ row.summary }}</span>
-          </div>
-          <UptimeBars :days="row.days" />
-        </div>
-      </div>
     </PanelBox>
   </Band>
 

@@ -339,6 +339,10 @@ function bySeries(): Record<string, SeriesSpec[]> {
   table[SYSTEM.diskReallocated] = DISKS.map((d) => ({ metric: { device: d.device }, at: constant(d.realloc) }));
   table[SYSTEM.diskPending] = DISKS.map((d) => ({ metric: { device: d.device }, at: constant(d.pending) }));
   table[SYSTEM.diskMediaErrors] = [{ metric: { device: "nvme0" }, at: constant(0) }];
+  table[SYSTEM.diskNvmeCriticalWarning] = [{ metric: { device: "nvme0" }, at: constant(0) }];
+  table[SYSTEM.diskNvmeCompositeTemp] = [{ metric: { device: "nvme0" }, at: constant(44) }];
+  table[SYSTEM.scratchFreeBytes] = [{ metric: {}, at: constant(85 * GB) }];
+  table[SYSTEM.scratchTotalBytes] = [{ metric: {}, at: constant(100 * GB) }];
 
   // --- containers ----------------------------------------------------------
   table[SERVICES.info] = CONTAINERS.map((c) => ({

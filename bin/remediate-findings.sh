@@ -40,9 +40,13 @@ fi
 # Record completion timestamp
 mkdir -p "$(dirname "$STATE")" 2>/dev/null
 tmp="$STATE.tmp.$$"
-{
+if {
 	echo "remediate_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 	echo "remediated_count=$remediated"
-} >"$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+} >"$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null; then
+	:
+else
+	rm -f "$tmp" 2>/dev/null
+fi
 
 echo "remediate: finished ($remediated action(s) taken)"

@@ -100,6 +100,8 @@ RestartSec=5
 TimeoutStartSec=360
 MemoryHigh=512M
 MemoryMax=768M
+CPUQuota=200%
+AllowedCPUs=0-3
 Slice=app-agents.slice
 
 [Install]

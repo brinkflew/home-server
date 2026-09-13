@@ -196,6 +196,8 @@ TimeoutStartSec=360
 # is the kill landing on windmill-db and costing crash recovery. Do not "fix" it.
 MemoryHigh=512M
 MemoryMax=768M
+CPUQuota=200%
+AllowedCPUs=0-3
 
 # The aggregate ceiling - see host/systemd/app-agents.slice. NOTE FOR STEP 9,
 # because the arithmetic is easy to do wrong: these per-unit numbers do NOT sum

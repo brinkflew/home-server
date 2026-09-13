@@ -741,6 +741,7 @@ export function statusDocument(): StatusDocument {
       backup_offsite_pruned_at: iso(33 * 86400),
       backup_offsite_policy_ok_at: iso(6 * 3600),
       backup_tsdb_snapshot_at: iso(6 * 3600),
+      restore_synthetic_verified_server_at: iso(12 * 3600),
       checkout_clean: true,
       containers_running: CONTAINERS.length,
       journal_mb: 1204,

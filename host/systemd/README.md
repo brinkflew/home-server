@@ -34,7 +34,8 @@ systemctl --user enable --now home-server-promote.timer home-server-verify.timer
                               home-server-credential-probe.timer \
                               home-server-verify-media.timer \
                               home-server-requeue.timer \
-                              home-server-verify-segmentation.timer
+                              home-server-verify-segmentation.timer \
+                              home-server-remediate.timer
 
 # TWO UNITS HERE ARE SERVICES RATHER THAN TIMERS, so they are enabled on their
 # own line. conduct is long-running - it polls - rather than something a clock
