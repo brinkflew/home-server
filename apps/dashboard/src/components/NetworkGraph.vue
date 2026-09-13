@@ -508,33 +508,40 @@ const summary = computed(() => {
 .group.dull,
 .spinenode.dull,
 .elbows .dull {
-  opacity: 0.22;
+  opacity: 0.15;
 }
 
 .g-name {
   font: var(--t-mono-md);
-  fill: var(--fg-2);
+  font-weight: 700;
+  fill: var(--fg);
 }
 
-.g-sub,
+.g-sub {
+  font: var(--t-mono-xs);
+  fill: var(--fg-3);
+}
+
 .g-count {
   font: var(--t-mono-xs);
-  fill: var(--fg-dim);
+  font-weight: 600;
+  fill: var(--fg-2);
 }
 
 .n-name {
   font: var(--t-mono-md);
-  fill: var(--fg-2);
+  font-weight: 600;
+  fill: var(--fg);
 }
 
 .n-role {
   font: var(--t-mono-xs);
-  fill: var(--fg-dim);
+  fill: var(--fg-3);
 }
 
 .p-name {
   font: var(--t-mono-xs);
-  fill: var(--fg-4);
+  fill: var(--fg-2);
 }
 
 .legend {
