@@ -154,6 +154,13 @@ export const PATHS: Path[] = [
   { from: "windmill-worker", to: "internet", source: "git",
     why: "the flow step that opens the pull request calls api.github.com with the one credential this workspace holds; it also resolves job dependencies from PyPI" },
 
+  { from: "windmill-worker", to: "egress-proxy", source: "git",
+    why: "routes outbound HTTP/HTTPS requests through the egress allowlist proxy" },
+  { from: "windmill-worker-verify", to: "egress-proxy", source: "git",
+    why: "routes outbound verification requests through the egress allowlist proxy" },
+  { from: "runner", to: "egress-proxy", source: "git",
+    why: "ephemeral runner containers route outbound dependency and API calls through the egress proxy" },
+
   // --- declared in an apps/ config file ------------------------------------
   { from: "prometheus", to: "node-exporter", source: "git",
     why: "the only scrape target besides itself; the textfile drop arrives here" },
@@ -192,7 +199,9 @@ export const PATHS: Path[] = [
   { from: "torrent", to: "internet", source: "git",
     why: "every peer connection leaves through the tunnel in gluetun's namespace, or not at all. Measured as network=tunnel" },
   { from: "duckdns", to: "internet", source: "git",
-    why: "publishes this host's WAN address; the one segment with a single member" },
+    why: "publishes this host's WAN address" },
+  { from: "egress-proxy", to: "internet", source: "git",
+    why: "allowlisted outbound HTTP/HTTPS requests to GitHub, PyPI, npm, Anthropic, etc." },
   { from: "flaresolverr", to: "internet", source: "runtime",
     why: "fetches attacker-controlled indexer pages - measured as the largest single talker to the outside" },
 ];
