@@ -1015,6 +1015,33 @@ else
 	bad storage.media_mount "/mnt/media is mounted WITHOUT context= - containers cannot read it"
 fi
 
+# SMART drive health check
+if command -v smartctl >/dev/null 2>&1; then
+	for dev in /dev/sda /dev/nvme0; do
+		[ -e "$dev" ] || continue
+		dname=$(basename "$dev")
+		s_out=$(sudo -n smartctl -j -n standby -H -A "$dev" 2>/dev/null || true)
+		if [ -n "$s_out" ]; then
+			s_pass=$(echo "$s_out" | jq -r '.smart_status.passed // empty' 2>/dev/null)
+			if [ "$s_pass" = "true" ]; then
+				ok "storage.smart_health_$dname" "SMART overall health assessment passed for $dname"
+			elif [ "$s_pass" = "false" ]; then
+				bad "storage.smart_health_$dname" "SMART reports $dname as FAILING"
+			fi
+			# Check NVMe wear ratio
+			n_wear=$(echo "$s_out" | jq -r '.nvme_smart_health_information_log.percentage_used // empty' 2>/dev/null)
+			if [ -n "$n_wear" ]; then
+				fact "nvme_wear_percent_$dname" "$n_wear" num
+				if [ "$n_wear" -gt 80 ]; then
+					warn "storage.nvme_wear_$dname" "NVMe $dname endurance consumed is ${n_wear}% (>80%)"
+				else
+					ok "storage.nvme_wear_$dname" "NVMe $dname endurance consumed is ${n_wear}%"
+				fi
+			fi
+		fi
+	done
+fi
+
 # ------------------------------------------------------------------------------
 # GPU and CDI. This is the group that does not exist anywhere else and is the
 # reason this script was written.
@@ -2112,6 +2139,9 @@ if [ -z "$GREENBOOT" ]; then
 	check_backup_age backup.restore_server_age  "server restore verification" \
 		restore_verified_server_at  336 warn \
 		" - home-server-verify-restore.timer writes it weekly; if it has never run at all, the one-time start in host/systemd/README.md was skipped"
+	check_backup_age backup.restore_synthetic_server_age "synthetic restore verification" \
+		restore_synthetic_verified_server_at 336 warn \
+		" - home-server-verify-restore.timer writes it weekly with --synthetic; run bin/verify-restore.sh --repo server --synthetic"
 	check_backup_age backup.restore_server_offsite_age "off-site restore verification from the server" \
 		restore_verified_server_offsite_at 1440 warn \
 		" - home-server-verify-restore-offsite.timer writes it monthly; if it has never run at all, the one-time start in host/systemd/README.md was skipped"

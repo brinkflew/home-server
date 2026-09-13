@@ -1500,6 +1500,14 @@ def source_smart(m):
                   "Powered-on hours.", "counter")
         nvme = data.get("nvme_smart_health_information_log")
         if nvme:
+            crit_warn = nvme.get("critical_warning")
+            if crit_warn is not None:
+                m.add("home_server_disk_nvme_critical_warning", crit_warn, labels,
+                      "NVMe critical warning bitmask (0 = healthy).", "gauge")
+            comp_temp = nvme.get("temperature")
+            if comp_temp is not None:
+                m.add("home_server_disk_nvme_composite_temperature_celsius", comp_temp, labels,
+                      "NVMe composite temperature.", "gauge")
             for key, metric, help_text in (
                     ("percentage_used", "home_server_disk_nvme_wear_ratio",
                      "Endurance consumed, 0-1 where 1 is the rated life."),

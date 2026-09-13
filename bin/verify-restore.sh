@@ -82,12 +82,14 @@ HOST_TAG=home-server
 REPO_KIND=local
 DEEP=""
 KEEP=""
+SYNTHETIC=""
 while [ $# -gt 0 ]; do
 	case "${1:-}" in
-		--repo)    REPO_KIND="${2:-}"; shift 2 ;;
-		--repo=*)  REPO_KIND="${1#*=}"; shift ;;
-		--deep)    DEEP=1; shift ;;
-		--keep)    KEEP=1; shift ;;
+		--repo)       REPO_KIND="${2:-}"; shift 2 ;;
+		--repo=*)     REPO_KIND="${1#*=}"; shift ;;
+		--deep)       DEEP=1; shift ;;
+		--keep)       KEEP=1; shift ;;
+		--synthetic)  SYNTHETIC=1; shift ;;
 		*) echo "verify-restore: unknown argument: $1" >&2; exit 2 ;;
 	esac
 done
@@ -563,6 +565,37 @@ then
 	fails=$((fails + 1))
 fi
 
+# ------------------------------------------------------------------------------
+# Synthetic Container Verification
+# ------------------------------------------------------------------------------
+if [ -n "$SYNTHETIC" ]; then
+	say "Synthetic Container DB Verification"
+	if command -v podman >/dev/null 2>&1; then
+		pgdump="$CONFIG/windmill-db/dumpall.sql"
+		if [ -f "$pgdump" ]; then
+			if podman run --rm --net=none \
+				-v "$pgdump:/dump.sql:ro,z" \
+				docker.io/library/postgres:15-alpine \
+				sh -c "su-exec postgres initdb -D /tmp/pgdata >/dev/null 2>&1 && su-exec postgres pg_ctl -D /tmp/pgdata -w start >/dev/null 2>&1 && su-exec postgres psql -U postgres -f /dump.sql >/dev/null 2>&1 && su-exec postgres psql -U postgres -c 'SELECT count(*) FROM pg_tables;'" >/dev/null 2>&1; then
+				ok "Windmill PostgreSQL dump restored and executed in synthetic container"
+			else
+				bad "Windmill PostgreSQL synthetic container restore test failed"
+			fi
+		fi
+		if [ -f "$CONFIG/pocket-id/pocket-id.db" ]; then
+			if podman run --rm --net=none \
+				-v "$CONFIG/pocket-id/pocket-id.db:/pocket-id.db:ro,z" \
+				docker.io/library/alpine:latest sh -c "apk add --no-cache sqlite >/dev/null 2>&1 && sqlite3 /pocket-id.db 'SELECT count(*) FROM sqlite_master;'" >/dev/null 2>&1; then
+				ok "Pocket ID SQLite DB operational query verified in synthetic container"
+			else
+				bad "Pocket ID synthetic container query test failed"
+			fi
+		fi
+	else
+		echo "  podman is not available - skipping synthetic container execution"
+	fi
+fi
+
 echo
 if [ -n "$KEEP" ]; then
 	printf 'restored tree left at %s\n' "$TARGET"
@@ -581,16 +614,11 @@ printf '%sthis snapshot restores%s\n' "$C_GRN" "$C_OFF"
 # were the same observable state. CLAUDE.md states the rule in the abstract - an
 # automated job needs a durable record of its last success, not just an exit 0 -
 # and this was the job it was not applied to.
-#
-# THE REPO KIND IS PART OF THE KEY, and that is the load-bearing half. Proving
-# one copy restores says nothing about another, and collapsing them into a single
-# marker would let the weekly automated run here hold the off-site drill's key
-# green for ever - which is the same argument bin/verify-host.sh makes for keeping
-# two ceilings, applied one level up. Four kinds, four keys, four checks.
-#
-# Non-fatal either way: a marker that could not be recorded must never turn a
-# successful restore verification into a failure.
-stamp="restore_verified_${REPO_KIND}_at"
+if [ -n "$SYNTHETIC" ]; then
+	stamp="restore_synthetic_verified_${REPO_KIND}_at"
+else
+	stamp="restore_verified_${REPO_KIND}_at"
+fi
 case "$REPO_KIND" in
 	server|server_offsite)
 		# ALREADY ON THE MACHINE THAT READS IT. The ssh below is a loopback ssh from

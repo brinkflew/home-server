@@ -1291,6 +1291,37 @@ groups:
             this is nvme0 it carries config/ and the local backup, and the
             off-site copy is the one that matters.
 
+      - alert: DiskNvmeMediaErrors
+        expr: increase(home_server_disk_media_errors_total[1h]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "NVMe drive {{ $labels.device }} reported media errors"
+          description: >-
+            Unrecovered data integrity errors reported by NVMe controller.
+            Check smartctl -a /dev/{{ $labels.device }}.
+
+      - alert: DiskNvmeCriticalWarning
+        expr: home_server_disk_nvme_critical_warning > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "NVMe drive {{ $labels.device }} reported critical warning"
+          description: >-
+            NVMe critical warning bitmask is {{ $value }} (spare space degraded, temperature threshold, or reliability degradation).
+
+      - alert: DiskReallocatedSectors
+        expr: home_server_disk_reallocated_sectors > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Drive {{ $labels.device }} has {{ $value }} reallocated sectors"
+          description: >-
+            Drive {{ $labels.device }} has remapped sectors, an early indicator of drive wear/failure.
+
       - alert: GpuHot
         expr: home_server_gpu_temperature_celsius > 85
         for: 15m
@@ -1301,6 +1332,7 @@ groups:
           description: >-
             Sustained rather than a transcode spike. Check airflow and whether
             two NVENC sessions are running against a queue that is not draining.
+
 
   # ===========================================================================
   # The agent fleet
