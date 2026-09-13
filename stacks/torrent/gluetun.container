@@ -80,7 +80,7 @@ Environment=PORT_FORWARD_ONLY=on
 # Unquoted, quadlet passed gluetun a bare "/bin/sh" and dropped the rest, so
 # every reconnect forwarded a port that was never pushed to qBittorrent. The
 # VPN stays up and the client just goes unconnectable.
-Environment="VPN_PORT_FORWARDING_UP_COMMAND=/bin/sh -c 'wget -qO- --retry-connrefused --post-data=\"json={\\\"listen_port\\\":{{PORTS}}}\" http://127.0.0.1:${PORT_QBITTORRENT_WEB}/api/v2/app/setPreferences'"
+Environment="VPN_PORT_FORWARDING_UP_COMMAND=/bin/sh -c 'SID=\$(wget -S --retry-connrefused -O /dev/null --post-data=\"username=\${QBITTORRENT_USER:-admin}&password=\${QBITTORRENT_PASS}\" \"http://127.0.0.1:\${PORT_QBITTORRENT_WEB:-8200}/api/v2/auth/login\" 2>&1 | grep -i \"Set-Cookie:\" | head -n 1 | sed -n \"s/.*SID=\\([^;]*\\).*/\\1/p\"); if [ -n \"\$SID\" ]; then wget -qO- --header=\"Cookie: SID=\$SID\" --post-data=\"json={\\\"listen_port\\\":{{PORTS}}}\" \"http://127.0.0.1:\${PORT_QBITTORRENT_WEB:-8200}/api/v2/app/setPreferences\"; else wget -qO- --retry-connrefused --post-data=\"json={\\\"listen_port\\\":{{PORTS}}}\" \"http://127.0.0.1:\${PORT_QBITTORRENT_WEB:-8200}/api/v2/app/setPreferences\"; fi'"
 
 Environment=SERVER_CITIES=${VPN_SERVER_CITIES}
 Environment=SERVER_COUNTRIES=${VPN_SERVER_COUNTRIES}

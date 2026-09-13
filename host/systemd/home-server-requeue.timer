@@ -1,0 +1,18 @@
+# ==============================================================================
+# Daily keyframe drift requeue sweep for Tdarr
+# ------------------------------------------------------------------------------
+# Runs once a day off-peak (04:00) to batch up to 3 keyframe-drifting files
+# into Tdarr's rework siding.
+# ==============================================================================
+
+[Unit]
+Description=Daily keyframe drift requeue sweep for Tdarr
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+AccuracySec=5min
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

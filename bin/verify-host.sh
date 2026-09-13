@@ -1196,6 +1196,15 @@ if [ -z "$GREENBOOT" ]; then
 		warn greenboot.installed "greenboot is not installed - a bad deployment cannot roll itself back"
 	fi
 
+	if [ -d "$gb_etc/check" ]; then
+		gb_dangling=$(find "$gb_etc/check" -xtype l 2>/dev/null || true)
+		if [ -n "$gb_dangling" ]; then
+			bad greenboot.dangling_symlinks "greenboot has dangling symlink(s) in $gb_etc/check: $(printf '%s' "$gb_dangling" | tr '\n' ' ')"
+		else
+			ok greenboot.dangling_symlinks "no dangling symlinks in $gb_etc/check"
+		fi
+	fi
+
 	if [ ! -x "$gb_bin" ]; then
 		: # nothing further to say; the WARN above is the whole finding
 	elif [ ! -r "$boot_state" ]; then

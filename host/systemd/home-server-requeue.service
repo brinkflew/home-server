@@ -1,0 +1,19 @@
+# ==============================================================================
+# Re-queue drifting media files into Tdarr rework siding
+# ------------------------------------------------------------------------------
+# A plain systemd user unit running on the host. It reads the bad-list written
+# by verify-media.sh and copies up to 3 drifting media files into the rework
+# siding for Tdarr to process.
+#
+# Symlinked into ~/.config/systemd/user/ - see host/systemd/README.md.
+# ==============================================================================
+
+[Unit]
+Description=Re-queue drifting media files into Tdarr rework siding
+Documentation=file:/var/home-server/bin/requeue-drifting.sh
+After=tdarr-server.service tdarr-node-01.service
+
+[Service]
+Type=oneshot
+ExecStart=/var/home-server/bin/requeue-drifting.sh --limit 3
+SuccessExitStatus=0

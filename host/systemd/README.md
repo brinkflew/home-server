@@ -33,6 +33,7 @@ systemctl --user enable --now home-server-promote.timer home-server-verify.timer
                               home-server-verify-restore-offsite.timer \
                               home-server-credential-probe.timer \
                               home-server-verify-media.timer \
+                              home-server-requeue.timer \
                               home-server-verify-segmentation.timer
 
 # TWO UNITS HERE ARE SERVICES RATHER THAN TIMERS, so they are enabled on their

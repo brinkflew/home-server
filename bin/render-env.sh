@@ -29,6 +29,12 @@ dst="$root/.env"
 command -v sops >/dev/null || { echo "render-env: sops not found on PATH" >&2; exit 1; }
 [ -f "$src" ] || { echo "render-env: $src does not exist" >&2; exit 1; }
 
+key_file="${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
+if [ ! -f "$key_file" ]; then
+	echo "render-env: age private key file not found at $key_file - see secrets/ in CLAUDE.md" >&2
+	exit 1
+fi
+
 # Decrypt to a temporary file first. A failed decrypt part-way through a direct
 # redirect would leave a truncated .env behind, and every ${VAR:?err} in the
 # compose file would then fail at once - with the real cause already overwritten.
