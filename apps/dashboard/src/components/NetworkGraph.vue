@@ -307,21 +307,19 @@ const summary = computed(() => {
             <path
               :d="e.d"
               fill="none"
-              :stroke="total(e.node, e.target) > 0 ? 'var(--ok)' : 'var(--fg-dim)'"
-              :stroke-width="Number.isFinite(total(e.node, e.target)) ? 1.4 : 1.6"
-              :stroke-dasharray="Number.isFinite(total(e.node, e.target)) ? '6 10' : '2 4'"
+              :stroke="total(e.node, e.target) > 0 ? 'var(--ok)' : 'var(--line-strong)'"
+              :stroke-width="lit.on && lit.elbows.has(e.key) ? 2.4 : 1.2"
+              :stroke-dasharray="Number.isFinite(total(e.node, e.target)) ? '' : '2 3'"
               :class="{ flow: flowing && intensity(total(e.node, e.target)) > 0 }"
               :style="{
                 animationDuration: `${flowDuration(total(e.node, e.target))}s`,
-                /* A LINE NOBODY MEASURED IS QUIETER THAN AN IDLE ONE. Eighteen
-                   elbows at one weight is a hatch pattern; the ones carrying a
-                   reading have to come forward, and grey at 0.4 was competing
-                   with teal at 0.4. */
                 opacity: dimElbow(e.key)
-                  ? 0.1
-                  : Number.isFinite(total(e.node, e.target))
-                    ? 0.38 + intensity(total(e.node, e.target)) * 0.5
-                    : 0.2,
+                  ? 0.05
+                  : lit.on && lit.elbows.has(e.key)
+                    ? 1.0
+                    : Number.isFinite(total(e.node, e.target))
+                      ? 0.32
+                      : 0.15,
               }"
               vector-effect="non-scaling-stroke"
               v-bind="tip.hover(`elbow-${e.key}`, elbowTip(e.node, e.target))"
@@ -338,7 +336,7 @@ const summary = computed(() => {
               height="3"
               rx="1.5"
               fill="var(--ok)"
-              :opacity="dimElbow(e.key) ? 0.15 : 0.85"
+              :opacity="dimElbow(e.key) ? 0.05 : 0.85"
             />
           </g>
         </g>
@@ -370,11 +368,6 @@ const summary = computed(() => {
           <text :x="g.x + 12" :y="g.y + 34" class="g-sub">
             {{ fitRole(segById.get(g.id)?.subnet || g.purpose, g.w) }}
           </text>
-          <!-- THE SEGMENT'S MEMBERSHIP, NOT THE COUNT OF BOXES INSIDE THIS
-               ONE. net-arr holds seven containers and draws two, because the
-               other five are multi-homed and out on the spine - so a badge
-               reading "2" beside a table row reading seven members is two
-               answers to one question. -->
           <text :x="g.x + g.w - 12" :y="g.y + 21" class="g-count" text-anchor="end">
             {{ segById.get(g.id)?.members.length ?? g.members.length }}
           </text>
@@ -472,11 +465,6 @@ const summary = computed(() => {
   min-width: 0;
 }
 
-/* THE FLOOR IS 1:1, AND BELOW IT THE PANEL SCROLLS. The drawing reflows to
-   fewer columns as the panel narrows, so it reaches a phone at its natural
-   size; min-width stops the last rung being scaled DOWN, which is what put
-   13px names at 2.6px in the version this replaces. Scaling UP is safe and
-   deliberate: the type floor is a floor. */
 .graph {
   width: 100%;
   height: auto;
@@ -489,10 +477,6 @@ const summary = computed(() => {
   border-radius: var(--r-sm);
 }
 
-/* THE ANIMATION THAT HAD NO animation-name FOR AS LONG AS IT EXISTED. The
-   keyframe is global, in tokens.css, next to the argument for animating by the
-   dash period rather than the path length; the rule that runs it belongs with
-   the element it applies to. */
 .flow {
   animation-name: flow;
   animation-timing-function: linear;
@@ -508,40 +492,39 @@ const summary = computed(() => {
 .group.dull,
 .spinenode.dull,
 .elbows .dull {
-  opacity: 0.15;
+  opacity: 0.08;
 }
 
 .g-name {
-  font: var(--t-mono-md);
-  font-weight: 700;
+  font: var(--t-mono-sm);
+  font-weight: 600;
   fill: var(--fg);
 }
 
 .g-sub {
   font: var(--t-mono-xs);
-  fill: var(--fg-3);
+  fill: var(--fg-4);
 }
 
 .g-count {
   font: var(--t-mono-xs);
-  font-weight: 600;
-  fill: var(--fg-2);
+  fill: var(--fg-3);
 }
 
 .n-name {
-  font: var(--t-mono-md);
-  font-weight: 600;
-  fill: var(--fg);
+  font: var(--t-mono-sm);
+  font-weight: 500;
+  fill: var(--fg-2);
 }
 
 .n-role {
   font: var(--t-mono-xs);
-  fill: var(--fg-3);
+  fill: var(--fg-5);
 }
 
 .p-name {
   font: var(--t-mono-xs);
-  fill: var(--fg-2);
+  fill: var(--fg-4);
 }
 
 .legend {
