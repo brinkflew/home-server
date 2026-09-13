@@ -86,10 +86,9 @@ export const NODES: Node[] = [
 
   { name: "flaresolverr", role: "headless Chrome, deliberately alone", networks: ["net-solver"] },
 
-  { name: "torrent", role: "pod infra: holds the network for all three", networks: ["net-download"] },
+  { name: "torrent", role: "pod infra: holds the network for the pod", networks: ["net-download"] },
   { name: "gluetun", role: "VPN, the egress chokepoint", networks: [], pod: "torrent" },
   { name: "qbittorrent", role: "downloader, no stack of its own", networks: [], pod: "torrent" },
-  { name: "joal", role: "announcer, no stack of its own", networks: [], pod: "torrent" },
 
   { name: "jellyfin", role: "playback, initiates nothing", networks: ["net-media"], publishes: ["8096 -> 8096"] },
 
@@ -103,6 +102,7 @@ export const NODES: Node[] = [
   { name: "ntfy", role: "the phone", networks: ["net-metrics"] },
 
   { name: "duckdns", role: "dynamic DNS", networks: ["net-egress"] },
+  { name: "egress-proxy", role: "egress proxy allowlist", networks: ["net-agents", "net-egress"] },
 
   { name: "windmill-db", role: "the control plane's database", networks: ["net-agents"] },
   {

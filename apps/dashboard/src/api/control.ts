@@ -39,7 +39,10 @@ export type ControlAction =
   | "cancel_requeue"
   | "settle"
   | "quota_spend"
-  | "quota_pace";
+  | "quota_pace"
+  | "verify_sweep"
+  | "backup_run"
+  | "clear_failed";
 
 export interface ControlRequest {
   action: ControlAction;

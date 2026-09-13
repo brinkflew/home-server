@@ -1,0 +1,24 @@
+# ==============================================================================
+# Egress Proxy Caddyfile
+# ------------------------------------------------------------------------------
+# Egress proxy filter for CI lanes and agent phase runners.
+# Allows traffic strictly to approved package registries, GitHub, and LLM APIs.
+# ==============================================================================
+
+{
+	admin off
+}
+
+:8080 {
+	@allowed {
+		header_regexp Host ^(.*\.)?(github\.com|githubusercontent\.com|npmjs\.org|yarnpkg\.com|pypi\.org|pythonhosted\.org|anthropic\.com|crates\.io)$
+	}
+
+	handle @allowed {
+		reverse_proxy
+	}
+
+	handle {
+		respond "Egress Proxy Access Denied" 403
+	}
+}

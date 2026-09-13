@@ -1,0 +1,46 @@
+# ==============================================================================
+# egress-proxy: Egress proxy with domain allowlisting
+# ------------------------------------------------------------------------------
+# Restricts outbound internet access from CI lanes and autonomous coding agents
+# to approved domains (*.github.com, npmjs.org, pypi.org, anthropic.com, etc.).
+# ==============================================================================
+
+[Unit]
+Description=Egress Proxy for Agents and CI
+After=network-online.target
+
+StartLimitIntervalSec=600
+StartLimitBurst=20
+
+[Container]
+Image=docker.io/library/caddy:2
+AutoUpdate=registry
+ContainerName=egress-proxy
+Network=net-egress.network
+Network=net-agents.network
+
+NoNewPrivileges=true
+
+Volume=/var/home-server/apps/egress-proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+
+Environment=PUID=0
+Environment=PGID=0
+Environment=TZ=${TIMEZONE}
+
+HealthCmd=curl -s -o /dev/null --max-time 5 http://localhost:8080/ || exit 1
+HealthInterval=60s
+HealthTimeout=10s
+HealthStartPeriod=10s
+HealthRetries=3
+Notify=healthy
+
+[Service]
+EnvironmentFile=/var/home-server/.env
+Restart=always
+RestartSec=5
+
+MemoryHigh=128M
+MemoryMax=192M
+
+[Install]
+WantedBy=default.target

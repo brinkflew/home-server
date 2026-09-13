@@ -103,6 +103,9 @@ const TITLES: Record<string, string> = {
     "everything cancel does, and move the task back to Pending so the fleet can choose it again",
   settle:
     "record that this round needs nothing more, so it stops asking for attention. Nothing is cancelled, started or removed",
+  verify_sweep: "trigger an immediate host health verification sweep",
+  backup_run: "trigger an immediate off-site backup run",
+  clear_failed: "clear failed unit runtime state on the server",
 };
 
 /** Red on the two that destroy something, and on nothing else. */

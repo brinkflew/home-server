@@ -111,7 +111,7 @@ export const PATHS: Path[] = [
   { from: "caddy", to: "tdarr-server", source: "git",
     why: "tdarr.{$DOMAIN}, behind sign-on" },
   { from: "caddy", to: "torrent", source: "git",
-    why: "torrent.{$DOMAIN} and fakerr.{$DOMAIN} both address the POD, not gluetun" },
+    why: "torrent.{$DOMAIN} addresses the POD, not gluetun" },
   { from: "caddy", to: "prometheus", source: "git",
     why: "metrics.{$DOMAIN}, and /api/prom on home.{$DOMAIN}" },
   { from: "caddy", to: "alertmanager", source: "git",

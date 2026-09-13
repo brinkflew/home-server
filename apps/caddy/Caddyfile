@@ -190,11 +190,6 @@ torrent.{$DOMAIN} {
 	reverse_proxy torrent:{$PORT_QBITTORRENT_WEB}
 }
 
-fakerr.{$DOMAIN} {
-	import protected
-	reverse_proxy torrent:{$PORT_JOAL_WEB}
-}
-
 # ------------------------------------------------------------------------------
 # The agent control plane
 # ------------------------------------------------------------------------------
