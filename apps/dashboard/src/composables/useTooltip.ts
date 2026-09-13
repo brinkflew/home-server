@@ -35,6 +35,7 @@ interface Open {
   id: string;
   anchor: HTMLElement | SVGElement;
   content: TooltipContent;
+  pointerPos?: { x: number; y: number };
 }
 
 const open = ref<Open | null>(null);
@@ -55,14 +56,21 @@ export function tooltipId(id: string): string {
 }
 
 export function useTooltip() {
-  function show(id: string, anchor: HTMLElement | SVGElement, content: TooltipContent, delay: number): void {
+  function show(
+    id: string,
+    anchor: HTMLElement | SVGElement,
+    content: TooltipContent,
+    delay: number,
+    event?: PointerEvent | FocusEvent,
+  ): void {
     clearTimer();
+    const pos = event && "clientX" in event ? { x: event.clientX, y: event.clientY } : undefined;
     if (delay <= 0) {
-      open.value = { id, anchor, content };
+      open.value = { id, anchor, content, pointerPos: pos };
       return;
     }
     timer = window.setTimeout(() => {
-      open.value = { id, anchor, content };
+      open.value = { id, anchor, content, pointerPos: pos };
     }, delay);
   }
 
@@ -96,9 +104,9 @@ export function useTooltip() {
       tabindex: 0,
       "aria-describedby": described.value,
       onPointerenter: (e: PointerEvent) =>
-        show(id, e.currentTarget as HTMLElement, content, HOVER_OPEN_MS),
+        show(id, e.currentTarget as HTMLElement, content, HOVER_OPEN_MS, e),
       onPointerleave: () => hide(id, HOVER_CLOSE_MS),
-      onFocus: (e: FocusEvent) => show(id, e.currentTarget as HTMLElement, content, 0),
+      onFocus: (e: FocusEvent) => show(id, e.currentTarget as HTMLElement, content, 0, e),
       onBlur: () => hide(id),
       onKeydown: (e: KeyboardEvent) => {
         if (e.key === "Escape") hide(id);
@@ -118,7 +126,7 @@ export function useTooltip() {
   function hover(id: string, content: TooltipContent) {
     return {
       onPointerenter: (e: PointerEvent) =>
-        show(id, e.currentTarget as HTMLElement, content, HOVER_OPEN_MS),
+        show(id, e.currentTarget as HTMLElement, content, HOVER_OPEN_MS, e),
       onPointerleave: () => hide(id, HOVER_CLOSE_MS),
     };
   }

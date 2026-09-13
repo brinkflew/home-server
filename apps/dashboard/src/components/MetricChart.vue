@@ -676,7 +676,10 @@ function onLeave(): void {
       <div
         v-if="over && cursor && readout"
         class="readout mono"
-        :style="{ left: `${(cursor.x / VIEW_W) * 100}%` }"
+        :style="{
+          left: `${(cursor.x / VIEW_W) * 100}%`,
+          transform: cursor.x / VIEW_W <= 0.5 ? 'translateX(8px)' : 'translateX(calc(-100% - 8px))',
+        }"
       >
         <div class="r-time">{{ readout.time }}</div>
         <div v-for="(d, i) in readout.rows" :key="i" class="r-row">
@@ -860,7 +863,6 @@ function onLeave(): void {
 .readout {
   position: absolute;
   top: 2px;
-  transform: translateX(-50%);
   padding: 4px 7px;
   border-radius: var(--r-xs);
   background: var(--surface-high);

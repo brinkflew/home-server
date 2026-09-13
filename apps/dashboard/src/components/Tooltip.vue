@@ -43,12 +43,25 @@ async function place(): Promise<void> {
   const a = open.anchor.getBoundingClientRect();
   const t = el.getBoundingClientRect();
 
-  let x = a.left + a.width / 2 - t.width / 2;
+  const centerX = open.pointerPos ? open.pointerPos.x : a.left + a.width / 2;
+  let x = centerX - t.width / 2;
   let y = a.top - t.height - GAP;
 
-  if (y < EDGE) y = a.bottom + GAP;
+  if (y < EDGE) {
+    if (a.bottom + GAP + t.height <= window.innerHeight - EDGE) {
+      y = a.bottom + GAP;
+    } else {
+      const cy = open.pointerPos?.y ?? a.top + a.height / 2;
+      if (cy > window.innerHeight / 2) {
+        y = Math.max(EDGE, cy - t.height - GAP);
+      } else {
+        y = Math.min(window.innerHeight - t.height - EDGE, cy + GAP + 4);
+      }
+    }
+  }
+
   x = Math.min(Math.max(EDGE, x), window.innerWidth - t.width - EDGE);
-  y = Math.min(y, window.innerHeight - t.height - EDGE);
+  y = Math.min(Math.max(EDGE, y), window.innerHeight - t.height - EDGE);
 
   pos.value = { x, y };
 }
