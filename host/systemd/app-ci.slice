@@ -117,8 +117,9 @@
 # So the third lane's 2,816M comes out of roughly that 5,639 MB, leaving ~2.8 GB
 # plus 4 GB of zram. Nothing has ever been REFUSED an allocation here - which is
 # the reading that justifies a ceiling, not the peak - and `ci.lane_headroom` in
-# bin/verify-host.sh is what grades it from now on. A FOURTH lane is refused by
-# bin/github-runner.sh, and this is the number it is refused on.
+# bin/verify-host.sh is what grades it from now on. A fourth lane was refused on
+# this number until 2026-09-29, when the agent fleet was turned off and its
+# ceiling moved here - see the paragraph above [Slice].
 #
 # ITS FAILURE IS NO LONGER SILENCE. bin/github-runner.sh keeps memory.peak and
 # pids.peak off each transient scope in the lane's marker - the scope is
@@ -139,9 +140,28 @@
 # setup loop already globs *.slice because app-agents.slice made it.
 # ==============================================================================
 
+# FIVE LANES, 2026-09-29, AND THE AGENT FLEET IS OFF TO MAKE ROOM FOR THEM.
+# Everything above sizes three lanes and was true when written; this paragraph
+# supersedes its totals and none of its measurements. Lanes 4 and 5 take
+# app-agents.slice's cores (0-3) and its ceiling: MemoryHigh grew by exactly that
+# slice's 3,584M and MemoryMax by its 4,608M, so the two slices together reserve
+# the same 14,592M of 15,828M they did before - in one slice rather than two.
+# bin/github-runner.sh refuses to run lanes 4 and 5 while
+# home-server-conduct.service is enabled, which is what keeps it that way.
+#
+# THE ORDER OF THE CEILINGS HAS FLIPPED, AND THAT IS THE COST. Five lanes at
+# their scope MemoryHigh of 2,816M is 14,080M against 12,032M here, so the slice
+# now throttles before the lanes do once four or more heavy jobs coincide - five
+# e2e shards at their measured 2,817M peak would be ~14 GB, which this host
+# cannot give while the media stack runs (5,084 MB available with three lanes
+# busy on the day this was written, zram full). Five at their scope MemoryMax is
+# 17,920M against 14,592M: 3,328M short where it used to be 768M, so a slice-level
+# OOM kill, which picks its victim across every lane, is now reachable. The
+# signals have not moved: memory.events `max`, `oom_kill`, ci.lane_headroom.
+# Throttling alone is still not a finding.
 [Slice]
-MemoryHigh=8448M
-MemoryMax=9984M
+MemoryHigh=12032M
+MemoryMax=14592M
 
 # BELOW app-agents.slice's 30 ON PURPOSE. Under contention the agent fleet is
 # gating a change somebody is waiting on with a merge blocked behind it; CI is
@@ -149,7 +169,7 @@ MemoryMax=9984M
 # able to starve the media stack, which has no weight set at all and therefore
 # sits at the default 100.
 CPUWeight=20
-CPUQuota=600%
+CPUQuota=1000%
 
 # THE OTHER HALF OF THAT QUOTA, and app-agents.slice paid for this lesson at 5x.
 #
@@ -184,7 +204,11 @@ CPUQuota=600%
 # sentence this comment opens with. The converse is what docs/ci.md got wrong
 # when it argued against widening: this does not TAKE 8-9 from anything, it
 # shares them, and over the 24h before the change cores 8-11 measured 7-10% busy.
-AllowedCPUs=4-9
+# FIVE LANES SINCE 2026-09-29: pairs 4-5, 6-7, 8-9 as below, plus 0-1 and 2-3
+# for lanes 4 and 5, which are app-agents.slice's cores and are only free while
+# that fleet is off. 10-11 stay unpinned. The map is explicit in
+# bin/github-runner.sh now, because the formula would have given lane 5 12-13.
+AllowedCPUs=0-9
 
 IOWeight=20
 
@@ -204,4 +228,5 @@ IOWeight=20
 # limit, so the cost of being wrong in the tight direction is a job failure
 # nobody can attribute. 3,072 keeps the per-lane rate the measurement was taken
 # at rather than stretching one total across a third lane.
-TasksMax=3072
+# Five lanes at the same rate since 2026-09-29.
+TasksMax=5120

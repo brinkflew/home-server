@@ -8,9 +8,10 @@ Added 2026-08-24.
 
 ## What this is
 
-Three **lanes**. Each is a `systemd --user` process that mints a single-use GitHub Actions runner
+Five **lanes** - three always, and lanes 4 and 5 only while the agent fleet is off, whose cores
+they borrow (see *The fourth and fifth lanes* below). Each is a `systemd --user` process that mints a single-use GitHub Actions runner
 identity, starts one container, lets that container run exactly one job, tears the registration
-down, and does it again. The lanes are `home-server-github-runner@1.service` through `@3`; the driver
+down, and does it again. The lanes are `home-server-github-runner@1.service` through `@5`; the driver
 is `bin/github-runner.sh`; the image is built here from `apps/github-runner/Dockerfile`.
 
 ```
@@ -788,8 +789,12 @@ house style, and `app-agents.slice` says why: twenty-four quadlets declare 34.5 
 
 | Level | MemoryHigh | MemoryMax | CPUs |
 |---|---|---|---|
-| lane scope | 2816M | 3584M | `4-5` / `6-7` / `8-9` |
-| `app-ci.slice` | 8448M | 9984M | `4-9` |
+| lane scope | 2816M | 3584M | `4-5` / `6-7` / `8-9` / `0-1` / `2-3` |
+| `app-ci.slice` (five lanes, since 2026-09-29) | 12032M | 14592M | `0-9` |
+| `app-ci.slice` (three lanes, until then) | 8448M | 9984M | `4-9` |
+
+**At five lanes the order below is reversed** - the slice binds first. See *The fourth and fifth
+lanes*; what follows describes the three-lane sizing and its measurements, which still hold.
 
 The per-lane limits **bind before the slice does** - three lanes at 3,584M is 10,752M against the
 slice's 9,984M - so the slice squeezes them rather than the kernel picking a victim by badness
@@ -871,6 +876,40 @@ seconds against 29m24s of wall clock.
 third: a smaller per-lane ceiling, or moving the slice's cpuset again - and this time the cpuset
 would have to come out of `app-agents.slice`'s `0-3`, which changes a phase's `nproc` from 4 to 3
 against a measurement `host/systemd/app-agents.slice` records. Neither is an adjustment.
+
+### The fourth and fifth lanes, and the fleet that was turned off for them
+
+**Added 2026-09-29, and the price was the agent fleet.** The paragraph above named the only honest
+source of more cores - `app-agents.slice`'s `0-3` - and it was taken whole rather than shared:
+conduct is disabled, the four Windmill quadlets are masked, and lanes 4 and 5 run on `0-1` and
+`2-3`. `app-ci.slice`'s ceilings grew by exactly `app-agents.slice`'s (3,584M high, 4,608M max), so
+the two slices reserve the same 14,592M of 15,828M they did before, in one slice rather than two.
+
+**The fleet being off is enforced, not remembered.** `bin/github-runner.sh` asks
+`systemctl --user is-enabled home-server-conduct.service` at start and at the top of every cycle,
+and a lane 4 or 5 exits 3 unless the answer is `disabled` or `masked`. So turning the fleet back on
+without disabling the lanes first stops them at their next idle moment rather than letting the two
+share cores. `bin/verify-host.sh` reads the same predicate: `agents.fleet` says the fleet is off,
+the rest of the section's warns become notes, and `containers.units_active` and
+`update.policy_count` leave masked quadlets out rather than failing on them.
+`host/systemd/README.md` has both directions.
+
+**The order of the memory ceilings has flipped, and that is the cost.** Five lanes at their scope
+`MemoryHigh` is 14,080M against the slice's 12,032M, and at `MemoryMax` 17,920M against 14,592M -
+3,328M short, where three lanes were 768M short. So once four heavy jobs coincide the SLICE
+throttles, and a slice-level OOM kill, which chooses across every lane, is reachable. Five e2e
+shards at their measured 2,817M would be ~14 GB, which this host does not have beside the media
+stack: on the day of the change it had 5,084 MB available with three lanes busy and its 4 GB zram
+full. That is accepted because the jobs rarely align that way, and it is watched by the same three
+readings as before - `memory.events max`, `oom_kill`, `ci.lane_headroom`. Throttling is still not a
+finding.
+
+**Disk moved with it.** Five lanes at the old 20 GB budget took `capacity.var_commitment` past 100%,
+so `GITHUB_RUNNER_LANE_MAX_MB` defaults to **16,384** now, in `bin/github-runner.sh` and in both
+checks that grade it. A lane resets its nested store a little sooner and re-pulls on the next job.
+
+**The `/ci` charts cannot tell lanes 3, 4 and 5 apart by line**, because the brightness ramp floors
+at 0.5; the legend and the readout still do. Moving the floor is a decision about every chart.
 
 ## Accepted risks, recorded rather than left implicit
 
@@ -1202,7 +1241,7 @@ engines is about 390 MB per lane, against a 20 GB budget where `home/` already m
 systemctl --user status home-server-github-runner@1        # a lane
 journalctl --user -u home-server-github-runner@1 -f
 cat ~/.cache/home-server/ci-state-1                        # what it thinks it is doing
-grep -H . ~/.cache/home-server/ci-state-[123]              # all three at once
+grep -H . ~/.cache/home-server/ci-state-[1-5]             # every lane at once
 systemctl --user list-units --type=scope | grep ci-lane    # a job in flight
 
 systemctl --user start home-server-github-runner-build.service   # build, smoke, promote

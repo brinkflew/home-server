@@ -2094,6 +2094,13 @@ signal read green.
   comment claiming `Persistent=false` prevents it was falsified within the minute. A window is a
   window whatever started the unit, so the gate now refuses outside its hours.
 
+### Five CI lanes, and the agent fleet turned off to pay for them
+- Lanes 4 and 5 run on the agent fleet's cores and memory ceiling, so the fleet is off on purpose
+  (conduct disabled, Windmill masked) and those two lanes **refuse while conduct is enabled**. The
+  CPU formula would have handed lane 5 cores that do not exist.
+- **The slice now binds before the lanes**, and five lanes at 20 GB broke the `/var` commitment, so
+  the lane disk budget is 16 GB. Turning the fleet back on is lanes first - `host/systemd/README.md`.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

@@ -6132,3 +6132,21 @@ service on the rack read **memory starved**. Nothing on the host was.
 - `HOME_SERVER_DOW` and `HOME_SERVER_HOUR` exist for `HOME_SERVER_STATUS_JSON`'s reason: without them
   the Sunday branch is unreachable six days a week and the weekday branch on the seventh, so half the
   gate is a branch nobody has seen run whichever day it is tested on.
+
+### Five CI lanes, and the agent fleet turned off to pay for them
+- **2026-09-29: lanes 4 and 5 were added on `app-agents.slice`'s cores (`0-1`, `2-3`) and its
+  ceiling**, so the fleet is off on purpose: conduct DISABLED (a symlinked unit file cannot be
+  masked), the four Windmill quadlets MASKED (a generated unit ignores `disable`). The two slices
+  reserve the same 14,592M they did before, in one slice.
+- **`4 + (LANE-1)*2` gives lane 5 CPUs 12-13**, which this 12-core host does not have, so the lane
+  CPU map in `bin/github-runner.sh` is explicit now. A formula that held for three is not evidence
+  about five.
+- **Lanes 4 and 5 refuse to run while `home-server-conduct.service` is enabled** - exit 3, checked
+  at start and every idle cycle, never mid-job - so turning the fleet back on cannot silently put
+  both on one cpuset. `bin/verify-host.sh` reads the same predicate, turns agents.* warns into notes
+  while it holds, and leaves masked quadlets out of `containers.units_active` and
+  `update.policy_count`, both of which would otherwise have FAILed and paged `CheckFailing`.
+- **The slice now binds before the lanes.** Five at scope `MemoryHigh` is 14,080M against 12,032M,
+  and at `MemoryMax` 3,328M short rather than 768M, so a slice-level OOM kill choosing across lanes
+  is reachable once four heavy jobs coincide. Five lanes at 20 GB also took
+  `capacity.var_commitment` past 100%, so `GITHUB_RUNNER_LANE_MAX_MB` defaults to 16,384.

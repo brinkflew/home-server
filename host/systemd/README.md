@@ -71,9 +71,12 @@ systemctl --user start home-server-github-runner-build.service
 
 # THE CI LANES ARE INSTANCES OF A TEMPLATE, so they are enabled by name rather
 # than by the glob above - the glob links the template file, which cannot be
-# started on its own. Three lanes, because host/systemd/app-ci.slice owns CPUs
-# 4-9 and each lane takes a pair; bin/github-runner.sh refuses a fourth rather
-# than silently sharing one. ADDING A LANE IS TWO EDITS AND THIS IS THE SECOND:
+# started on its own. Up to five lanes, each on a pair of CPUs from
+# bin/github-runner.sh's map; it refuses a sixth rather than silently sharing a
+# pair. LANES 4 AND 5 BORROW THE AGENT FLEET'S CORES (0-3) AND ITS MEMORY CEILING
+# and refuse to run while home-server-conduct.service is enabled - so enable them
+# only with the fleet off, see "Turning the agent fleet off" below. ADDING A LANE
+# IS TWO EDITS AND THIS IS THE SECOND:
 # widening the slice's cpuset hands the cores over, and this line is what makes
 # anything take them. A lane enabled here without the cpuset gets systemd's
 # refusal; a cpuset widened without this line gets silence.
@@ -85,6 +88,33 @@ systemctl --user start home-server-github-runner-build.service
 systemctl --user enable --now home-server-github-runner@1.service \
                               home-server-github-runner@2.service \
                               home-server-github-runner@3.service
+# only with the agent fleet off:
+systemctl --user enable --now home-server-github-runner@4.service \
+                              home-server-github-runner@5.service
+
+# TURNING THE AGENT FLEET OFF, which is what lanes 4 and 5 need (2026-09-29).
+# conduct is a symlinked unit file, so it is DISABLED - it cannot be masked; the
+# four Windmill quadlets are generated, so disable does nothing to them and they
+# are MASKED. bin/verify-host.sh reads exactly that: conduct disabled makes the
+# agents.* warns notes, and a masked quadlet is named by containers.units_active
+# rather than failed. Stop conduct only between phases:
+#   grep phase_in_flight ~/.cache/home-server/conduct-state    # must read 0
+systemctl --user disable --now home-server-conduct.service \
+    home-server-conduct-secret.service home-server-agents-update.timer \
+    home-server-conduct-runner-build.timer home-server-mirror-update.timer
+systemctl --user mask --now windmill-worker.service windmill-worker-verify.service \
+    windmill-server.service windmill-db.service
+#
+# AND BACK ON, IN THIS ORDER. Lanes 4 and 5 first, or they and the fleet share
+# CPUs 0-3 and the slices' ceilings sum past the host - the lanes would stop
+# themselves at their next idle moment anyway (exit 3), but not mid-job. Then
+# put app-ci.slice back to its three-lane values (git log names them).
+#   systemctl --user disable --now home-server-github-runner@4 home-server-github-runner@5
+#   systemctl --user unmask windmill-db windmill-server windmill-worker windmill-worker-verify
+#   systemctl --user start windmill-db windmill-server windmill-worker windmill-worker-verify
+#   systemctl --user enable --now home-server-conduct-secret.service home-server-conduct.service \
+#       home-server-agents-update.timer home-server-conduct-runner-build.timer \
+#       home-server-mirror-update.timer
 
 # AND THE SWEEP, WHICH IS THE THIRD UNIT HERE TO NEED A ONE-TIME START AND THE
 # MILDEST OF THE THREE. `enable --now` writes the stamp file immediately, so a
@@ -337,7 +367,7 @@ symlinks, so there is no copy step. Only `daemon-reload` is needed.
 | `home-server-verify-media` | **The one check for a failure that has actually happened, which ran by hand only.** `bin/verify-media.sh` existed for weeks and no unit referenced it. A file whose keyframes fall closer together than Jellyfin's 6s HLS segment makes ffmpeg merge GOPs, so segment N carries different media than playlist entry N and the error ACCUMULATES - +22.397s after twenty-five segments, measured - which looks like the picture jumping and subtitles drifting and names neither the cause nor the file. Weekly, sampled at three 120s demux windows a file across 725 of them, `Nice`/`IOWeight` throttled because `/mnt/media` is one spindle whose throughput FALLS with concurrency. `ExecCondition=` defers while somebody is watching, which is why `media.keyframe_drift` grades the MARKER and not the unit: a skipped run clears `ExecMainExitTimestamp` rather than leaving it stale, so `check_timer_run` would report "has never run" and FAIL from the first deferral. |
 | `home-server-verify-segmentation` | **Sends a packet at every edge that is meant to be closed.** The split into ten networks is the security model, and until 2026-09-09 the only evidence any forbidden edge was still forbidden was somebody running a throwaway container by hand - `net.segment_isolation` reads the `isolate=` option hourly, and this is the half that is evidence rather than configuration. BY IP, never by name: a container has one address per network it joins. **The exit code is the finding, not merely its sign** - `timeout` returns 124 for a dropped packet, and a refusal returns fast because the packet ARRIVED and only the port was shut, which is not a blocked edge. It carries a POSITIVE CONTROL and discards the whole run when that fails, because a missing image or a podman that will not start a container makes every forbidden edge read "dropped", which is the answer it hopes for. Every probe carries `io.home-server.ephemeral`. See `bin/verify-segmentation.sh`. |
 | `home-server-github-runner@` | **A template, one instance per CI lane**, enabled by name because the glob above links the template rather than an instance. Each lane mints a single-use just-in-time runner identity on the `avanserv` organisation, runs exactly one job in a `podman run --rm` container under a transient scope in `app-ci.slice`, and repeats. The organisation PAT never enters the container - it reaches `curl` on stdin, so it is not in argv either - and `bin/github-runner-smoke.sh` asserts its absence from `/proc/1/environ` rather than assuming it. **The loop is in the script, not in `Restart=`**: a finished job is a process exit, so letting systemd cycle it would make a completed job and a crash indistinguishable and put a busy lane into `failed` for having done its work. A non-zero exit therefore always means something a restart cannot fix, and the exit code says which - 3 configuration, 4 missing image, 5 credential rejected, 6 bad runner group. See `bin/github-runner.sh` and `docs/ci.md`. |
-| `app-ci.slice` | **The second cgroup ceiling, and not a unit that runs anything.** All three CI lanes, their drivers and the image build join it. Sized against a measurement rather than against the other slice's ceiling, which is what makes two slices fit on a 15.8 GB host: `app-agents.slice` reserves 4,608M but its 30-day median use is **957 MB**, its p90 1,455 MB, and a phase is in flight **6.9%** of the time. `AllowedCPUs=4-9` here is only half the answer - the slice value alone would give *all three* lanes `nproc=6` and put eighteen workers on six cores, so `bin/github-runner.sh` pins each lane scope to one pair of it and a job sees 2. The lanes were **not** widened when the third was added on 2026-08-27: upskald's two long jobs are single-threaded, so a wider pair could not have touched either, and a lane's own two cores measured 45% busy while a job ran. Assert it by its effect: `ci.slice_limits` reads all six controls back out of the cgroup, because a `Slice=` naming a slice with no unit file silently gets systemd's defaults. See `host/systemd/app-ci.slice`. |
+| `app-ci.slice` | **The second cgroup ceiling, and not a unit that runs anything.** All five CI lanes, their drivers and the image build join it - lanes 4 and 5 only while the agent fleet is off, whose cores and memory ceiling they took on 2026-09-29. Sized against a measurement rather than against the other slice's ceiling, which is what makes two slices fit on a 15.8 GB host: `app-agents.slice` reserves 4,608M but its 30-day median use is **957 MB**, its p90 1,455 MB, and a phase is in flight **6.9%** of the time. `AllowedCPUs=0-9` here is only half the answer - the slice value alone would give *all five* lanes `nproc=10` and put fifty workers on ten cores, so `bin/github-runner.sh` pins each lane scope to one pair of it and a job sees 2. The lanes were **not** widened when the third was added on 2026-08-27: upskald's two long jobs are single-threaded, so a wider pair could not have touched either, and a lane's own two cores measured 45% busy while a job ran. Assert it by its effect: `ci.slice_limits` reads all six controls back out of the cgroup, because a `Slice=` naming a slice with no unit file silently gets systemd's defaults. See `host/systemd/app-ci.slice`. |
 | `podman-auto-update.service.d` | **Not a unit of ours - a drop-in over podman's**, and now three files. `10-` makes the `ExecStartPost=` image prune non-fatal, so a disk reclaim that could be skipped for a night cannot mark the unit that updates eighteen containers as failed. It could and did: on 2026-08-17 and 2026-08-18 `podman auto-update` exited 0, every container updated, and the unit reported failure because the prune hit a leftover build container and exited 125. The condition itself is now measured by `containers.storage_orphans`, which is what makes this a correction and not a silencer. `20-` runs `bin/pre-update-snapshot.sh` as `ExecStartPre=` with **no** `-` prefix, so a failed database snapshot aborts the update rather than leaving the rollback with nothing to restore. `30-` runs `bin/update-when-idle.sh` as `ExecCondition=`, which skips the run - without failing the unit - while somebody is watching Jellyfin. |
 | `podman-auto-update.timer.d` | **Also a drop-in over podman's**, and the reason the symlink loop above had to learn `*.timer.d`. Podman ships `OnCalendar=daily`, one attempt at ~00:00-00:15 and no second chance for a day. That is fine for an unconditional update and wrong for a gated one, so this replaces it with three attempts at 00:00, 01:00 and 02:00 UTC - 02:00 to 04:00 local, the quietest band there is. The `OnCalendar=` empty assignment is load-bearing for the same reason `10-`'s is: systemd appends to a list directive unless it is cleared first. |
 

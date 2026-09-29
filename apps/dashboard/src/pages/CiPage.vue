@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /**
- * CI: the three self-hosted GitHub Actions lanes.
+ * CI: the five self-hosted GitHub Actions lanes (4 and 5 only while the agent
+ * fleet is off).
  *
  * THIS PAGE IS THE ONLY PLACE THIS FLEET IS VISIBLE, and that is not a boast
  * about the design - it is the constraint the whole page is built around. A lane
@@ -20,7 +21,7 @@
  * runner online status. GITHUB_RUNNER_PAT must never enter a container, and
  * bin/verify-host.sh already argues against hourly api.github.com polling. The
  * page says that slot is not measured rather than leaving a reader to assume
- * these three lanes are the whole picture.
+ * these lanes are the whole picture.
  *
  * IT GOT /agents/fleet's PASS ON 2026-09-07, AND IT HAD HAD NEITHER OF THAT
  * PAGE'S TWO. What that page opened on - three equal panels with no primary,
@@ -87,7 +88,7 @@ const metricsStale = useMetricsStale();
 // The three budgets the driver actually enforces, from docs/ci.md. Named here
 // rather than inlined, because a bar drawn against a number nobody can find is
 // decoration.
-const LANE_DISK_MAX = 20480 * 1024 * 1024; // GITHUB_RUNNER_LANE_MAX_MB
+const LANE_DISK_MAX = 16384 * 1024 * 1024; // GITHUB_RUNNER_LANE_MAX_MB
 const STORE_MAX_JOBS = 50; // GITHUB_RUNNER_STORE_MAX_JOBS
 const RUNTIME_MAX_S = 5400; // RuntimeMaxSec on the lane scope
 const JOB_STUCK_S = 10800; // what ci.job_stuck grades on: 2x the above
@@ -146,7 +147,7 @@ const rack = usePoll(async (signal) => {
   // THE LANE LIST IS THE UNION OF EVERY SERIES, NOT ONE OF THEM. Keying on any
   // single map would drop a lane whose marker exists but whose heartbeat has
   // gone - which is precisely the lane worth looking at. The set is closed at
-  // three by CI_LANES in the collector and by app-ci.slice's cpuset arithmetic,
+  // five by CI_LANES in the collector and by bin/github-runner.sh's CPU map,
   // so this cannot grow unbounded.
   const names = new Set<string>();
   for (const m of [heartbeat, inFlight, jobsTotal, disk, storeJobs]) {
@@ -237,8 +238,10 @@ const beat = computed(() => {
  * red, permanently, in the colour every other panel here uses for a failure.
  * Hue is status on this dashboard or it is nothing.
  *
- * THE RAMP FLOORS AT 0.5, so a fourth lane would be drawn identically to the
- * third and only the legend would tell them apart. The driver creates three.
+ * THE RAMP FLOORS AT 0.5, so lanes 3, 4 and 5 draw identically and only the
+ * legend and the readout tell them apart. That was a hypothetical at three
+ * lanes and is true since 2026-09-29; the floor is asserted in smoke.mjs, so
+ * moving it is a decision about every chart, not this one.
  */
 function laneSeries(rows: RangeSeries[]): ChartSeries[] {
   return rows
@@ -485,7 +488,7 @@ const diskCondTip = computed(() => ({
     "what ci.lane_disk grades on, and what triggers a budget reset",
   ],
   caveat:
-    "A lane holds about 12.5 GB in normal use and /var has 86 GB free, so this budget now does both jobs: three lanes at 20 GB is 60 GB of a 233 GB volume, and it is the second largest committed consumer on the disk. See the commitment on /system/storage.",
+    "A lane holds about 12.5 GB in normal use and /var has 86 GB free, so this budget now does both jobs: five lanes at 16 GB is 80 GB of a 233 GB volume, and it is the second largest committed consumer on the disk. See the commitment on /system/storage.",
 }));
 
 const memoryTip = computed(() => ({
@@ -495,7 +498,7 @@ const memoryTip = computed(() => ({
     `MemoryHigh ${fmt.bytes(c.value?.sliceHigh ?? Number.NaN)}, MemoryMax ${fmt.bytes(c.value?.sliceMax ?? Number.NaN)}`,
   ],
   caveat:
-    "A ceiling is not usage. These are what the slice may take, not what it does - reading one as the other nearly cost a second slice. The per-lane limits bind first: three lanes at 3,584M is 10,752M against the slice's 9,984M.",
+    "A ceiling is not usage. These are what the slice may take, not what it does - reading one as the other nearly cost a second slice. Since the fifth lane the slice binds first: five lanes at 2,816M is 14,080M against its 12,032M MemoryHigh, so four heavy jobs at once are throttled by the slice rather than by their own scopes.",
 }));
 
 const baselineTip = computed(() => ({
@@ -520,7 +523,7 @@ const CAVEATS: Record<string, string> = {
   "ci.runtime_dir":
     "libpod records its runroot in db.sql at the root of the graph root and uses that over both XDG_RUNTIME_DIR and storage.conf, silently - so this asks the running engine rather than reading the file back.",
   "ci.slice_limits":
-    "Six controls, and a cpuset is not exclusive: app-ci.slice's 4-9 is shared with the rest of the host rather than taken from it. Throttling at MemoryHigh is not the signal that the sizing is wrong.",
+    "Six controls, and a cpuset is not exclusive: app-ci.slice's 0-9 is shared with the rest of the host rather than taken from it. Throttling at MemoryHigh is not the signal that the sizing is wrong.",
   "ci.runner_isolation":
     "A lane's network is created by the driver rather than declared in stacks/, which is what keeps net-ci-* out of the agent fleet's own isolation check and this whole change out of topology.ts.",
   "ci.fleet_root_label":

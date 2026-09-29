@@ -123,7 +123,20 @@ say()  { cur_sect="$1"; sect_id+=("$1") sect_title+=("$2")
          [ -n "$QUIET" ] || printf '\n\033[1m==> %s\033[0m\n' "$2"; }
 ok()   { record pass "$1" "$2"; [ -n "$QUIET" ] || printf '  \033[32mPASS\033[0m  %s\n' "$2"; }
 bad()  { record fail "$1" "$2"; fails+=("$2"); [ -n "$QUIET" ] || printf '  \033[31mFAIL\033[0m  %s\n' "$2"; }
-warn() { record warn "$1" "$2"; warns+=("$2"); [ -n "$QUIET" ] || printf '  \033[33mWARN\033[0m  %s\n' "$2"; }
+warn() {
+	# A FLEET THAT IS DELIBERATELY OFF IS NOT DEGRADED. While fleet_off is set -
+	# only inside the Agents section, see there - an agents.* warn is recorded as
+	# a note, worded as itself, so it neither pages through AgentCheckWarning nor
+	# disappears. The three containment ids are exempt: they grade what the
+	# fleet would run inside, which is still true of a stopped one.
+	if [ -n "${fleet_off:-}" ]; then
+		case "$1" in
+			agents.slice_limits|agents.runner_isolation|agents.fleet_root_label) ;;
+			agents.*) note "$1" "fleet off: $2"; return 0 ;;
+		esac
+	fi
+	record warn "$1" "$2"; warns+=("$2"); [ -n "$QUIET" ] || printf '  \033[33mWARN\033[0m  %s\n' "$2"
+}
 note() { record note "$1" "$2"; notes+=("$2"); }
 
 # A number a dashboard would otherwise have to parse back out of prose. Type is
@@ -1817,7 +1830,29 @@ if [ -z "$GREENBOOT" ]; then
 	# caddy and dashboard were down - a number that moved for a reason that had
 	# nothing to do with what it claims to measure. Whether a container is
 	# RUNNING is containers.units_active's question, and it answers it properly.
-	au_expected=$(grep -l '^AutoUpdate=' "$repo"/stacks/*/*.container 2>/dev/null | wc -l)
+	#
+	# A MASKED QUADLET IS DELIBERATELY OFF AND IS NOT EXPECTED. Masking is how a
+	# generated unit is turned off here - `disable` does nothing to one - and the
+	# agent fleet's four Windmill quadlets are masked while it is off, since
+	# 2026-09-29. Its container is --rm, so it is gone rather than stopped, and
+	# counting its file would FAIL this on a host doing exactly what it was told.
+	# containers.units_active below names the masked set, so none of it is silent.
+	quadlet_masked() {
+		# quadlet_masked <stacks/.../name.container|.pod>
+		local b u
+		b=$(basename "$1")
+		case "$b" in
+			*.container) u="${b%.container}.service" ;;
+			*.pod)       u="${b%.pod}-pod.service" ;;
+			*)           return 1 ;;
+		esac
+		[ "$(systemctl --user is-enabled "$u" 2>/dev/null)" = masked ]
+	}
+	au_expected=0
+	for qf in "$repo"/stacks/*/*.container; do
+		grep -q '^AutoUpdate=' "$qf" 2>/dev/null || continue
+		quadlet_masked "$qf" || au_expected=$((au_expected + 1))
+	done
 	au_count=$(podman ps -a --filter label=io.containers.autoupdate \
 		--format '{{.Names}}' 2>/dev/null | wc -l)
 	if [ "${au_expected:-0}" -eq 0 ]; then
@@ -2506,9 +2541,16 @@ if [ -z "$GREENBOOT" ]; then
 	# a hand-maintained roster is the most driftable thing this repo has a name
 	# for, and it would have to be edited in lockstep with every new service.
 	expected_inactive=""
+	masked_units=""
 	for qf in "$repo"/stacks/*/*.container "$repo"/stacks/*/*.pod; do
 		[ -e "$qf" ] || continue
 		qb=$(basename "$qf")
+		# Masked is deliberately off - see quadlet_masked above - so it is named
+		# in the message rather than failed.
+		if quadlet_masked "$qf"; then
+			masked_units="$masked_units ${qb%.*}"
+			continue
+		fi
 		case "$qb" in
 			*.container) qu="${qb%.container}.service" ;;
 			*.pod)       qu="${qb%.pod}-pod.service" ;;
@@ -2517,8 +2559,10 @@ if [ -z "$GREENBOOT" ]; then
 		qs=$(systemctl --user is-active "$qu" 2>/dev/null)
 		[ "$qs" = active ] || expected_inactive="$expected_inactive $qu(${qs:-unknown})"
 	done
-	if [ -z "$expected_inactive" ]; then
+	if [ -z "$expected_inactive" ] && [ -z "$masked_units" ]; then
 		ok containers.units_active "every quadlet service is active"
+	elif [ -z "$expected_inactive" ]; then
+		ok containers.units_active "every quadlet service is active, except those masked deliberately:$masked_units"
 	else
 		bad containers.units_active "quadlet service(s) NOT running:$expected_inactive"
 	fi
@@ -2665,6 +2709,21 @@ if [ -z "$GREENBOOT" ]; then
 	# a reboot. This whole section is inside `if [ -z "$GREENBOOT" ]`, so the
 	# unattended reboot window never sees it either.
 	say agents "Agents"
+
+	# THE FLEET CAN BE OFF ON PURPOSE, since 2026-09-29: conduct disabled, the
+	# four Windmill quadlets masked, and CI lanes 4 and 5 running on its cores -
+	# bin/github-runner.sh refuses those two lanes unless this same predicate
+	# holds. conduct's marker and database outlive it, so the stateful checks
+	# below would otherwise keep warning about rounds and heartbeats nothing is
+	# meant to be advancing. warn() above turns those into notes while this is
+	# set, and it is cleared again before the next section.
+	fleet_off=""
+	case "$(systemctl --user is-enabled home-server-conduct.service 2>/dev/null)" in
+		disabled|masked)
+			fleet_off=1
+			note agents.fleet "the agent fleet is deliberately off (home-server-conduct.service disabled) and CI lanes 4 and 5 hold its cores - its checks below report as notes. To turn it back on, disable those two lanes first; see host/systemd/README.md"
+			;;
+	esac
 
 	# THE FAILURE THIS EXISTS FOR IS SILENCE. A `Slice=` naming a slice with no
 	# unit file does NOT fail - systemd instantiates it with defaults - so a
@@ -3785,12 +3844,13 @@ if [ -z "$GREENBOOT" ]; then
 	# that a wedged lane produces no series, no failed unit and no unhealthy
 	# container. That is the Windmill-worker trap exactly: work just queues. So
 	# the lane's own marker is the signal, and these checks read it.
+	fleet_off=""
 	say ci "Continuous integration"
 
 	ci_lanes_enabled=""
 	ci_lanes_failed=""
 	ci_lanes_active=0
-	for l in 1 2 3; do
+	for l in 1 2 3 4 5; do
 		u="home-server-github-runner@$l.service"
 		[ "$(systemctl --user is-enabled "$u" 2>/dev/null)" = enabled ] || continue
 		ci_lanes_enabled="$ci_lanes_enabled $l"
@@ -3838,7 +3898,7 @@ if [ -z "$GREENBOOT" ]; then
 	ci_reset_at=""
 	ci_reset_reason=""
 	ci_store_jobs=""
-	for l in 1 2 3; do
+	for l in 1 2 3 4 5; do
 		m="${HOME:-/var/home/core}/.cache/home-server/ci-state-$l"
 		[ -f "$m" ] || continue
 		ci_markers=$((ci_markers + 1))
@@ -3971,10 +4031,10 @@ if [ -z "$GREENBOOT" ]; then
 	# before it has to act rather than only after.
 	if [ -z "$ci_disk_worst" ]; then
 		note ci.lane_disk "no CI lane has reported its disk use yet"
-	elif [ "$ci_disk_worst" -le 20480 ]; then
-		ok ci.lane_disk "the largest CI lane holds ${ci_disk_worst}MB of its 20480MB budget"
+	elif [ "$ci_disk_worst" -le "${GITHUB_RUNNER_LANE_MAX_MB:-16384}" ]; then
+		ok ci.lane_disk "the largest CI lane holds ${ci_disk_worst}MB of its ${GITHUB_RUNNER_LANE_MAX_MB:-16384}MB budget"
 	else
-		warn ci.lane_disk "CI lane $ci_disk_lane holds ${ci_disk_worst}MB, over its 20480MB budget - the driver clears work, tmp and the nested image store at the top of its next cycle, so this clears itself unless the budget is simply too small"
+		warn ci.lane_disk "CI lane $ci_disk_lane holds ${ci_disk_worst}MB, over its ${GITHUB_RUNNER_LANE_MAX_MB:-16384}MB budget - the driver clears work, tmp and the nested image store at the top of its next cycle, so this clears itself unless the budget is simply too small"
 	fi
 
 	# The ceilings, read back from what jobs actually used.
@@ -3999,7 +4059,7 @@ if [ -z "$GREENBOOT" ]; then
 	elif [ -z "$ci_mem_peak" ]; then
 		note ci.lane_headroom "no CI lane has run, so nothing has been measured against the ceilings"
 	elif [ "$ci_oom" -gt 0 ]; then
-		bad ci.lane_headroom "the kernel has killed $ci_oom process(es) in a CI lane for breaching MemoryMax - a job died for a reason its own log will not explain. Raise MemoryMax on the scope in bin/github-runner.sh AND MemoryHigh/MemoryMax on host/systemd/app-ci.slice together: three lanes at the scope ceiling already exceed the slice by 768M, so raising one alone moves which limit binds without adding headroom."
+		bad ci.lane_headroom "the kernel has killed $ci_oom process(es) in a CI lane for breaching MemoryMax - a job died for a reason its own log will not explain. Raise MemoryMax on the scope in bin/github-runner.sh AND MemoryHigh/MemoryMax on host/systemd/app-ci.slice together: five lanes at the scope ceiling already exceed the slice by 3,328M, so raising one alone moves which limit binds without adding headroom."
 	elif [ "$ci_mem_max_ev" -gt 0 ]; then
 		warn ci.lane_headroom "a CI lane has hit MemoryMax $ci_mem_max_ev time(s) - allocation was refused at the hard ceiling rather than throttled at MemoryHigh, which is the reading that justifies raising it. Lane $ci_mem_lane peaked at ${ci_mem_peak}MB of ${ci_mem_ceiling}MB; read 'anon' against 'inactive_file' in the scope's memory.stat before changing a number."
 	elif [ -n "$ci_pids_peak" ] && [ "$ci_pids_peak" -gt "$(( ci_pids_ceiling * 8 / 10 ))" ]; then
@@ -4302,7 +4362,7 @@ if [ -z "$GREENBOOT" ]; then
 		-c 'cat /opt/hostedtoolcache-seed/.seed-version 2>/dev/null' 2>/dev/null | tr -d '\r\n')
 	ci_seed_stale=""
 	ci_seed_checked=0
-	for l in 1 2 3; do
+	for l in 1 2 3 4 5; do
 		ci_lane_tc="$ci_root/lanes/$l/toolcache/.seed-version"
 		podman unshare test -d "$ci_root/lanes/$l/toolcache" 2>/dev/null || continue
 		ci_seed_checked=$((ci_seed_checked + 1))
@@ -5386,7 +5446,9 @@ if [ -z "$GREENBOOT" ]; then
 		cap_lanes=0
 		for _l in $ci_lanes_enabled; do cap_lanes=$(( cap_lanes + 1 )); done
 		cap_owed "$ci_artifact_budget_mb" "$(census_get consumer_ci_artifacts_mb)"
-		[ "$cap_lanes" -gt 0 ] && cap_owed $(( cap_lanes * 20480 )) "$(census_get consumer_ci_lanes_mb)"
+		# The same default bin/github-runner.sh resets a lane at; 16,384 since the
+		# fifth lane, because five at the old 20,480 put this past 100%.
+		[ "$cap_lanes" -gt 0 ] && cap_owed $(( cap_lanes * ${GITHUB_RUNNER_LANE_MAX_MB:-16384} )) "$(census_get consumer_ci_lanes_mb)"
 		cap_owed "$jd_cap_mb" "$(census_get consumer_log_journal_mb)"
 		cap_owed 16384 "${tsdb_mb:-}"
 	fi

@@ -7,6 +7,11 @@ The orchestrator's own code is in `brinkflew/agents`, deployed to `/var/agents`.
 hosting**: what it runs as, what it may reach, what it writes, and the decisions that are easy to
 reverse by accident.
 
+**The fleet is OFF since 2026-09-29, deliberately.** Its cores (`0-3`) and its memory ceiling went
+to CI lanes 4 and 5 - see `docs/ci.md`, *The fourth and fifth lanes*. conduct is disabled and the
+Windmill quadlets are masked; everything below describes the fleet as it runs when it is on.
+`host/systemd/README.md` has the order for turning it back on, and the lanes enforce the first step.
+
 ## Three tiers, and each one is defined by what SELinux lets it reach
 
 ```

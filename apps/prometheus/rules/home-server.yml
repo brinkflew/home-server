@@ -1541,7 +1541,7 @@ groups:
             root nothing can read. `jq -r '.checks[]|select(.id=="{{ $labels.id }}")'
             /var/lib/home-server/status.json` names which. Until it is resolved,
             stop the lanes rather than leaving them taking jobs:
-            `systemctl --user stop home-server-github-runner@1 home-server-github-runner@2`.
+            `systemctl --user stop 'home-server-github-runner@*'`.
 
       - alert: CiCheckWarning
         # THE CATCH-ALL FOR THE SECTION, and it covers every check added to it

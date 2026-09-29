@@ -2,9 +2,11 @@
 # One CI lane, and the reason the loop is not in this file
 # ------------------------------------------------------------------------------
 # A template, instantiated once per lane: `home-server-github-runner@1.service`
-# through `@3`. %i is the lane number and nothing else - not a repository, not a
-# label and not a scope, so it never needs systemd-escape and cannot collide
-# with a repository name containing a dash.
+# through `@5` - lanes 4 and 5 only while the agent fleet is off, because they
+# borrow its cores, and bin/github-runner.sh refuses them otherwise. %i is the
+# lane number and nothing else - not a repository, not a label and not a scope,
+# so it never needs systemd-escape and cannot collide with a repository name
+# containing a dash.
 #
 # A plain user unit rather than a quadlet, and for the reason
 # home-server-conduct.service gives: forking podman is the whole job. No

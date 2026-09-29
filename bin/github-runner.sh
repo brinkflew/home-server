@@ -60,9 +60,9 @@ die() { log "$2"; exit "$1"; }
 # ------------------------------------------------------------------------------
 LANE="${1:-}"
 case "$LANE" in
-	1|2|3) ;;
+	1|2|3|4|5) ;;
 	'') die 2 "no lane number given - this unit is a template, start it as home-server-github-runner@1.service" ;;
-	*)  die 2 "lane '$LANE' is not 1, 2 or 3. host/systemd/app-ci.slice owns CPUs 4-9 and each lane takes a pair of them, so a fourth lane would have no cores of its own and would silently share another lane's pair - which is the nproc defect that slice's comment exists to prevent. It is refused on memory before it is refused on cores: four lanes at MemoryHigh is 11,264M, and the measured MemAvailable minimum on this host is 5,639 MB." ;;
+	*)  die 2 "lane '$LANE' is not 1 to 5. The CPU map below hands out every core of 0-9 in pairs and 10-11 are left to the media stack, so a sixth lane would have no cores of its own and would silently share another lane's pair - which is the nproc defect host/systemd/app-ci.slice's comment exists to prevent. It is refused on memory too: five lanes already exceed what the slice can give at once, see that file." ;;
 esac
 
 # ONE PAIR OF THE SLICE'S CPUSET, PER LANE, AND THIS IS NOT A TUNING KNOB.
@@ -70,23 +70,59 @@ esac
 # `nproc` reads the host's 12 whatever the quota delivers, and vitest, esbuild,
 # tsc and any `make -j$(nproc)` size their worker pools from it. Same suite, five
 # runs: 340-364s with one SPURIOUS FAILURE at nproc=12, against 69-71s and green
-# at nproc=4. Setting only the slice's 4-9 would give ALL THREE lanes nproc=6 and
-# put eighteen workers on six cores - the same defect. Pinned here, a job sees 2,
+# at nproc=4. Setting only the slice's 0-9 would give ALL FIVE lanes nproc=10 and
+# put fifty workers on ten cores - the same defect. Pinned here, a job sees 2,
 # which is what it will actually get.
 #
-# THE FORMULA ALREADY HELD FOR A THIRD LANE, which is why adding one on
-# 2026-08-27 did not touch this line: it yields 8-9 for lane 3, and only
-# app-ci.slice's own AllowedCPUs had to widen from 4-7 to 4-9 to hand it over.
-# The lanes were deliberately NOT widened at the same time. upskald's two long
-# jobs are single-threaded - `pytest` with no `-n`, Playwright at `workers: 1`
-# under CI - so a third core per lane could not have touched either, and the
-# measurement agrees: while a job ran, its two cores were 45% busy on average,
-# 71% at p90 and 76% at the worst two-minute window, with 0.8% iowait.
+# A MAP AND NOT A FORMULA SINCE THE FOURTH AND FIFTH LANES, 2026-09-29. The old
+# `4 + (LANE-1)*2` held for three lanes and would have handed lane 5 CPUs 12-13,
+# which this 12-core host does not have. Lanes 1-3 keep the pairs they always
+# had; lanes 4 and 5 take 0-1 and 2-3, which are app-agents.slice's cores - they
+# exist only while the agent fleet is deliberately off, and fleet_off below is
+# what enforces that. 10-11 stay unpinned for the media stack.
+#
+# The lanes were deliberately NOT widened when the third was added. upskald's two
+# long jobs are single-threaded - `pytest` with no `-n`, Playwright at
+# `workers: 1` under CI - so a third core per lane could not have touched
+# either, and the measurement agrees: while a job ran, its two cores were 45%
+# busy on average, 71% at p90 and 76% at the worst two-minute window, with 0.8%
+# iowait. More lanes is what buys width; wider lanes do not.
 #
 # VERIFIED ON THIS HOST rather than assumed, because a scope property is a
 # different question from a slice property:
 #   systemd-run --user --scope -p AllowedCPUs=4-5 --quiet -- nproc   ->  2
-LANE_CPUS="$(( 4 + (LANE - 1) * 2 ))-$(( 5 + (LANE - 1) * 2 ))"
+case "$LANE" in
+	1) LANE_CPUS=4-5 ;;
+	2) LANE_CPUS=6-7 ;;
+	3) LANE_CPUS=8-9 ;;
+	4) LANE_CPUS=0-1 ;;
+	5) LANE_CPUS=2-3 ;;
+esac
+
+# LANES 4 AND 5 BORROW THE AGENT FLEET'S CORES, AND REFUSE WHILE IT IS ON.
+# app-agents.slice and both Windmill workers pin AllowedCPUs=0-3, and
+# app-ci.slice's memory ceiling grew by exactly app-agents.slice's when these two
+# lanes were added - so the two can only coexist on this host by one of them being
+# off. "Off" is conduct's unit being disabled (or masked), which is the same
+# predicate bin/verify-host.sh reads to call the fleet deliberately off; see
+# host/systemd/README.md for turning it back on.
+#
+# Asked at start AND at the top of every cycle, never mid-job, so enabling the
+# fleet again stops these lanes at their next idle moment rather than killing a
+# job. Exit 3, configuration: a restart cannot fix it, the unit comes to rest in
+# `failed` after its start limit, and ci.lanes_alive names the lane.
+borrows_agent_cores() { [ "$LANE" -ge 4 ]; }
+fleet_off() {
+	case "$(systemctl --user is-enabled home-server-conduct.service 2>/dev/null)" in
+		disabled|masked) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+require_fleet_off() {
+	borrows_agent_cores || return 0
+	fleet_off && return 0
+	die 3 "lane $LANE borrows the agent fleet's cores (0-3) and its memory ceiling, and home-server-conduct.service is enabled - so the fleet is on. Disable lanes 4 and 5 before turning the fleet back on; see host/systemd/README.md."
+}
 
 # ------------------------------------------------------------------------------
 # Configuration
@@ -124,7 +160,7 @@ MARKER="${HOME_SERVER_CI_STATE:-${HOME:-/var/home/core}/.cache/home-server/ci-st
 
 LABELS="${GITHUB_RUNNER_LABELS:-self-hosted,Linux,X64,home-server}"
 IDLE_SEC="${GITHUB_RUNNER_IDLE_SEC:-1800}"
-LANE_MAX_MB="${GITHUB_RUNNER_LANE_MAX_MB:-20480}"
+LANE_MAX_MB="${GITHUB_RUNNER_LANE_MAX_MB:-16384}"
 
 # HOW MANY JOBS A NESTED IMAGE STORE MAY LIVE FOR. Not a tuning knob and not a
 # performance number - see the block above gc_lane for what it is bounding and
@@ -506,14 +542,13 @@ preflight() {
 #
 # WHAT BOUNDS THE HOST NOW IS THE CGROUP CEILINGS AND NOTHING ELSE, which is a
 # genuinely weaker guarantee and is stated plainly here rather than discovered
-# later. app-ci.slice caps at 9,984M and app-agents.slice at 4,608M; that sums to
-# 14,592M of 15,828M, so the two slices can no longer be assumed not to coincide
-# and their overlap is now real rather than theoretical. What makes that
-# survivable is that neither slice has ever approached its ceiling: a lane's
-# measured peak is 2,817M of its 3,584M scope limit and the fleet's 30-day median
-# is 957M against p90 1,455M, so three lanes and a phase at their observed peaks
-# come to roughly 9.9 GB, not 14.6. The ceilings squeeze before the kernel picks
-# a victim, which is the property that has to keep holding.
+# later. Until 2026-09-29 that was app-ci.slice at 9,984M and app-agents.slice at
+# 4,608M, overlapping for real. Since then the agent fleet is deliberately off and
+# app-ci.slice holds the whole 14,592M itself for five lanes - the same total
+# against 15,828M, one slice instead of two. Five e2e shards at their measured
+# 2,817M peak would be ~14 GB, which the host cannot give while the media stack
+# runs, so the slice's own MemoryHigh is what squeezes once four heavy jobs
+# coincide. host/systemd/app-ci.slice carries the arithmetic.
 #
 # WHAT TO WATCH, because this trades a scheduling guarantee for a measurement:
 # `ci.lane_headroom` already grades a lane against its own scope, and the numbers
@@ -787,7 +822,7 @@ gc_lane() {
 # rather than left implied: this is a floor on the true peak, and it is the
 # floor host/systemd/app-ci.slice asked for.
 #
-# WHY IT IS HERE AT ALL. That file sizes three lanes against a 15.8 GB host, and
+# WHY IT IS HERE AT ALL. That file sizes five lanes against a 15.8 GB host, and
 # names its own failure mode as silence: a
 # `Slice=` pointing at nothing still starts every member, healthy and fully
 # observed and contained by nothing. Peaks in the marker are what turn the next
@@ -908,12 +943,14 @@ nap() {
 
 trap cleanup TERM INT
 
+require_fleet_off
 marker_read
 preflight
 log "lane $LANE ready: cpus $LANE_CPUS, org $GITHUB_RUNNER_ORG, group $GITHUB_RUNNER_GROUP_ID"
 
 while [ "$stopping" = 0 ]; do
 	marker_write 0
+	require_fleet_off
 
 	gc_lane
 	reap_offline
