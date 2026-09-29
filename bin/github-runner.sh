@@ -103,9 +103,14 @@ esac
 # app-agents.slice and both Windmill workers pin AllowedCPUs=0-3, and
 # app-ci.slice's memory ceiling grew by exactly app-agents.slice's when these two
 # lanes were added - so the two can only coexist on this host by one of them being
-# off. "Off" is conduct's unit being disabled (or masked), which is the same
+# off. "Off" is conduct's unit being anything but ENABLED, which is the same
 # predicate bin/verify-host.sh reads to call the fleet deliberately off; see
 # host/systemd/README.md for turning it back on.
+#
+# NOT "is it disabled", because nothing here ever reads `disabled`: conduct is
+# a unit LINKED in from host/systemd/, and is-enabled calls a linked unit that
+# is not enabled `linked`. Measured on the first deploy, where a disabled
+# conduct would otherwise have read as a fleet that was on.
 #
 # Asked at start AND at the top of every cycle, never mid-job, so enabling the
 # fleet again stops these lanes at their next idle moment rather than killing a
@@ -114,8 +119,8 @@ esac
 borrows_agent_cores() { [ "$LANE" -ge 4 ]; }
 fleet_off() {
 	case "$(systemctl --user is-enabled home-server-conduct.service 2>/dev/null)" in
-		disabled|masked) return 0 ;;
-		*) return 1 ;;
+		enabled|enabled-runtime) return 1 ;;
+		*) return 0 ;;
 	esac
 }
 require_fleet_off() {

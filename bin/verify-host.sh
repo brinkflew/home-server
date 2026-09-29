@@ -2718,10 +2718,14 @@ if [ -z "$GREENBOOT" ]; then
 	# meant to be advancing. warn() above turns those into notes while this is
 	# set, and it is cleared again before the next section.
 	fleet_off=""
+	# Anything but ENABLED, and never "is it disabled": a unit linked in from
+	# host/systemd/ that is not enabled reads `linked`. bin/github-runner.sh
+	# asks the identical question.
 	case "$(systemctl --user is-enabled home-server-conduct.service 2>/dev/null)" in
-		disabled|masked)
+		enabled|enabled-runtime) ;;
+		*)
 			fleet_off=1
-			note agents.fleet "the agent fleet is deliberately off (home-server-conduct.service disabled) and CI lanes 4 and 5 hold its cores - its checks below report as notes. To turn it back on, disable those two lanes first; see host/systemd/README.md"
+			note agents.fleet "the agent fleet is deliberately off (home-server-conduct.service not enabled) and CI lanes 4 and 5 hold its cores - its checks below report as notes. To turn it back on, disable those two lanes first; see host/systemd/README.md"
 			;;
 	esac
 

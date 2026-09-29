@@ -95,13 +95,24 @@ systemctl --user enable --now home-server-github-runner@4.service \
 # TURNING THE AGENT FLEET OFF, which is what lanes 4 and 5 need (2026-09-29).
 # conduct is a symlinked unit file, so it is DISABLED - it cannot be masked; the
 # four Windmill quadlets are generated, so disable does nothing to them and they
-# are MASKED. bin/verify-host.sh reads exactly that: conduct disabled makes the
-# agents.* warns notes, and a masked quadlet is named by containers.units_active
-# rather than failed. Stop conduct only between phases:
+# are MASKED. bin/verify-host.sh reads exactly that: conduct not enabled makes
+# the agents.* warns notes, and a masked quadlet is named by
+# containers.units_active rather than failed. Stop conduct only between phases:
 #   grep phase_in_flight ~/.cache/home-server/conduct-state    # must read 0
+#
+# `disable` ON A LINKED UNIT DELETES THE LINK TOO, so conduct then reads
+# `not-found` rather than `linked` - measured on 2026-09-29. The loop at the top
+# of this file puts the links back; is-enabled then answers `linked`, which is
+# the state the fleet is off in.
 systemctl --user disable --now home-server-conduct.service \
     home-server-conduct-secret.service home-server-agents-update.timer \
     home-server-conduct-runner-build.timer home-server-mirror-update.timer
+for u in home-server-conduct.service home-server-conduct-secret.service \
+         home-server-agents-update.timer home-server-conduct-runner-build.timer \
+         home-server-mirror-update.timer; do
+  ln -sf "/var/home-server/host/systemd/$u" ~/.config/systemd/user/
+done
+systemctl --user daemon-reload
 systemctl --user mask --now windmill-worker.service windmill-worker-verify.service \
     windmill-server.service windmill-db.service
 #

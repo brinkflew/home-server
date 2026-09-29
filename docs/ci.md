@@ -887,7 +887,8 @@ the two slices reserve the same 14,592M of 15,828M they did before, in one slice
 
 **The fleet being off is enforced, not remembered.** `bin/github-runner.sh` asks
 `systemctl --user is-enabled home-server-conduct.service` at start and at the top of every cycle,
-and a lane 4 or 5 exits 3 unless the answer is `disabled` or `masked`. So turning the fleet back on
+and a lane 4 or 5 exits 3 while the answer is `enabled` - a linked unit that is not enabled reads
+`linked`, never `disabled`, so the question is asked that way round. So turning the fleet back on
 without disabling the lanes first stops them at their next idle moment rather than letting the two
 share cores. `bin/verify-host.sh` reads the same predicate: `agents.fleet` says the fleet is off,
 the rest of the section's warns become notes, and `containers.units_active` and

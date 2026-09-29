@@ -6136,7 +6136,9 @@ service on the rack read **memory starved**. Nothing on the host was.
 ### Five CI lanes, and the agent fleet turned off to pay for them
 - **2026-09-29: lanes 4 and 5 were added on `app-agents.slice`'s cores (`0-1`, `2-3`) and its
   ceiling**, so the fleet is off on purpose: conduct DISABLED (a symlinked unit file cannot be
-  masked), the four Windmill quadlets MASKED (a generated unit ignores `disable`). The two slices
+  masked), the four Windmill quadlets MASKED (a generated unit ignores `disable`).
+- **`disable` on a LINKED unit deletes the link**, so conduct read `not-found`; relinked, a
+  not-enabled linked unit reads `linked` and never `disabled`. The predicate is "not `enabled`". The two slices
   reserve the same 14,592M they did before, in one slice.
 - **`4 + (LANE-1)*2` gives lane 5 CPUs 12-13**, which this 12-core host does not have, so the lane
   CPU map in `bin/github-runner.sh` is explicit now. A formula that held for three is not evidence
