@@ -71,7 +71,7 @@ reachable over passwordless SSH as `home` (WAN, via the router's `9122 -> 22` fo
 hairpinning and on the forward still pointing at the right address.
 
 **The same applies in the BROWSER, and it costs more than it does over SSH.** Every public hostname
-here resolves through one wildcard CNAME, `*.avanserv.me` -> `avanserv.duckdns.org`, which resolves to the server's own WAN address
+here is a CNAME to `avanserv.duckdns.org`, which resolves to the server's own WAN address
 (`91.86.121.124`), so a LAN machine loading `watch.avanserv.me` sends every request out through the
 router and back in through NAT loopback. Measured against `/web/index.html`: **12-16 ms direct
 against 74-79 ms proxied, about 5x per request** - and a Jellyfin page is ~29 JS bundles plus 30-60
@@ -89,7 +89,8 @@ every time someone rediscovers it. Three things settled it:
   answers for. That is a second list of the Caddyfile's site blocks, maintained by hand, in a
   place nothing validates - the most driftable shape this repository has a name for. **This reason
   lapsed with the move to `avanserv.me`**, a zone this host has to itself, where one
-  `*.avanserv.me` override would do. The other two stand, and they are what the decision rests on.
+  `*.avanserv.me` override on a LAN resolver would do. The other two stand, and they are what the
+  decision rests on. A PUBLIC wildcard is a different thing and was tried: it breaks issuance.
 - **Both places to put it are worse than the problem.** On the router it is unversioned state this
   repo cannot see, verify or restore, which is the whole reason `host/butane/ucore.bu` exists. On
   the server it is a resolver container the whole house then depends on for DNS, so the machine
@@ -2108,8 +2109,12 @@ signal read green.
   `POCKETID_APP_URL`, the OIDC callback in Pocket ID's database and the `--routes` battery did not
   follow, and **a passkey is bound to the hostname** - the way back in is
   `pocket-id one-time-access-token`, and reverting `DOMAIN` revives the old ones.
-- **A Gandi PAT is scoped per domain**, and listing a zone is not access to it. One wildcard CNAME
-  resolves every name now. Odoo, mail, DuckDNS and the GitHub org stay on `avanserv`.
+- **A Gandi PAT is scoped per domain**, and listing a zone is not access to it. Odoo, mail,
+  DuckDNS and the GitHub org stay on `avanserv`.
+- **A wildcard CNAME took the ingress down for fifteen minutes**: it answers
+  `_acme-challenge.<host>` too, so Caddy's propagation check followed it into `duckdns.org` and
+  timed out on all fourteen names. One CNAME per name, as before. The retry then failed a second
+  way - certmagic proves a retry against STAGING first, and production then read a TXT that was not its own.
 
 ## Target architecture
 

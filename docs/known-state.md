@@ -6178,9 +6178,23 @@ service on the rack read **memory starved**. Nothing on the host was.
   site blocks, so the abandoned `.com` certificates start warning at the renewal time Caddy chose
   for them (2026-10-10) unless their directories are removed first. `fakerr` had been an orphan
   there already, which is where "fifteen certificates" against fourteen site blocks came from.
-- **One wildcard CNAME replaced fourteen records**, which the old zone could not offer. It also
-  answers `_acme-challenge.<host>` until Caddy writes the TXT there, and it means
-  `ingress.public_dns` can only ever see all the names missing, never one.
+- **A wildcard CNAME took the ingress down for fifteen minutes.** `*.avanserv.me` ->
+  `avanserv.duckdns.org` resolved every name and looked like fourteen records saved. It also
+  answers `_acme-challenge.<host>.avanserv.me`, so certmagic's propagation check got a CNAME,
+  followed it, and asked `duckdns.org`'s nameservers for a TXT record they will never carry:
+  `querying authoritative nameservers: dial tcp ...:53: i/o timeout`, or `timed out waiting for
+  record to fully propagate - last error: <nil>`, on all fourteen. The error names an AWS address
+  and neither the wildcard nor DuckDNS. Nothing reached Let's Encrypt, so no rate limit was spent.
+- **The fix is an explicit CNAME per name**, because a wildcard does not match beneath a name that
+  exists: `_acme-challenge.id` is NXDOMAIN the moment `id` has a record of its own. The wildcard
+  was then deleted, or a new service would resolve and be unable to get a certificate.
+- **The retry failed a second, unrelated way**: after a failure certmagic proves the next attempt
+  against the STAGING CA first, and production's validators then read a TXT value that was not
+  production's - staging's, seconds old, is the reading that fits, and it was not confirmed by
+  comparing the two - `During secondary validation: Incorrect TXT record ... found`, one real failed
+  validation per name against a limit of five an hour, and `job failed` with no further retry.
+  The zone held no stale record at all. A restart of Caddy some minutes later goes straight to
+  production and issued all fourteen in under three minutes.
 - **`avanserv.me` is eleven characters and `ROUND_REDACT_MIN` is twelve**, so the domain stopped
   being redacted from round transcripts. It is public; noted rather than changed.
 - Left on the old name deliberately: `ODOO_URL` and every Odoo link (the other machine),

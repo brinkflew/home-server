@@ -173,15 +173,15 @@ holding a stale inode.
 **Certificates are issued per site block, on demand, over DNS-01 against Gandi** using a Personal
 Access Token (`GANDI_BEARER_TOKEN`). Consequences worth knowing:
 
-- There is **no certificate list to maintain**. Adding a service is a Caddyfile block.
+- There is **no certificate list to maintain**. Adding a service is a CNAME plus a Caddyfile block.
 - **A hostname with no block gets no certificate and fails the TLS handshake**, so unlisted names
   are closed by construction rather than by remembering to remove them.
-- **One wildcard CNAME, `*.avanserv.me` -> `avanserv.duckdns.org`, resolves every name**, so a new
-  service needs no DNS step. That was not possible on `avanserv.com`, whose apex and mail belong to
-  a different machine; `avanserv.me` carries nothing but this host. What it costs: every label
-  resolves to the WAN address whether or not Caddy has a block for it - the TLS handshake is still
-  what refuses it - and `ingress.public_dns` can no longer see ONE name missing, only the wildcard.
-  Certificates stay per site block; the wildcard is DNS only.
+- **Each name is its own CNAME to `avanserv.duckdns.org`, and a wildcard is NOT available** even
+  though `avanserv.me` carries nothing but this host. `*.avanserv.me` was tried on 2026-10-02 and
+  took the ingress down: a wildcard also answers `_acme-challenge.<host>.avanserv.me`, so Caddy's
+  DNS-01 propagation check received a CNAME, followed it into `duckdns.org` and timed out against
+  nameservers that will never carry the record. An explicit `<host>` record is what stops it - a
+  wildcard does not match beneath a name that exists - so each new service needs its own CNAME.
 - The credential is a **PAT, not the legacy `dns_gandi_api_key`** certbot used. That type is
   deprecated and `caddy-dns/gandi` will not authenticate with it.
 

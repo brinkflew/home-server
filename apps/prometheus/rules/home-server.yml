@@ -626,10 +626,10 @@ groups:
         annotations:
           summary: "A public hostname no longer follows the DuckDNS record"
           description: >-
-            The CNAME at the registrar is missing or points elsewhere, so the
-            public names are unreachable from outside however healthy this host
-            is. Every name resolves through ONE wildcard CNAME, *.avanserv.me
-            to the DuckDNS record, so this is all of them at once - see
+            The CNAME at the registrar is missing or points elsewhere, so that
+            name is unreachable from outside however healthy this host is.
+            Each name under avanserv.me needs its own CNAME to the DuckDNS
+            record, and a wildcard breaks certificate issuance - see
             docs/networking.md.
             jq -r '.checks[]|select(.id=="{{ $labels.id }}")'
             /var/lib/home-server/status.json
