@@ -68,7 +68,7 @@ export function fleetDocument(): FleetDocument {
         // The approval page behind sign-on. NEVER a resume URL - see
         // src/api/fleet.ts, and note that a fixture is exactly where a bad
         // example would get copied from.
-        link: "https://agents.avanserv.com/run/job-aaa",
+        link: "https://agents.avanserv.me/run/job-aaa",
         summary: "Open the pull request for task 1572",
         kind: "approval",
         closed_at: null,
@@ -569,7 +569,7 @@ export function fleetDocument(): FleetDocument {
         head: "7364772",
         resumed_at: null,
         waiting_on: "person",
-        link: "https://agents.avanserv.com/run/job-1254aa?workspace=dev-agents",
+        link: "https://agents.avanserv.me/run/job-1254aa?workspace=dev-agents",
         summary:
           "upskald verify on upskald-ship\n7 commit(s), 48 file(s), head 736477284775",
         kind: "approval",
@@ -896,7 +896,7 @@ export function fleetDocument(): FleetDocument {
         project: "upskald",
         kind: "approval",
         summary: "Open the pull request for task 1572",
-        link: "https://agents.avanserv.com/run/job-aaa",
+        link: "https://agents.avanserv.me/run/job-aaa",
         first_at: iso(10 * 3600),
         last_at: iso(2 * 3600),
         sends: 4,
@@ -908,7 +908,7 @@ export function fleetDocument(): FleetDocument {
         project: "upskald",
         kind: "approval",
         summary: "Approve the squash for task 1544",
-        link: "https://agents.avanserv.com/run/job-eee",
+        link: "https://agents.avanserv.me/run/job-eee",
         first_at: iso(38 * 3600),
         last_at: iso(3 * 3600),
         sends: 7,

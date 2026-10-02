@@ -749,11 +749,11 @@ function bySeries(): Record<string, SeriesSpec[]> {
   // into a different state every day it is not regenerated, which is a fixture
   // that stops meaning what it was written to mean.
   const CERTS: Record<string, { expiry: number; renewal?: number; overdue?: number }> = {
-    "watch.avanserv.com": { expiry: 61, renewal: 31 },
-    "home.avanserv.com": { expiry: 65, renewal: 35 },
-    "ntfy.avanserv.com": { expiry: 28, renewal: -1 },
-    "id.avanserv.com": { expiry: 44, renewal: -6, overdue: 1 },
-    "auth.avanserv.com": { expiry: 70 },
+    "watch.avanserv.me": { expiry: 61, renewal: 31 },
+    "home.avanserv.me": { expiry: 65, renewal: 35 },
+    "ntfy.avanserv.me": { expiry: 28, renewal: -1 },
+    "id.avanserv.me": { expiry: 44, renewal: -6, overdue: 1 },
+    "auth.avanserv.me": { expiry: 70 },
   };
   const inDays = (d: number) => (at: number) => at + d * 86_400;
 

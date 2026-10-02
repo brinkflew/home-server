@@ -1077,7 +1077,7 @@ check("exactly one round is hidden by default",
 console.log("\n-- the action answers what is actually being waited for --");
 
 check("an approval offers conduct's own page",
-  roundAction(by("wt-9f21c4")).href, "https://agents.avanserv.com/run/job-aaa");
+  roundAction(by("wt-9f21c4")).href, "https://agents.avanserv.me/run/job-aaa");
 check("an open pull request offers itself",
   roundAction(by("wt-2c44b1")).label, "review #249");
 check("a merged one no longer asks for a review",

@@ -433,11 +433,11 @@ export const NETWORK = {
 } as const;
 
 /**
- * The ingress chain: fifteen certificates and Caddy's own plan for them.
+ * The ingress chain: fourteen certificates and Caddy's own plan for them.
  *
  * THE BATTERY KEEPS ONLY THE AGGREGATE, which is what these are for. A check
  * message is a sentence, so ingress.cert_expiry reports the soonest of the
- * fifteen and ingress.renewal_due a count; the band wants a row per hostname,
+ * fourteen and ingress.renewal_due a count; the band wants a row per hostname,
  * and history, so a renewal can be watched happening rather than inferred from
  * a number that got larger.
  *

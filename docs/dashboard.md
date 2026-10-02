@@ -5,7 +5,7 @@ Lifted whole from `CLAUDE.md` on 2026-08-19. Nothing here was rewritten.
 ## The dashboard
 
 **Since 2026-08-15 there is somewhere to look that is not an ssh session.** A Vue 3 application at
-`home.avanserv.com`, behind the same passkey sign-on as everything else, built from
+`home.avanserv.me`, behind the same passkey sign-on as everything else, built from
 `apps/dashboard/` and served by its own container. It closes the last roadmap item: `status.json`
 for what is true now, Prometheus for when it stopped being true.
 
@@ -882,7 +882,7 @@ lesson this file keeps rediscovering:
   request tells them apart, so test the refusals with `curl` after touching that block.
 
 **An expired session is a 302, not a 401, and it is the thing most likely to make this look broken.**
-`forward_auth` redirects to `auth.avanserv.com` and `fetch` follows redirects, so an XHR *resolves*
+`forward_auth` redirects to `auth.avanserv.me` and `fetch` follows redirects, so an XHR *resolves*
 with `res.ok` true and an HTML sign-in page as its body; `JSON.parse` then throws somewhere
 unrelated and every panel silently shows nothing. `src/api/http.ts` is the single place that detects
 it - a cross-origin redirect, or a `text/html` content type - and it reloads the page, because a

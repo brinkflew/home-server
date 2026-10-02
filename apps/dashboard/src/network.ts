@@ -1069,9 +1069,9 @@ export function graphModel(segments: SegmentRow[]): GraphModel {
 // =============================================================================
 // The ingress chain
 // -----------------------------------------------------------------------------
-// FIFTEEN CERTIFICATES THAT EXPIRE TOGETHER, which is the whole reason this is
-// a band rather than a number. They were issued in one afternoon at the
-// migration, so ten of them share an expiry date: the failure is not one
+// FOURTEEN CERTIFICATES THAT EXPIRE TOGETHER, which is the whole reason this is
+// a band rather than a number. They were issued in one afternoon at the move
+// to avanserv.me, so they share an expiry date: the failure is not one
 // hostname degrading, it is every public name going dark within hours of each
 // other, and a single "soonest: 61 days" hides that they are all 61 days.
 //

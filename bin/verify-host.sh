@@ -5481,7 +5481,7 @@ if [ -z "$GREENBOOT" ]; then
 	say ingress "Ingress"
 	# --------------------------------------------------------------------------
 	# THE CHAIN EVERY PUBLIC HOSTNAME RESTS ON, AND NOTHING HERE HAD EVER READ A
-	# CERTIFICATE. Fifteen names are served over TLS on Let's Encrypt certificates
+	# CERTIFICATE. Fourteen names are served over TLS on Let's Encrypt certificates
 	# Caddy issues per site block over DNS-01 against Gandi, and until 2026-09-09
 	# no check on this host named one: not `cert`, not `acme`, not `dns`. The
 	# `net` section is one check, about the LAN address.
@@ -5684,7 +5684,7 @@ if [ -z "$GREENBOOT" ]; then
 	# repository has a name for, and the whole point of this check is to catch a
 	# block whose certificate never issued - which a list written beside it could
 	# not do. The two parenthesised SNIPPETS are not site blocks: there are 17
-	# top-level blocks and 15 sites, and matching on the {$DOMAIN} placeholder is
+	# top-level blocks and 14 sites, and matching on the {$DOMAIN} placeholder is
 	# what tells them apart.
 	ing_domain=$(sed -n 's/^DOMAIN=//p' "$ing_env" 2>/dev/null | tail -1) || ing_domain=""
 	# The placeholder is spelled [$]DOMAIN rather than \$DOMAIN because the
@@ -5742,7 +5742,7 @@ if [ -z "$GREENBOOT" ]; then
 	# because that section runs under --greenboot: a resolver hiccup at boot must
 	# never be an input to an OS rollback. It proves the CNAME chain rather than
 	# the address - the record's value cannot be wrong, per the note at the top,
-	# so what is worth asking is whether avanserv.com still points at it.
+	# so what is worth asking is whether the domain still points at it.
 	ing_probe=$(printf '%s\n' "$ing_sites" | head -1) || ing_probe=""
 	ing_ddns_name=$(sed -n 's/^DDNS_SUBDOMAINS=//p' "$ing_env" 2>/dev/null |
 		tail -1 | cut -d, -f1) || ing_ddns_name=""
@@ -5808,7 +5808,7 @@ if [ -z "$GREENBOOT" ]; then
 				ntfy) rpath="/verify-host-probe/json?poll=1" ;;
 				*)    rpath="/" ;;
 			esac
-			code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "https://$h.avanserv.com$rpath" 2>/dev/null)
+			code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "https://$h.$ing_domain$rpath" 2>/dev/null)
 			# ntfy IS THE ONE WHOSE HEALTHY ANSWER IS A REFUSAL, and it has to be
 			# in this battery rather than left out: it is the route every alert
 			# travels, so if it breaks, the thing that would have told you is the

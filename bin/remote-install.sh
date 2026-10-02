@@ -166,7 +166,7 @@ cat <<EOF
   The machine is rebooting into Fedora CoreOS with the Ignition config applied.
 
   Its SSH host key has changed:
-      ssh-keygen -R $TARGET_IP && ssh-keygen -R home.avanserv.com
+      ssh-keygen -R $TARGET_IP && ssh-keygen -R home.avanserv.me
 
   Then, still Fedora CoreOS rather than uCore - the rebase is next. Ignition has
   already masked zincati, so --bypass-driver is not needed. It takes TWO

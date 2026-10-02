@@ -298,7 +298,7 @@ volume's UUID against `mnt-media.mount`, ships `ucore.ign`, and requires you to 
 The host key has changed:
 
 ```bash
-ssh-keygen -R 192.168.0.100 && ssh-keygen -R home.avanserv.com
+ssh-keygen -R 192.168.0.100 && ssh-keygen -R home.avanserv.me
 ```
 
 **Ignition masks Zincati, so `--bypass-driver` is no longer needed.** Stock FCOS delegates all
@@ -555,7 +555,7 @@ nvidia-ctk cdi list | head
 podman exec tdarr-node-01 nvidia-smi -L          # one GPU, ordinal 0 inside the container
 # routes: admin 302, watch 302, request 307, auth/id 200
 for h in watch request id auth sonarr radarr prowlarr tdarr torrent fakerr; do
-  printf '%-9s %s\n' $h "$(curl -s -o /dev/null -w '%{http_code}' https://$h.avanserv.com/)"
+  printf '%-9s %s\n' $h "$(curl -s -o /dev/null -w '%{http_code}' https://$h.avanserv.me/)"
 done
 ```
 

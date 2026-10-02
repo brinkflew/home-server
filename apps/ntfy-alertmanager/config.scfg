@@ -86,7 +86,7 @@ ntfy {
 	markdown true
 
 	# A button that opens the alert's own Prometheus query. It works without
-	# exposing anything, because it opens metrics.avanserv.com in a real
+	# exposing anything, because it opens metrics.avanserv.me in a real
 	# browser, where sign-on can complete normally.
 	generator-url-label "Prometheus"
 }

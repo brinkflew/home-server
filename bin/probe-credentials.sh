@@ -19,11 +19,11 @@
 #
 # WHAT THAT COSTS, PER CREDENTIAL, WHEN IT IS WRONG:
 #
-#   gandi    Every public hostname goes dark within hours of the others - ten
-#            of the fifteen certificates were issued together on 2026-08-11 and
-#            expire together. The first renewal Caddy scheduled is
-#            2026-10-10T01:46Z. ingress.renewal_due catches a FAILED renewal
-#            about thirty days before that, which is a backstop and not a proof.
+#   gandi    Every public hostname goes dark within hours of the others - all
+#            fourteen certificates were issued together at the move to
+#            avanserv.me and expire together. ingress.renewal_due catches a
+#            FAILED renewal about thirty days before that, which is a backstop
+#            and not a proof.
 #   model    Every phase fails twenty minutes in, and the fleet keeps taking
 #            work because nothing upstream knows.
 #   publish  A round plans, changes, gates and then cannot open the pull

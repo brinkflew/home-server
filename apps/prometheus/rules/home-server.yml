@@ -467,7 +467,7 @@ groups:
         # before expiry - and this fires when that time has passed and the
         # certificate on disk has not moved. Everything else here reports the
         # same failure later: TlsCertExpiringSoon sees it three weeks on, and a
-        # browser sees it at day zero, on all fifteen hostnames at once.
+        # browser sees it at day zero, on all fourteen hostnames at once.
         #
         # 6h because the check is hourly and a renewal is not instantaneous:
         # Caddy retries, and firing between its attempt and its success would
@@ -517,8 +517,8 @@ groups:
         annotations:
           summary: "The DNS-01 credential every certificate renews through is not working"
           description: >-
-            Fifteen public hostnames renew over DNS-01 against Gandi and ten of
-            them expire within hours of each other, so this is every public
+            Fourteen public hostnames renew over DNS-01 against Gandi and all
+            of them expire within hours of each other, so this is every public
             name going dark together rather than one degrading. Replace the PAT
             with `sops secrets/env.sops.env`, then ./bin/render-env.sh and
             restart caddy. The probe's own sentence is in status.json;
@@ -540,7 +540,7 @@ groups:
         annotations:
           summary: "A certificate is inside three weeks and past Caddy's renewal point"
           description: >-
-            Ten of the fifteen expire on one day, so this is not one hostname -
+            All fourteen expire on one day, so this is not one hostname -
             it is every public name within hours of each other. Read
             ingress.renewal_due first: if it is silent the renewal metadata is
             unreadable rather than the renewal being late. Days remaining are
@@ -626,10 +626,11 @@ groups:
         annotations:
           summary: "A public hostname no longer follows the DuckDNS record"
           description: >-
-            The CNAME at the registrar is missing or points elsewhere, so that
-            name is unreachable from outside however healthy this host is.
-            *.avanserv.com belongs to a different machine, so each name needs
-            its own CNAME - see docs/networking.md.
+            The CNAME at the registrar is missing or points elsewhere, so the
+            public names are unreachable from outside however healthy this host
+            is. Every name resolves through ONE wildcard CNAME, *.avanserv.me
+            to the DuckDNS record, so this is all of them at once - see
+            docs/networking.md.
             jq -r '.checks[]|select(.id=="{{ $labels.id }}")'
             /var/lib/home-server/status.json
   # ===========================================================================

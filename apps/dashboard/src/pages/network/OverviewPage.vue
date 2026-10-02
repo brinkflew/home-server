@@ -185,7 +185,7 @@ function certTip(c: net.CertRow) {
       title: c.host,
       lines,
       caveat:
-        "Past Caddy's renewal point by more than a week, so this is not a renewal in progress. Ten of these were issued in one afternoon at the migration and expire together, so it is unlikely to be one hostname.",
+        "Past Caddy's renewal point by more than a week, so this is not a renewal in progress. These were all issued in one afternoon and expire together, so it is unlikely to be one hostname.",
     };
   }
   return {

@@ -6152,3 +6152,37 @@ service on the rack read **memory starved**. Nothing on the host was.
   and at `MemoryMax` 3,328M short rather than 768M, so a slice-level OOM kill choosing across lanes
   is reachable once four heavy jobs coincide. Five lanes at 20 GB also took
   `capacity.var_commitment` past 100%, so `GITHUB_RUNNER_LANE_MAX_MB` defaults to 16,384.
+
+### The domain was one variable, and five things were not in it
+- **2026-10-02: every public name moved from `avanserv.com` to `avanserv.me`**, a zone this host has
+  to itself - the old one also carries a different machine at its apex and the household's mail.
+  `DOMAIN` in `secrets/env.sops.env` carried the Caddyfile, Tinyauth, ntfy's `base-url`, Prometheus'
+  external URL, Windmill's `BASE_URL`, conduct, the Gandi probe and the `ingress.*` checks. The
+  dashboard followed with no rebuild: `links.ts` derives every sibling from `window.location`.
+- **`POCKETID_APP_URL` is a SECOND literal and does not follow `DOMAIN`.** Left behind, Tinyauth
+  sends the browser to the new `id.` while Pocket ID still validates the old origin.
+- **A passkey is bound to the hostname.** The relying-party ID is `id.<domain>`, so every enrolled
+  credential is dead on the new name while every admin route sits behind one. The way back in is
+  `podman exec pocket-id /app/pocket-id one-time-access-token <user>`, and the rollback is reverting
+  `DOMAIN` - the old credentials are still in the database and work again at once.
+- **The OIDC callback is a row in Pocket ID's database, not a line in a quadlet.** Tinyauth's half is
+  env-driven and moved by itself; the client's `callback_urls` did not. It is a LIST, so the new URL
+  is added beside the old one BEFORE the cut, while the old passkeys still open the admin UI.
+- **A Gandi PAT is scoped per domain, and LISTING a zone is not access to it.** The token's
+  `GET /livedns/domains` named `avanserv.me` and every call on that zone answered 403 `NoRight`.
+  Found from the workstation before the cut; found by Caddy it is fourteen failed validations.
+- **The `--routes` battery hardcoded the domain** twenty lines below a comment refusing a second
+  list, so it would have gone on proving the old names green. It reads `DOMAIN` now. Its host list
+  is still by hand and still lacks `bazarr` and `metrics`.
+- **`ingress.cert_expiry` and `ingress.renewal_due` walk every `.crt` in the store**, not the live
+  site blocks, so the abandoned `.com` certificates start warning at the renewal time Caddy chose
+  for them (2026-10-10) unless their directories are removed first. `fakerr` had been an orphan
+  there already, which is where "fifteen certificates" against fourteen site blocks came from.
+- **One wildcard CNAME replaced fourteen records**, which the old zone could not offer. It also
+  answers `_acme-challenge.<host>` until Caddy writes the TXT there, and it means
+  `ingress.public_dns` can only ever see all the names missing, never one.
+- **`avanserv.me` is eleven characters and `ROUND_REDACT_MIN` is twelve**, so the domain stopped
+  being redacted from round transcripts. It is public; noted rather than changed.
+- Left on the old name deliberately: `ODOO_URL` and every Odoo link (the other machine),
+  `AUTH_WHITELIST` (an email address), `avanserv.duckdns.org`, the GitHub organisation, and the SSH
+  key comment in `host/butane/`. Never replace bare `avanserv`.

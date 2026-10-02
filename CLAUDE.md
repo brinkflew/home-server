@@ -71,8 +71,8 @@ reachable over passwordless SSH as `home` (WAN, via the router's `9122 -> 22` fo
 hairpinning and on the forward still pointing at the right address.
 
 **The same applies in the BROWSER, and it costs more than it does over SSH.** Every public hostname
-here is a CNAME to `avanserv.duckdns.org`, which resolves to the server's own WAN address
-(`91.86.121.124`), so a LAN machine loading `watch.avanserv.com` sends every request out through the
+here resolves through one wildcard CNAME, `*.avanserv.me` -> `avanserv.duckdns.org`, which resolves to the server's own WAN address
+(`91.86.121.124`), so a LAN machine loading `watch.avanserv.me` sends every request out through the
 router and back in through NAT loopback. Measured against `/web/index.html`: **12-16 ms direct
 against 74-79 ms proxied, about 5x per request** - and a Jellyfin page is ~29 JS bundles plus 30-60
 images, so a full load went 283-684 ms direct against 898-1612 ms proxied. Nothing is misconfigured;
@@ -84,10 +84,12 @@ every time someone rediscovers it. Three things settled it:
 
 - **It is not perceptible.** 5x on a number that starts at 12 ms is still under a tenth of a second,
   and nobody browsing has ever noticed. The measurement is real; the complaint was theoretical.
-- **A blanket override is unavailable.** `*.avanserv.com` serves a DIFFERENT machine, so the
-  override cannot be `avanserv.com` -> `192.168.0.100`; it has to enumerate the fifteen hostnames
-  Caddy answers for. That is a second list of the Caddyfile's site blocks, maintained by hand, in a
-  place nothing validates - the most driftable shape this repository has a name for.
+- **A blanket override was unavailable.** `*.avanserv.com` served a DIFFERENT machine, so the
+  override could not be `avanserv.com` -> `192.168.0.100`; it had to enumerate the hostnames Caddy
+  answers for. That is a second list of the Caddyfile's site blocks, maintained by hand, in a
+  place nothing validates - the most driftable shape this repository has a name for. **This reason
+  lapsed with the move to `avanserv.me`**, a zone this host has to itself, where one
+  `*.avanserv.me` override would do. The other two stand, and they are what the decision rests on.
 - **Both places to put it are worse than the problem.** On the router it is unversioned state this
   repo cannot see, verify or restore, which is the whole reason `host/butane/ucore.bu` exists. On
   the server it is a resolver container the whole house then depends on for DNS, so the machine
@@ -2101,6 +2103,14 @@ signal read green.
 - **The slice now binds before the lanes**, and five lanes at 20 GB broke the `/var` commitment, so
   the lane disk budget is 16 GB. Turning the fleet back on is lanes first - `host/systemd/README.md`.
 
+### The domain was one variable, and five things were not in it
+- **Every public name moved to `avanserv.me` on 2026-10-02.** `DOMAIN` carried almost all of it;
+  `POCKETID_APP_URL`, the OIDC callback in Pocket ID's database and the `--routes` battery did not
+  follow, and **a passkey is bound to the hostname** - the way back in is
+  `pocket-id one-time-access-token`, and reverting `DOMAIN` revives the old ones.
+- **A Gandi PAT is scoped per domain**, and listing a zone is not access to it. One wildcard CNAME
+  resolves every name now. Odoo, mail, DuckDNS and the GitHub org stay on `avanserv`.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless
@@ -2139,7 +2149,7 @@ Remaining, in order:
    marker every other job already had.
 
    **The time-series layer is done too, 2026-08-15** - Prometheus, node-exporter and
-   `bin/collect-metrics.py`, at `metrics.avanserv.com`. See `docs/observability.md`. That closes the other half of
+   `bin/collect-metrics.py`, at `metrics.avanserv.me`. See `docs/observability.md`. That closes the other half of
    what a dashboard needs: `status.json` says what is true now, and the store says when it stopped
    being true. **Everything that list named as "still to come" landed the same day**: GPU, sensors
    and SMART, the application sources over `podman exec`, all 92 checks as `home_server_check_status`
@@ -2160,12 +2170,12 @@ Remaining, in order:
 
    **The notification path is done too, 2026-08-15**, which closes this item. Prometheus rules ->
    Alertmanager -> ntfy-alertmanager -> ntfy -> phone, in seven groups, at
-   `ntfy.avanserv.com`. See `docs/observability.md`. Prometheus having alerting rules built in is part of why it
+   `ntfy.avanserv.me`. See `docs/observability.md`. Prometheus having alerting rules built in is part of why it
    was chosen over a store needing a second container for them, and that paid off exactly as
    expected.
 
    **The dashboard is done too, 2026-08-15, and this item is now closed.** A Vue 3 application at
-   `home.avanserv.com`, in `apps/dashboard/`, built on the server from the checkout. It is what
+   `home.avanserv.me`, in `apps/dashboard/`, built on the server from the checkout. It is what
    every keyed id and every series was for. See `docs/dashboard.md`.
 
    **All five pages are built as of 2026-08-18.** Network was the last, and it is the only one that

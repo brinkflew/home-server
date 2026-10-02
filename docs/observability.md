@@ -123,7 +123,7 @@ endpoint and kept reporting healthy.
 being stale, whether a container's memory has been climbing for a month, or what the encoder was
 doing when the host wedged - and every number this file reasons about was measured by hand, once,
 during an incident. Since 2026-08-15 there is a time-series layer: **Prometheus** on `net-metrics`,
-behind sign-on at `metrics.avanserv.com`, 400 days at a 30s scrape.
+behind sign-on at `metrics.avanserv.me`, 400 days at a 30s scrape.
 
 ```bash
 podman exec prometheus wget -q -O - 'http://127.0.0.1:9090/api/v1/query?query=<metric>' | jq .

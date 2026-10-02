@@ -1,6 +1,6 @@
 # The dashboard
 
-A Vue 3 application, served as static files, at `https://home.avanserv.com` behind the same passkey
+A Vue 3 application, served as static files, at `https://home.avanserv.me` behind the same passkey
 sign-on as everything else. It is the last item on CLAUDE.md's roadmap: *"status.json for what is
 true now, keyed by stable ids, and Prometheus for when it stopped being true."*
 
@@ -48,7 +48,7 @@ through Caddy - and so does the one thing it sends.
 ## Where the data comes from
 
 ```
-browser ---> caddy (home.avanserv.com, import protected)
+browser ---> caddy (home.avanserv.me, import protected)
                |
                +-- /              -> dashboard:8080     the bundle, and /data/status.json
                +-- /api/prom/*    -> prometheus:9090    every number, every range query
@@ -176,7 +176,7 @@ passes would mean the only way to learn the runtime split is fine is for it to s
   panels dim and say what is stale, and `verdict` returns `unknown` rather than folding into
   `fail`. "The battery says everything passed" and "nobody has asked the battery" must not look
   alike.
-- **An expired session is a 302, not a 401.** `forward_auth` redirects to `auth.avanserv.com`, and
+- **An expired session is a 302, not a 401.** `forward_auth` redirects to `auth.avanserv.me`, and
   `fetch` follows redirects - so an XHR *resolves*, with `res.ok` true and an HTML sign-in page as
   its body. `src/api/http.ts` is the single place that detects it, and it reloads the page, because
   a passkey prompt cannot be completed inside an XHR. The reload is rate-limited to once per 30s so
