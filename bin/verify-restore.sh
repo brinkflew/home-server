@@ -582,11 +582,22 @@ if [ -n "$SYNTHETIC" ]; then
 		synth_log=$(mktemp "${TMPDIR:-/tmp}/verify-restore-synth.XXXXXX")
 		pgdump="$CONFIG/windmill-db/dumpall.sql"
 		if [ -f "$pgdump" ]; then
-			if podman run --rm --net=none --label io.home-server.ephemeral \
-				-v "$pgdump:/dump.sql:ro,z" \
+			# AS THE postgres USER, AND AS THE REAL SUPERUSER'S NAME. The image dropped
+			# su-exec, which the first version shelled out to - an undeclared binary,
+			# the curl-in-a-healthcheck trap again. And a dumpall replays `GRANTED BY
+			# <superuser>`, so a cluster initialised as `postgres` refuses every grant
+			# while psql still exits 0: initdb takes the name windmill-db.container gives.
+			#
+			# THE ASSERTION IS TABLES IN THE DATABASE, not psql's exit code, which is 0
+			# through any number of errors. 182 when this was written; zero is the fail.
+			pg_user="${WINDMILL_DB_USER:-windmill}" pg_db="${WINDMILL_DB_NAME:-windmill}"
+			pg_tables=$(podman run --rm --net=none --label io.home-server.ephemeral \
+				--user postgres -v "$pgdump:/dump.sql:ro,z" \
 				docker.io/library/postgres:17-alpine \
-				sh -c "su-exec postgres initdb -D /tmp/pgdata >/dev/null && su-exec postgres pg_ctl -D /tmp/pgdata -w start >/dev/null && su-exec postgres psql -q -U postgres -f /dump.sql >/dev/null && su-exec postgres psql -U postgres -c 'SELECT count(*) FROM pg_tables;' >/dev/null" >"$synth_log" 2>&1; then
-				ok "Windmill PostgreSQL dump restored and executed in synthetic container"
+				sh -c "initdb -U '$pg_user' -D /tmp/pgdata >&2 && pg_ctl -D /tmp/pgdata -w start >&2 && psql -q -U '$pg_user' -d postgres -f /dump.sql >&2; psql -At -U '$pg_user' -d '$pg_db' -c 'SELECT count(*) FROM pg_tables WHERE schemaname = current_schema()'" 2>"$synth_log" | tail -1)
+			case "${pg_tables:-}" in ''|*[!0-9]*) pg_tables=0 ;; esac
+			if [ "$pg_tables" -gt 0 ]; then
+				ok "Windmill PostgreSQL dump restored into a fresh postgres 17: $pg_tables tables in $pg_db"
 			else
 				bad "Windmill PostgreSQL synthetic container restore test failed"
 				tail -n 8 "$synth_log" | while IFS= read -r l; do printf '        %s\n' "$l"; done
