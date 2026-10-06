@@ -2116,6 +2116,14 @@ signal read green.
   timed out on all fourteen names. One CNAME per name, as before. The retry then failed a second
   way - certmagic proves a retry against STAGING first, and production then read a TXT that was not its own.
 
+### The repository was renamed, and a redirect hid four places that kept the old name
+- **`avanserv/upskald` is `avanserv/avanserv` since 2026-10-06** and nothing broke, because GitHub
+  redirects - until something else takes the old name. conduct's `repo` and `slug`,
+  `AGENTS_REPO_SLUG`, and the bare mirror's baked `origin` did not follow by themselves.
+- **`AGENTS_REPO_SLUG` and `.env.sample` move in one commit** or `secrets.rendered_documents` FAILs
+  for ever. Stored `pr_url`s keep the old name, so historical rounds lose their branch link by
+  design. The `upskald` project key, mirror directory, key files and worktree ids are state keys.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

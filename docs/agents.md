@@ -63,11 +63,11 @@ no authenticated resume endpoint existed; that was a grep that looked under `job
 | this repository | `/var/home-server` | `git pull`, anonymous HTTPS - it is public |
 | conduct | `/var/agents` | `git pull` over a **read-only deploy key**, nightly at 04:50 |
 | the upskald mirror | `cache/conduct/mirrors/upskald.git` | `conduct mirror`, nightly at 04:40, over a **second** read-only deploy key |
-| a verified branch | `github.com/avanserv/upskald` | `conduct verify`, over a **third** deploy key, the only one that can write |
+| a verified branch | `github.com/avanserv/avanserv` | `conduct verify`, over a **third** deploy key, the only one that can write |
 
 **Three GitHub credentials on this host, two of them read-only, all scoped to one repository**, and
 none of them ever enters a container. `~/.ssh/agents_deploy` fetches `brinkflew/agents` into
-`/var/agents`; `~/.ssh/upskald_deploy` fetches `avanserv/upskald` into the mirror;
+`/var/agents`; `~/.ssh/upskald_deploy` fetches `avanserv/avanserv` into the mirror;
 `~/.ssh/upskald_push` pushes a verified branch and does nothing else.
 
 **The third one is why `mirror.ssh_command()` takes a KEY and not a project.** With two keys for one
@@ -82,7 +82,7 @@ push key.
 simplification is to let each phase container clone the one branch it needs when it starts. Three
 things stop that, and only the first is about credentials:
 
-- **`avanserv/upskald` is private and the runner may hold no GitHub credential in any form** - not a
+- **`avanserv/avanserv` is private and the runner may hold no GitHub credential in any form** - not a
   token, not a `gh` login, not a `.netrc`, not a credential helper, asserted against the argv by
   `tests/test_phase.py`. A container that clones from GitHub is a container holding a credential for
   GitHub. The mirror is where that requirement was moved to the host side.

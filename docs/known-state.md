@@ -6200,3 +6200,30 @@ service on the rack read **memory starved**. Nothing on the host was.
 - Left on the old name deliberately: `ODOO_URL` and every Odoo link (the other machine),
   `AUTH_WHITELIST` (an email address), `avanserv.duckdns.org`, the GitHub organisation, and the SSH
   key comment in `host/butane/`. Never replace bare `avanserv`.
+
+### The repository was renamed, and a redirect hid four places that kept the old name
+
+- **`avanserv/upskald` became `avanserv/avanserv` on GitHub and nothing here broke**, which is the
+  trap: fetch, push and every stored link follow GitHub's redirect, so the old name was live in
+  four places with every signal green. Followed through on 2026-10-06. conduct's `repo` and `slug`
+  (`conduct/config.py`), `AGENTS_REPO_SLUG` here, and the bare mirror's `origin`, which was baked in
+  when `conduct mirror` first cloned it and which no later run rewrites - `git remote set-url`, by
+  hand, on `cache/conduct/mirrors/upskald.git`.
+- **A redirect is a courtesy with an end date**: GitHub drops it the moment anything else is
+  created under the old name, and every one of those four then fails as `repository not found` -
+  the message this host already knows as "wrong key".
+- **`AGENTS_REPO_SLUG` and `.env.sample` must move in ONE commit.** `secrets.rendered_documents`
+  exempts the slug only because `.env.sample` publishes the identical value; a half-done change is
+  a permanent FAIL, and a FAIL is what the reboot window refuses on.
+- **Stored `pr_url`s keep the old name for ever**, and `_fleet_branch_url` compares the slug against
+  them - so the slug was NOT wrong before the flip, and flipping it withholds the branch link on
+  every historical round that carries a pull request, with the collector saying so on stderr each
+  run. Accepted rather than fixed: the pull request link is untouched, most of those branches are
+  merged and gone, and rewriting conduct's state database to tidy a link was the worse trade. Had it
+  been left, the first NEW pull request would have tripped the same withhold in the other direction.
+- **Left on the old name deliberately**: the `upskald` project key, `mirror: upskald.git`, the
+  `upskald_deploy`/`upskald_push` key files and every `upskald-*` worktree id, because conduct's
+  state rows are keyed on them; the application is still called upskald, so the prose that names it
+  is right; and the dated measurements (`avanserv/upskald#249`, `#252`) are what was true when taken.
+- Not affected, and checked rather than assumed: the CI lanes register against the ORGANISATION, and
+  the deploy keys and both PATs are bound to the repository's id, not its name.

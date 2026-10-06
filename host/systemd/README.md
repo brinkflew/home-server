@@ -213,9 +213,9 @@ the failure this arrangement exists to make impossible:
 
 ```bash
 ssh-keygen -t ed25519 -N '' -C conduct-mirror@home-server -f ~/.ssh/upskald_deploy
-# add ~/.ssh/upskald_deploy.pub to avanserv/upskald's deploy keys, READ-ONLY, then
+# add ~/.ssh/upskald_deploy.pub to avanserv/avanserv's deploy keys, READ-ONLY, then
 # prove it BOTH ways - each key must reach its own repository and neither the other:
-for k in upskald_deploy agents_deploy; do for r in avanserv/upskald brinkflew/agents; do
+for k in upskald_deploy agents_deploy; do for r in avanserv/avanserv brinkflew/agents; do
   GIT_SSH_COMMAND="ssh -F /dev/null -i ~/.ssh/$k -o IdentitiesOnly=yes" \
     git ls-remote "git@github.com:$r.git" refs/heads/main >/dev/null 2>&1 &&
     echo "$k CAN read $r" || echo "$k cannot read $r"
@@ -228,14 +228,14 @@ systemctl --user start home-server-mirror-update.service
 
 **The third key is the only one that can write, and one guard is all that keeps it
 off `main`.** Measured on 2026-08-22: `main` is **not** branch protected on
-`avanserv/upskald` - `GET .../branches/main/protection` answers 404 - and GitHub
+`avanserv/avanserv` - `GET .../branches/main/protection` answers 404 - and GitHub
 has no ref-scoped deploy key, so nothing on the far side refuses a push to the
 default branch. What refuses it is `conduct/publish.py`, which computes
 `agents/<worktree>-<head12>` and will not push anywhere else.
 
 ```bash
 ssh-keygen -t ed25519 -N '' -C conduct-push@home-server -f ~/.ssh/upskald_push
-# add ~/.ssh/upskald_push.pub to avanserv/upskald's deploy keys WITH WRITE ACCESS.
+# add ~/.ssh/upskald_push.pub to avanserv/avanserv's deploy keys WITH WRITE ACCESS.
 
 # THE PROOF LOOP NOW HAS TWO AXES, and the one that matters is the second.
 # Reading proves nothing new - the fetch key already reads that repository - so
@@ -246,7 +246,7 @@ sha=$(git -C /var/home-server/cache/conduct/mirrors/upskald.git rev-parse refs/h
 for k in upskald_push upskald_deploy; do
   GIT_SSH_COMMAND="ssh -F /dev/null -i ~/.ssh/$k -o IdentitiesOnly=yes" \
     git -C /var/home-server/cache/conduct/mirrors/upskald.git \
-    push --dry-run git@github.com:avanserv/upskald.git \
+    push --dry-run git@github.com:avanserv/avanserv.git \
     "$sha:refs/heads/agents/proof" >/dev/null 2>&1 &&
     echo "$k CAN write" || echo "$k cannot write"
 done
@@ -267,7 +267,7 @@ ACL behind it.
 
 1. Settings -> Folders -> new folder `agents`.
 2. Variables -> new variable, path `f/agents/github_pr_token`, **secret**, holding
-   a GitHub fine-grained PAT scoped to `avanserv/upskald` alone with
+   a GitHub fine-grained PAT scoped to `avanserv/avanserv` alone with
    **Pull requests: write** and **no `workflow` scope**. Add `Contents: read` if
    the create call answers 404 - a fine-grained token needs to see the head branch
    on a private repository, and that failure reads like a wrong slug.
@@ -276,7 +276,7 @@ ACL behind it.
 honest about what it cannot prove: that either credential still authenticates.
 
 **The mirror it fills is not a cache and deleting it does not simplify anything.**
-`avanserv/upskald` is private and the phase runner may hold no GitHub credential in
+`avanserv/avanserv` is private and the phase runner may hold no GitHub credential in
 any form, so a container cannot clone it; the base every diff is measured against has
 to come from a repository the phase cannot write; and one host-side copy is what pins
 base and worktree to the same moment rather than to two clones either side of a push.
