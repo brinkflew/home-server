@@ -8,7 +8,12 @@
 # Public, like Jellyfin, and for the same reason: it authenticates its own users
 # and its callers have no browser for a passkey prompt.
 #
-# Image:  https://hub.docker.com/r/fallenbagel/jellyseerr
+# THE IMAGE IS SEERR SINCE 2026-10-06, AND THE NAME HERE STAYS JELLYSEERR.
+# Jellyseerr's last release was 2.7.3 (August 2025); the project merged into
+# Seerr. The unit, the container name, the port and the config path are kept so
+# the Caddyfile, the collector, the rules and the dashboard did not move.
+#
+# Image:  https://github.com/seerr-team/seerr/pkgs/container/seerr
 # ==============================================================================
 
 [Unit]
@@ -22,8 +27,8 @@ StartLimitIntervalSec=600
 StartLimitBurst=20
 
 [Container]
-# :2, not :latest, since 2026-08-19 - and it is the ONLY image here that could
-# make that move. The doctrine is already written down in CLAUDE.md, where
+# A ROLLING MAJOR, not :latest, since 2026-08-19 - and it is the ONLY image here
+# that could make that move. The doctrine is already written down in CLAUDE.md, where
 # VictoriaMetrics was rejected as the metrics store precisely because it
 # publishes no rolling major tag; eleven images here were tracking :latest in
 # spite of it.
@@ -37,7 +42,13 @@ StartLimitBurst=20
 #
 # Which is why the rollback matters more than the tag: see
 # host/systemd/podman-auto-update.service.d/20-snapshot-databases.conf.
-Image=docker.io/fallenbagel/jellyseerr:2
+#
+# THE MAJOR TAG DID NOT SAVE THIS ONE, and the reason is worth keeping: `:2`
+# held Jellyseerr still while Jellyfin moved to 12 through :latest and stopped
+# accepting the X-Emby-* headers 2.7.3 sends. Sign-in answered 400 and the
+# library sync 401 from 2026-09-09, with this container healthy throughout -
+# its probe asks Seerr about Seerr. Seerr 3.5.0 sends `Authorization:`.
+Image=ghcr.io/seerr-team/seerr:v3
 AutoUpdate=registry
 ContainerName=jellyseerr
 Network=net-arr.network
@@ -53,8 +64,17 @@ NoNewPrivileges=true
 
 Volume=${DOCKER_VOLUME_CONFIG}/jellyseerr:/app/config:Z
 
-Environment=PUID=0
-Environment=PGID=0
+# THE IMAGE'S OWN USER IS `node`, uid 1000, WHICH HERE IS A SUBUID. Rootless
+# Podman maps container uid 0 to `core` and everything else into
+# core:100000:65536, so the image's default cannot read the config tree it is
+# handed. Root in the container is uid 1000 on the host - the same statement
+# PUID=0 makes for the LinuxServer images, said the only way this image hears
+# it, since it reads no PUID. Upstream's `chown -R 1000:1000` is the wrong
+# advice on this host: it would hand the tree to a subuid `core` cannot back up.
+User=0:0
+# Upstream requires `init: true`; node is not written to be pid 1.
+RunInit=true
+
 Environment=UMASK=${UMASK}
 Environment=TZ=${TIMEZONE}
 

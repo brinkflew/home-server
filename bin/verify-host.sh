@@ -1987,8 +1987,22 @@ if [ -z "$GREENBOOT" ]; then
 		*[!0-9]*) pin_behind="" ;;
 		*)        pin_behind=$(( pin_latest_n - pin_have_n )) ;;
 	esac
+	pin_fleet_off=""
+	case "$(systemctl --user is-enabled home-server-conduct.service 2>/dev/null)" in
+		enabled|enabled-runtime) ;;
+		*) pin_fleet_off=1 ;;
+	esac
 	if [ -z "${pin_latest:-}" ] || [ -z "${pin_behind:-}" ]; then
 		note update.pin_lag "the published windmill release could not be resolved - not measured"
+	elif [ "$pin_behind" -gt 10 ] && [ -n "$pin_fleet_off" ]; then
+		# NOT A WARN WHILE THE THING IT PINS IS MASKED. The fleet has been off
+		# on purpose since 2026-09-29 and the four Windmill quadlets with it, so
+		# a bump made now runs its schema migration unobserved on the day the
+		# fleet comes back - the opposite of what this check is for. The same
+		# predicate the Agents section downgrades on, asked here because that
+		# section is a thousand lines further down. The bump is a step in
+		# host/systemd/README.md's "AND BACK ON", where it can be watched.
+		note update.pin_lag "fleet off: windmill is pinned at ${pin_have} and upstream is at ${pin_latest} - ${pin_behind} releases behind. Nothing runs it while the fleet is off; bump the pin as part of turning the fleet back on, see host/systemd/README.md"
 	elif [ "$pin_behind" -le 10 ]; then
 		ok update.pin_lag "windmill pinned at ${pin_have}, upstream ${pin_latest} - ${pin_behind} release(s) behind"
 	else

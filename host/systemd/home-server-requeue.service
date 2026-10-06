@@ -16,4 +16,7 @@ After=tdarr-server.service tdarr-node-01.service
 [Service]
 Type=oneshot
 ExecStart=/var/home-server/bin/requeue-drifting.sh --limit 3
-SuccessExitStatus=0
+# Exit 3 is "the siding still holds the last batch" - a finding, which
+# media.rework_stuck grades, and not this unit having failed. See hold() in the
+# script. Every other refusal still exits 1 and still fails the unit.
+SuccessExitStatus=3

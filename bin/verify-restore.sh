@@ -573,27 +573,37 @@ if [ -n "$SYNTHETIC" ]; then
 	if command -v podman >/dev/null 2>&1; then
 		# Ensure restored config files are readable by unprivileged container users
 		chmod -R a+r "$CONFIG" 2>/dev/null || true
+		# THE OUTPUT IS KEPT, because every line of it used to go to /dev/null and a
+		# FAIL then named nothing - which hid that the image was postgres 15 against
+		# a dump taken from 17. The major is stacks/infra/windmill-db.container's.
+		#
+		# EVERY THROWAWAY CARRIES THE EPHEMERAL LABEL, or six readers count it as a
+		# quadlet that has no unit - see "A container meant a quadlet".
+		synth_log=$(mktemp "${TMPDIR:-/tmp}/verify-restore-synth.XXXXXX")
 		pgdump="$CONFIG/windmill-db/dumpall.sql"
 		if [ -f "$pgdump" ]; then
-			if podman run --rm --net=none \
+			if podman run --rm --net=none --label io.home-server.ephemeral \
 				-v "$pgdump:/dump.sql:ro,z" \
-				docker.io/library/postgres:15-alpine \
-				sh -c "su-exec postgres initdb -D /tmp/pgdata >/dev/null 2>&1 && su-exec postgres pg_ctl -D /tmp/pgdata -w start >/dev/null 2>&1 && su-exec postgres psql -U postgres -f /dump.sql >/dev/null 2>&1 && su-exec postgres psql -U postgres -c 'SELECT count(*) FROM pg_tables;'" >/dev/null 2>&1; then
+				docker.io/library/postgres:17-alpine \
+				sh -c "su-exec postgres initdb -D /tmp/pgdata >/dev/null && su-exec postgres pg_ctl -D /tmp/pgdata -w start >/dev/null && su-exec postgres psql -q -U postgres -f /dump.sql >/dev/null && su-exec postgres psql -U postgres -c 'SELECT count(*) FROM pg_tables;' >/dev/null" >"$synth_log" 2>&1; then
 				ok "Windmill PostgreSQL dump restored and executed in synthetic container"
 			else
 				bad "Windmill PostgreSQL synthetic container restore test failed"
+				tail -n 8 "$synth_log" | while IFS= read -r l; do printf '        %s\n' "$l"; done
 			fi
 		fi
 		if [ -f "$CONFIG/pocket-id/pocket-id.db" ]; then
-			if podman run --rm --net=none \
+			if podman run --rm --net=none --label io.home-server.ephemeral \
 				-v "$CONFIG/pocket-id/pocket-id.db:/pocket-id.db:ro,z" \
 				docker.io/oven/bun:1 \
-				bun -e "import { Database } from 'bun:sqlite'; const res = new Database('/pocket-id.db').query('SELECT count(*) FROM sqlite_master;').get(); if (!res) process.exit(1);" >/dev/null 2>&1; then
+				bun -e "import { Database } from 'bun:sqlite'; const res = new Database('/pocket-id.db').query('SELECT count(*) FROM sqlite_master;').get(); if (!res) process.exit(1);" >"$synth_log" 2>&1; then
 				ok "Pocket ID SQLite DB operational query verified in synthetic container"
 			else
 				bad "Pocket ID synthetic container query test failed"
+				tail -n 8 "$synth_log" | while IFS= read -r l; do printf '        %s\n' "$l"; done
 			fi
 		fi
+		rm -f "$synth_log"
 	else
 		echo "  podman is not available - skipping synthetic container execution"
 	fi
@@ -617,10 +627,13 @@ printf '%sthis snapshot restores%s\n' "$C_GRN" "$C_OFF"
 # were the same observable state. CLAUDE.md states the rule in the abstract - an
 # automated job needs a durable record of its last success, not just an exit 0 -
 # and this was the job it was not applied to.
+# A SYNTHETIC RUN IS A SUPERSET, SO IT WRITES BOTH STAMPS. This was an if/else,
+# which meant putting --synthetic on the weekly unit would have traded one
+# stale check for the other: the restore it had just proven would have gone
+# unrecorded. `stamps` is one or two names and each writer below loops it.
+stamps="restore_verified_${REPO_KIND}_at"
 if [ -n "$SYNTHETIC" ]; then
-	stamp="restore_synthetic_verified_${REPO_KIND}_at"
-else
-	stamp="restore_verified_${REPO_KIND}_at"
+	stamps="$stamps restore_synthetic_verified_${REPO_KIND}_at"
 fi
 case "$REPO_KIND" in
 	server|server_offsite)
@@ -639,26 +652,30 @@ case "$REPO_KIND" in
 		tmp="$STATE.verify-restore.$$"
 		mkdir -p "$(dirname "$STATE")" 2>/dev/null
 		touch "$STATE" 2>/dev/null
-		if { grep -v "^$stamp=" "$STATE"; echo "$stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)"; } \
-			>"$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null; then
-			printf '  recorded the verification as %s\n' "$stamp"
-		else
-			rm -f "$tmp" 2>/dev/null
-			printf '  (could not record %s in %s - harmless)\n' "$stamp" "$STATE"
-		fi
+		for stamp in $stamps; do
+			if { grep -v "^$stamp=" "$STATE"; echo "$stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)"; } \
+				>"$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null; then
+				printf '  recorded the verification as %s\n' "$stamp"
+			else
+				rm -f "$tmp" 2>/dev/null
+				printf '  (could not record %s in %s - harmless)\n' "$stamp" "$STATE"
+			fi
+		done
 		;;
 	*)
 		# OVER SSH, exactly as bin/backup-offsite.sh does for offsite_pruned_at, and
 		# for the same reason: these two kinds run on the WORKSTATION and the check
 		# that reads the marker runs on the server.
-		if ssh "${HOME_SERVER_HOST:-home.local}" \
-		  'f=~/.cache/home-server/backup-state; mkdir -p "$(dirname "$f")"; touch "$f";
-		   grep -v "^'"$stamp"'=" "$f" > "$f.tmp";
-		   echo "'"$stamp"'=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$f.tmp";
-		   mv "$f.tmp" "$f"' 2>/dev/null; then
-			printf '  recorded the verification on the server as %s\n' "$stamp"
-		else
-			printf '  (could not reach the server to record it - harmless)\n'
-		fi
+		for stamp in $stamps; do
+			if ssh "${HOME_SERVER_HOST:-home.local}" \
+			  'f=~/.cache/home-server/backup-state; mkdir -p "$(dirname "$f")"; touch "$f";
+			   grep -v "^'"$stamp"'=" "$f" > "$f.tmp";
+			   echo "'"$stamp"'=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$f.tmp";
+			   mv "$f.tmp" "$f"' 2>/dev/null; then
+				printf '  recorded the verification on the server as %s\n' "$stamp"
+			else
+				printf '  (could not reach the server to record it - harmless)\n'
+			fi
+		done
 		;;
 esac

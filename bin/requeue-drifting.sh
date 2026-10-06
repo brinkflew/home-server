@@ -120,6 +120,12 @@ say()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 ok()   { printf '  \033[32mOK\033[0m    %s\n' "$*"; }
 note() { printf '  \033[33mNOTE\033[0m  %s\n' "$*"; }
 die()  { printf '\033[31mrequeue-drifting: %s\033[0m\n' "$*" >&2; exit 1; }
+# A FINDING IS NOT A FAULT. "The siding still holds work" is this script having
+# run and found something, and exiting 1 for it left the unit `failed` for 23
+# nights - which containers.failed_units FAILs on, and a FAIL in that battery
+# blocks an OS security update. Its own code, which the unit lists under
+# SuccessExitStatus=; media.rework_stuck is what reports the finding.
+hold() { printf '\033[33mrequeue-drifting: %s\033[0m\n' "$*" >&2; exit 3; }
 
 case "$LIMIT" in ''|*[!0-9]*) die "--limit takes a whole number, not '$LIMIT'" ;; esac
 case "$MIN_FREE_GB" in ''|*[!0-9]*) die "HOME_SERVER_REWORK_MIN_FREE_GB is '$MIN_FREE_GB', which is not a number of GB" ;; esac
@@ -168,6 +174,24 @@ REWORK="$MEDIA_ROOT/library/rework"
   It is created once, with the Tdarr library that watches it - docs/media-pipeline.md has the fields.
   Creating the directory alone would make this script copy files somewhere nothing is watching."
 
+# AND THE DIRECTORY EXISTING IS NOT A LIBRARY WATCHING IT, which is exactly what
+# happened: the siding was created on 2026-09-13, three films were copied in,
+# and Tdarr had four libraries, all on queued/. They sat for 23 days. The guard
+# above warned about that case in words and tested for a different one.
+#
+# UNREADABLE REFUSES. This script copies gigabytes on the strength of the
+# answer, and "Tdarr could not be asked" is not "Tdarr is watching".
+TDARR="${HOME_SERVER_TDARR_CONTAINER:-tdarr-server}"
+libs=$(podman exec "$TDARR" curl -sS --max-time 10 -X POST \
+	http://127.0.0.1:8265/api/v2/cruddb -H 'Content-Type: application/json' \
+	-d '{"data":{"collection":"LibrarySettingsJSONDB","mode":"getAll"}}' 2>/dev/null |
+	jq -r '.[].folder // empty' 2>/dev/null) || libs=""
+[ -n "$libs" ] ||
+	die "Tdarr ($TDARR) could not be asked for its libraries, so nothing says the siding is watched"
+printf '%s\n' "$libs" | grep -q '/library/rework/' ||
+	die "no Tdarr library watches the rework siding - a copy would sit there for ever.
+  It is a one-time setup in Tdarr itself: docs/media-pipeline.md has the fields."
+
 # A SIDING THAT STILL HOLDS WORK IS THE REFUSAL THAT MATTERS MOST. Tdarr's queue
 # is not this script's to see, so the only honest signal that the last batch
 # finished is an empty siding - the flow's last node deletes each file as it
@@ -175,7 +199,7 @@ REWORK="$MEDIA_ROOT/library/rework"
 # queue nobody chose and how a failed job gets buried under later ones.
 held=$(find "$REWORK" -type f ! -name '.*' 2>/dev/null | wc -l)
 [ "$held" -eq 0 ] ||
-	die "$REWORK already holds $held file(s) - let Tdarr finish, or work out why it has not.
+	hold "$REWORK already holds $held file(s) - let Tdarr finish, or work out why it has not.
   A file that fails the flow stays there, which is what media.rework_stuck grades:
     find $REWORK -type f -printf '%T+ %p\n' | sort | head"
 

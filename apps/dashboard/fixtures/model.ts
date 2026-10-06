@@ -53,7 +53,7 @@ const IMAGES: Record<string, string> = {
   prowlarr: "lscr.io/linuxserver/prowlarr:develop",
   bazarr: "lscr.io/linuxserver/bazarr:latest",
   unpackerr: "ghcr.io/unpackerr/unpackerr:latest",
-  jellyseerr: "docker.io/fallenbagel/jellyseerr:latest",
+  jellyseerr: "ghcr.io/seerr-team/seerr:v3",
   flaresolverr: "ghcr.io/flaresolverr/flaresolverr:latest",
   jellyfin: "lscr.io/linuxserver/jellyfin:latest",
   "tdarr-server": "ghcr.io/haveagitgat/tdarr:latest",

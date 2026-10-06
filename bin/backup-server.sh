@@ -566,7 +566,14 @@ if [ -z "$DRY" ]; then
 		# anticipated a third kind correctly; the character class it was written
 		# beside did not. Two of the four kinds now run here on a timer rather than
 		# on the workstation, so this line carries markers written by this machine.
-		grep -E '^restore_verified_[a-z_]+_at=' "$STATE" 2>/dev/null
+		#
+		# AND THE SYNTHETIC STAMP, WHICH THIS PATTERN DID NOT MATCH. It is
+		# restore_synthetic_verified_<kind>_at - the word is in the MIDDLE - so
+		# the one above would have erased it at 03:00 the night after it was
+		# first written, and backup.restore_synthetic_server_age would have gone
+		# on saying "never recorded" about a job that ran weekly. Nobody saw it
+		# only because the unit never passed --synthetic at all until 2026-10-06.
+		grep -E '^restore_(synthetic_)?verified_[a-z_]+_at=' "$STATE" 2>/dev/null
 	} >"$STATE.tmp"
 	mv "$STATE.tmp" "$STATE"
 fi

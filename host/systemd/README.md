@@ -121,6 +121,12 @@ systemctl --user mask --now windmill-worker.service windmill-worker-verify.servi
 # themselves at their next idle moment anyway (exit 3), but not mid-job. Then
 # put app-ci.slice back to its three-lane values (git log names them).
 #   systemctl --user disable --now home-server-github-runner@4 home-server-github-runner@5
+#
+# BUMP THE WINDMILL PIN HERE, BEFORE THE UNMASK, if it has fallen behind:
+# update.pin_lag is a note while the fleet is off, because a bump nothing runs
+# cannot be watched, and returns as a warn the moment conduct is enabled. Four
+# copies of one tag (bin/lint-repo.sh asserts they agree); then watch
+# agents.worker_lanes, agents.approvals_pending and agents.control_lag.
 #   systemctl --user unmask windmill-db windmill-server windmill-worker windmill-worker-verify
 #   systemctl --user start windmill-db windmill-server windmill-worker windmill-worker-verify
 #   systemctl --user enable --now home-server-conduct-secret.service home-server-conduct.service \

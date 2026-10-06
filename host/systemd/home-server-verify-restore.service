@@ -50,7 +50,7 @@ Type=oneshot
 # NOT the optional -/ form. The repository password is in here; without it this
 # unit cannot do its job at all, and failing loudly is the right answer.
 EnvironmentFile=/var/home-server/.env
-ExecStart=/var/home-server/bin/verify-restore.sh --repo server --deep
+ExecStart=/var/home-server/bin/verify-restore.sh --repo server --deep --synthetic
 # The 7.8 GB restored tree has to land somewhere disk-backed. The script refuses a
 # tmpfs scratch outright, and its own default is $HOME/.cache - which is the
 # directory the marker file lives in. /var/tmp is the same filesystem and the
