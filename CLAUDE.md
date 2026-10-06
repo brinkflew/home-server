@@ -2124,6 +2124,26 @@ signal read green.
   for ever. Stored `pr_url`s keep the old name, so historical rounds lose their branch link by
   design. The `upskald` project key, mirror directory, key files and worktree ids are state keys.
 
+### The second caller Jellyfin 12 broke, four weeks after the first was fixed
+- **Jellyseerr sign-in answered 400 and its sync 401 for 27 days with the container healthy** -
+  2.7.3 sends `X-Emby-*`, its probe asks Jellyseerr about Jellyseerr, and `:2` pinned an abandoned
+  image. Now `ghcr.io/seerr-team/seerr:v3` under the same unit and container name.
+- **Seerr's uid 1000 is a subuid here**: `User=0:0`, never upstream's `chown -R 1000:1000`. The
+  config migration is one-way; `config/jellyseerr.pre-seerr` is the way back.
+
+### The siding existed, three films were in it, and Tdarr had never heard of it
+- The requeue unit was `failed` for 23 nights over a siding **no Tdarr library watched** - the
+  guard tested `[ -d ]`. It asks Tdarr now; a held siding exits 3, which the unit lists.
+- A rework library is `avsRework_<type>` cloned through `cruddb` with all **seventeen** variables,
+  not the three the docs named, and is not scanned until `scan-files` is called.
+
+### A flag that never reached its unit hid three defects behind it
+- The weekly restore verification never passed `--synthetic`; behind that, the script wrote one
+  stamp INSTEAD of the other, the nightly backup's carry-forward pattern would have erased it, and
+  the Postgres step restored 17 into 15 with all output discarded. `psql` exits 0 through errors,
+  so the assertion is tables in the restored database.
+- `update.pin_lag` is a note while the fleet - and Windmill with it - is off.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

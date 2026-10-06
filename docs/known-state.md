@@ -6227,3 +6227,73 @@ service on the rack read **memory starved**. Nothing on the host was.
   is right; and the dated measurements (`avanserv/upskald#249`, `#252`) are what was true when taken.
 - Not affected, and checked rather than assumed: the CI lanes register against the ORGANISATION, and
   the deploy keys and both PATs are bound to the repository's id, not its name.
+
+### The second caller Jellyfin 12 broke, four weeks after the first was fixed
+
+- **Nobody could sign in to Jellyseerr from 2026-09-09 to 2026-10-06, and the container was healthy
+  the whole time.** Jellyfin 12 ships `EnableLegacyAuthorization=false`; Jellyseerr 2.7.3 sends
+  `X-Emby-Authorization` on sign-in and `X-Emby-Token` on its sync, so the first answered **400**
+  and the second **401** every five minutes for 27 days. The same event already has an entry -
+  "A major version arrived through `:latest` and only the callers broke" - and that fix covered the
+  callers THIS repository wrote. Jellyseerr is a caller somebody else wrote.
+- **Its health probe asks Jellyseerr about Jellyseerr** (`/api/v1/status`), so no unit failed, no
+  container went unhealthy and nothing paged. Its own log printed the sign-in failure as
+  `[error][Auth]:` followed by nothing; the 400 is one debug line above it.
+- **The rolling major tag is what held it still.** `:2` was the one image here pinned to a major,
+  on purpose, and 2.7.3 (August 2025) was the project's last release - it merged into Seerr. A pin
+  on an abandoned image is a pin on the version that breaks when its neighbour moves.
+  `ghcr.io/seerr-team/seerr:v3` now; the unit, container name, port and config path are unchanged,
+  so nothing else in the repository moved.
+- **Seerr's own user is `node`, uid 1000, which under rootless Podman is a SUBUID** and cannot read
+  `config/jellyseerr`. Upstream's migration guide says `chown -R 1000:1000`; here that would hand
+  the tree to an id `core` cannot back up. `User=0:0` is the same statement `PUID=0` makes for the
+  LinuxServer images. Measured: 3.5.0 starts as root and migrates a 2.7.3 config unattended.
+- The settings and database migration is one-way, so `config/jellyseerr.pre-seerr` was copied
+  aside first. An image rollback cannot un-migrate it - Pocket ID's lesson.
+- **Proved without a real password**: a bogus sign-in now gets Jellyfin's `Unauthorized` (it read
+  the header and refused the credentials) where it used to get `Bad Request`, and the 16:25 sync
+  ended `Recently Added Scan Complete`.
+
+### The siding existed, three films were in it, and Tdarr had never heard of it
+
+- **`home-server-requeue.service` was `failed` for 23 consecutive nights** and
+  `containers.failed_units` FAILed on it - a FAIL being what the reboot window refuses on. It
+  refused because the rework siding held three files, copied on 2026-09-13.
+- **They were never going to leave: Tdarr had four libraries, all on `queued/`.** The one-time
+  setup in `docs/media-pipeline.md` was skipped and the directory was created anyway. The script's
+  guard said, in words, that a directory nothing watches would swallow the files - and tested
+  `[ -d ]`. It asks Tdarr for its libraries now, and unreadable refuses.
+- **`media.rework_stuck` said "a job failed and left it" and no job had ever started.** A note
+  whose message asserts one cause sends its reader to Tdarr's Jobs tab, which was empty.
+- **A hold is a finding, not a fault**, the same sentence as `verify-media`'s `SuccessExitStatus=1`
+  one unit over: the siding refusal exits 3 and the unit lists it. `SuccessExitStatus=0`, which is
+  what the unit carried, is a no-op that reads like a decision.
+- **The libraries were created through `cruddb`, not the UI**: each `queued/<type>` row cloned as
+  `avsRework_<type>`, and its **seventeen** `VariablesJSONDB` rows with it. The docs' table named
+  three variables; the flow reads the bitrate ladder from the library too, so a hand-made library
+  with three would have encoded at whatever an empty template parses to. A library inserted that
+  way is not scanned until asked: `POST /api/v2/scan-files`, `mode: scanFindNew`.
+
+### A flag that never reached its unit hid three defects behind it
+
+- `backup.restore_synthetic_server_age` said the weekly timer "writes it with `--synthetic`" and
+  the unit's `ExecStart` had never carried the flag. Adding it would have changed nothing good:
+- **The script wrote the synthetic stamp INSTEAD of the ordinary one**, so the flag would have
+  traded one stale check for the other. A synthetic run is a superset and writes both.
+- **`backup-server.sh` rewrites the state file whole at 03:00 and its carry-forward pattern was
+  `^restore_verified_`** - the synthetic key has the word in the middle, so it would have been
+  erased the night after it was first written. Third time for that block; the rule it states is
+  "name every key that has to survive".
+- **It restored a postgres 17 dump into `postgres:15-alpine` with every line sent to `/dev/null`**,
+  then, at 17, shelled out to `su-exec`, which that image no longer ships. And `psql` exits 0
+  through any number of errors: a cluster initialised as `postgres` refuses every `GRANTED BY
+  windmill` in a dumpall and still "passes". It runs as the image's `postgres` user, initialises
+  under the real superuser's name, and asserts on **tables in the restored database** - 182.
+- The throwaway containers carry `io.home-server.ephemeral` now; they did not.
+
+### A check that warned about a thing nothing was running
+
+- `update.pin_lag` warned for a week about Windmill being sixteen releases behind while all four
+  Windmill quadlets were masked with the fleet. A bump made then runs its migration unobserved on
+  the day the fleet returns. It is a note while conduct is not enabled, and the bump is a step in
+  `host/systemd/README.md`'s "AND BACK ON".

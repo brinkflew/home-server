@@ -354,9 +354,16 @@ silence.
 
 ### The one-time Tdarr setup, which is not in any script
 
-A Tdarr library is a row in Tdarr's own database, created in its UI, so this cannot be automated from
-git and `bin/requeue-drifting.sh` **refuses rather than guessing** if the siding is absent - a
-directory nothing watches would swallow the files. One library per type, or one per type you intend
+A Tdarr library is a row in Tdarr's own database, so this cannot be automated from
+git and `bin/requeue-drifting.sh` **refuses rather than guessing** if the siding is absent **or if
+no Tdarr library has its folder under `/library/rework/`** - a directory nothing watches swallowed
+three films for 23 days before the second half of that sentence was a test.
+
+**Done on 2026-10-06, through `cruddb` rather than the UI**: each `queued/<type>` row cloned as
+`avsRework_<type>`, and every `VariablesJSONDB` row of type `library:<id>` cloned with it. That is
+seventeen variables, not the three below - the flow reads its bitrate ladder from the library - so
+cloning is what makes a rework library encode identically by construction. A library inserted this
+way is not scanned until `POST /api/v2/scan-files` names it (`mode: scanFindNew`). One library per type, or one per type you intend
 to rework:
 
 | Field | Value |
@@ -393,7 +400,9 @@ job under later ones, and keeps a sustained encoder load that is a veto in
 it promotes the output, so the siding's only correct resting state is empty - and a failed Tdarr job
 leaves **no failed unit and no unhealthy container**: `tdarr-node-01` goes on reporting healthy,
 because serving is what it is probed for. The check grades the **age** of the oldest file, not the
-count, so a batch in flight reads as work; six hours reads as stuck. It is a `note` on
+count, so a batch in flight reads as work; six hours reads as stuck. **A held siding ends the
+requeue unit with exit 3, which it lists under `SuccessExitStatus=`** - the hold is this check's to
+report, and for 23 nights it was a `failed` unit instead. It is a `note` on
 `media.keyframe_drift`'s precedent, and never a `FAIL`, because a FAIL in that battery blocks an OS
 security update - which is the mistake `SuccessExitStatus=1` was added to undo.
 
