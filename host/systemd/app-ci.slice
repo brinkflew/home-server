@@ -169,7 +169,7 @@ MemoryMax=14592M
 # able to starve the media stack, which has no weight set at all and therefore
 # sits at the default 100.
 CPUWeight=20
-CPUQuota=1000%
+CPUQuota=1200%
 
 # THE OTHER HALF OF THAT QUOTA, and app-agents.slice paid for this lesson at 5x.
 #
@@ -208,7 +208,12 @@ CPUQuota=1000%
 # for lanes 4 and 5, which are app-agents.slice's cores and are only free while
 # that fleet is off. 10-11 stay unpinned. The map is explicit in
 # bin/github-runner.sh now, because the formula would have given lane 5 12-13.
-AllowedCPUs=0-9
+#
+# ALL TWELVE AND OVERLAPPING SINCE 2026-10-28: each lane takes four cores, its
+# own pair and a neighbour's, and lane 3 reaches 10-11. bin/github-runner.sh
+# argues the ratio. The quota follows the cpuset to 1200%, and CPUWeight=20 is
+# what still hands 10-11 to the media stack whenever it wants them.
+AllowedCPUs=0-11
 
 IOWeight=20
 

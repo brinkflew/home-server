@@ -789,9 +789,16 @@ house style, and `app-agents.slice` says why: twenty-four quadlets declare 34.5 
 
 | Level | MemoryHigh | MemoryMax | CPUs |
 |---|---|---|---|
-| lane scope | 2816M | 3584M | `4-5` / `6-7` / `8-9` / `0-1` / `2-3` |
-| `app-ci.slice` (five lanes, since 2026-09-29) | 12032M | 14592M | `0-9` |
+| lane scope (since 2026-10-28) | 2816M | 3584M | `4-7` / `6-9` / `8-11` / `0-3` / `2-5` |
+| lane scope (until then) | 2816M | 3584M | `4-5` / `6-7` / `8-9` / `0-1` / `2-3` |
+| `app-ci.slice` (since 2026-10-28) | 12032M | 14592M | `0-11` |
+| `app-ci.slice` (five lanes, 2026-09-29 to 2026-10-28) | 12032M | 14592M | `0-9` |
 | `app-ci.slice` (three lanes, until then) | 8448M | 9984M | `4-9` |
+
+**Since 2026-10-28 each lane takes four cores, every pair shared with one neighbour.** The suites
+now run their own workers (pytest-xdist, vitest, Playwright at two), and on a pair they gained
+nothing. All five busy is 20 claims on 12 cores, 1.7x against the 3x measured below;
+`bin/github-runner.sh` argues it beside the map.
 
 **At five lanes the order below is reversed** - the slice binds first. See *The fourth and fifth
 lanes*; what follows describes the three-lane sizing and its measurements, which still hold.

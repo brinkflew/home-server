@@ -62,7 +62,7 @@ LANE="${1:-}"
 case "$LANE" in
 	1|2|3|4|5) ;;
 	'') die 2 "no lane number given - this unit is a template, start it as home-server-github-runner@1.service" ;;
-	*)  die 2 "lane '$LANE' is not 1 to 5. The CPU map below hands out every core of 0-9 in pairs and 10-11 are left to the media stack, so a sixth lane would have no cores of its own and would silently share another lane's pair - which is the nproc defect host/systemd/app-ci.slice's comment exists to prevent. It is refused on memory too: five lanes already exceed what the slice can give at once, see that file." ;;
+	*)  die 2 "lane '$LANE' is not 1 to 5. The CPU map below gives each lane four cores, every one of them shared with exactly one neighbour, so a sixth lane would put a third claim on cores two lanes already share - the nproc defect host/systemd/app-ci.slice's comment exists to prevent, at a ratio the map was not sized for. It is refused on memory too: five lanes already exceed what the slice can give at once, see that file." ;;
 esac
 
 # ONE PAIR OF THE SLICE'S CPUSET, PER LANE, AND THIS IS NOT A TUNING KNOB.
@@ -91,12 +91,24 @@ esac
 # VERIFIED ON THIS HOST rather than assumed, because a scope property is a
 # different question from a slice property:
 #   systemd-run --user --scope -p AllowedCPUs=4-5 --quiet -- nproc   ->  2
+#
+# FOUR CORES A LANE SINCE 2026-10-28, EACH PAIR SHARED WITH ONE NEIGHBOUR, and
+# the paragraph above about width no longer holds. avanserv's suites now run in
+# parallel - pytest-xdist at four workers for the API and the scripts, vitest's
+# own pool, Playwright at two workers over the built site - and on a pair they
+# gained nothing: a fast-tier run took 17 minutes with every lane's two cores
+# saturated. Each lane keeps the pair it had and takes its neighbour's, so lane 1
+# is 4-7 where it was 4-5, and lane 3 reaches 10-11, which the slice now allows.
+# A lane sees nproc=4 and gets it whenever its neighbour is idle, which at 45%
+# average busy is most of the time. With all five busy it is 20 claims on 12
+# cores, 1.7x, against the 3x the measurement above was taken at; the media
+# stack's default weight of 100 against the slice's 20 still wins it 10-11.
 case "$LANE" in
-	1) LANE_CPUS=4-5 ;;
-	2) LANE_CPUS=6-7 ;;
-	3) LANE_CPUS=8-9 ;;
-	4) LANE_CPUS=0-1 ;;
-	5) LANE_CPUS=2-3 ;;
+	1) LANE_CPUS=4-7 ;;
+	2) LANE_CPUS=6-9 ;;
+	3) LANE_CPUS=8-11 ;;
+	4) LANE_CPUS=0-3 ;;
+	5) LANE_CPUS=2-5 ;;
 esac
 
 # LANES 4 AND 5 BORROW THE AGENT FLEET'S CORES, AND REFUSE WHILE IT IS ON.
