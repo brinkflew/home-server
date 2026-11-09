@@ -431,8 +431,14 @@ COPY containers.conf /etc/containers/containers.conf
 # ahead of this number, and ci.runner_version grades the tree rather than the
 # ARG. Left read-only instead, the update fails, the runner exits, the lane mints
 # a fresh registration and repeats - thousands of them against a 5,000/hour limit.
-ARG GITHUB_RUNNER_VERSION=2.336.0
-ARG GITHUB_RUNNER_SHA256=04cf0be1aff4c3ec3554466c39124ca250e3effd8873bb7e8d68535aa9505d5d
+#
+# THAT SELF-UPDATE DID NOT HAPPEN ON 2026-11-05: the 2.336.0 lanes polled with
+# `disableUpdate=true`, GitHub answered 403 "Runner version v2.336.0 is deprecated
+# and cannot receive messages", and every lane minted a registration every ~35 s
+# and ran nothing for four days. A lane seeds only when its tree has no run.sh, so
+# a bump here reaches a lane only once its runner/ is deleted.
+ARG GITHUB_RUNNER_VERSION=2.338.2
+ARG GITHUB_RUNNER_SHA256=baebf204307bac6193480852732f0aba2ae97b6c5597c244f4d5558390147c40
 RUN set -eu \
  && url="https://github.com/actions/runner/releases/download/v${GITHUB_RUNNER_VERSION}/actions-runner-linux-x64-${GITHUB_RUNNER_VERSION}.tar.gz" \
  && curl -fsSL -o /tmp/runner.tar.gz "$url" \
