@@ -555,7 +555,11 @@ seed_runner() {
 	want=$(podman image inspect "$IMAGE" \
 		--format '{{ index .Config.Labels "io.home-server.runner-version" }}' 2>/dev/null)
 	case "$want" in '<no value>') want="" ;; esac
-	have=$(cat "$LANE_ROOT/runner/.seed-version" 2>/dev/null)
+	# A JOB CAN WRITE THIS FILE - the tree is mounted read-write into every job -
+	# so anything but a bare version is treated as absent, which forces a re-seed
+	# rather than letting the value reach the marker.
+	have=$(head -c 32 "$LANE_ROOT/runner/.seed-version" 2>/dev/null | head -1)
+	printf '%s' "$have" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+' || have=""
 
 	if [ -x "$LANE_ROOT/runner/run.sh" ] && { [ -z "$want" ] || [ "$want" = "$have" ]; }; then
 		runner_version="${have:-unknown}"
@@ -577,8 +581,8 @@ seed_runner() {
 		"$IMAGE" -c 'cp -rp /opt/actions-runner-seed/. /seed/' ||
 		die 4 "could not seed the runner tree into $LANE_ROOT/runner"
 
-	runner_version=$(cat "$LANE_ROOT/runner/.seed-version" 2>/dev/null)
-	[ -n "$runner_version" ] || runner_version="unknown"
+	runner_version=$(head -c 32 "$LANE_ROOT/runner/.seed-version" 2>/dev/null | head -1)
+	printf '%s' "$runner_version" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+' || runner_version="unknown"
 }
 
 # ------------------------------------------------------------------------------
@@ -1316,7 +1320,14 @@ while [ "$stopping" = 0 ]; do
 	# waits for a re-seed.
 	if [ "$busy" = 0 ] && [ "$idle_recycled" = 0 ] && [ "$stopping" = 0 ]; then
 		quick_exits=$(( quick_exits + 1 ))
-		refusal=$(podman unshare sh -c 'f=$(ls -t "$1"/_diag/Runner_*.log 2>/dev/null | head -1); [ -n "$f" ] && grep -hE "deprecated|cannot receive messages|is not supported|must be updated" "$f" | tail -1' sh "$LANE_ROOT/runner" 2>/dev/null)
+		# READ AS `core` AND NEVER THROUGH `podman unshare`, and only a regular
+		# file: `_diag` is job-writable, and a symlink planted there would
+		# otherwise be resolved on the host with core's reach.
+		refusal=""
+		diag=$(find "$LANE_ROOT/runner/_diag" -maxdepth 1 -type f -name 'Runner_*.log' \
+			-printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+		[ -n "$diag" ] && refusal=$(grep -hE "deprecated|cannot receive messages|is not supported|must be updated" \
+			"$diag" 2>/dev/null | tail -1 | tr -cd '[:print:]')
 		if [ -n "$refusal" ]; then
 			runner_refused=$(printf '%s' "$refusal" | tr '\n\r' '  ' | cut -c1-160)
 			runner_refused_at=$(now_iso)
