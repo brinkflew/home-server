@@ -2149,6 +2149,11 @@ signal read green.
   was refused for four days from 2026-11-05 with every check green. The build tracks upstream now,
   a lane re-seeds when its tree differs from the image, and `ci.runner_refused` reads the 403.
 
+### A required parameter answered with a bare 400, and a domain move the store outlived
+- qBittorrent 5.3 made `shareLimitsMode` required, so the seeding policy was a 400 for nineteen
+  days. The cert checks graded leftover `avanserv.com` certificates as a failed renewal; they grade
+  only served site blocks now.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

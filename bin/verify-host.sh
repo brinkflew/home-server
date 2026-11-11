@@ -5618,6 +5618,33 @@ if [ -z "$GREENBOOT" ]; then
 	ing_caddyfile="${HOME_SERVER_INGRESS_CADDYFILE:-$repo/apps/caddy/Caddyfile}"
 	ing_env="${HOME_SERVER_INGRESS_ENV:-$repo/.env}"
 
+	# DERIVED FROM THE CADDYFILE, NEVER A SECOND LIST. A hand-maintained copy of
+	# the site blocks is what CLAUDE.md calls the most driftable shape this
+	# repository has a name for, and the whole point of this check is to catch a
+	# block whose certificate never issued - which a list written beside it could
+	# not do. The two parenthesised SNIPPETS are not site blocks: there are 17
+	# top-level blocks and 14 sites, and matching on the {$DOMAIN} placeholder is
+	# what tells them apart.
+	ing_domain=$(sed -n 's/^DOMAIN=//p' "$ing_env" 2>/dev/null | tail -1) || ing_domain=""
+	# The placeholder is spelled [$]DOMAIN rather than \$DOMAIN because the
+	# literal is what is wanted and shellcheck cannot tell the two apart inside
+	# single quotes - SC2016 on a pattern that was already correct.
+	ing_sites=$(grep -oE '^[a-z0-9][a-z0-9.-]*\.\{[$]DOMAIN\}' "$ing_caddyfile" 2>/dev/null |
+		sed 's/\.{[$]DOMAIN}$//' | sort -u) || ing_sites=""
+	# THE NAMES CADDY SERVES, which is what the two expiry checks grade. The store
+	# outlives the Caddyfile: after the 2026-10-02 move to avanserv.me every
+	# avanserv.com certificate stayed on disk, unrenewed by design, and read as a
+	# renewal failure on fifteen names. Empty when the Caddyfile or DOMAIN cannot
+	# be read, and then every certificate is graded, as before.
+	ing_served=""
+	if [ -n "$ing_domain" ]; then
+		for ing_s in $ing_sites; do
+			ing_served="$ing_served$ing_s.$ing_domain
+"
+		done
+	fi
+	ing_stale=0
+
 	# THE FIRST FORWARD-LOOKING INTERVAL IN THIS FILE. Everything else here ages a
 	# timestamp that has already happened; these subtract now from a date in the
 	# future, so the sign is the other way round and an unparseable date has to
@@ -5639,10 +5666,15 @@ if [ -z "$GREENBOOT" ]; then
 		# is what the guard on the first line is for.
 		while IFS= read -r ing_crt; do
 			[ -n "$ing_crt" ] || continue
-			ing_present=$(( ing_present + 1 ))
 			ing_host=$(basename "$ing_crt" .crt)
 			ing_hosts="$ing_hosts$ing_host
 "
+			if [ -n "$ing_served" ] &&
+				! printf '%s' "$ing_served" | grep -qxF "$ing_host"; then
+				ing_stale=$(( ing_stale + 1 ))
+				continue
+			fi
+			ing_present=$(( ing_present + 1 ))
 			# THE LEAF, WHICH IS THE ONE THAT MATTERS: a .crt here holds the
 			# chain, and `openssl x509` reads the first certificate in it.
 			ing_end=$(openssl x509 -in "$ing_crt" -noout -enddate 2>/dev/null |
@@ -5684,6 +5716,9 @@ if [ -z "$GREENBOOT" ]; then
 	# window has opened and Caddy should be acting" - a note, because on any
 	# ordinary day it means the renewal is in progress - and 21 is "it opened
 	# nine days ago and the certificate has not moved", which is a finding.
+	ing_stale_note=""
+	[ "$ing_stale" -gt 0 ] &&
+		ing_stale_note="; $ing_stale more in the store name no site block and are not graded"
 	if [ -n "$ing_why" ]; then
 		note ingress.cert_expiry "$ing_why - the certificates cannot be read"
 	elif [ "$ing_present" -eq 0 ]; then
@@ -5695,7 +5730,7 @@ if [ -z "$GREENBOOT" ]; then
 	elif [ "$ing_soon_d" -le 30 ]; then
 		note ingress.cert_expiry "the soonest certificate expires in ${ing_soon_d}d ($ing_soon_host, of $ing_present) - inside Caddy's renewal window, which is where a healthy certificate spends a few days a quarter"
 	else
-		ok ingress.cert_expiry "the soonest of $ing_present certificate(s) expires in ${ing_soon_d}d ($ing_soon_host)"
+		ok ingress.cert_expiry "the soonest of $ing_present certificate(s) expires in ${ing_soon_d}d ($ing_soon_host)${ing_stale_note}"
 	fi
 
 	if [ -n "$ing_why" ]; then
@@ -5754,19 +5789,6 @@ if [ -z "$GREENBOOT" ]; then
 		ok ingress.dns_credential "the DNS-01 credential wrote and removed a TXT record ${cred_gandi_age:-?}h ago - the renewal path's own credential, exercised rather than assumed"
 	fi
 
-	# DERIVED FROM THE CADDYFILE, NEVER A SECOND LIST. A hand-maintained copy of
-	# the site blocks is what CLAUDE.md calls the most driftable shape this
-	# repository has a name for, and the whole point of this check is to catch a
-	# block whose certificate never issued - which a list written beside it could
-	# not do. The two parenthesised SNIPPETS are not site blocks: there are 17
-	# top-level blocks and 14 sites, and matching on the {$DOMAIN} placeholder is
-	# what tells them apart.
-	ing_domain=$(sed -n 's/^DOMAIN=//p' "$ing_env" 2>/dev/null | tail -1) || ing_domain=""
-	# The placeholder is spelled [$]DOMAIN rather than \$DOMAIN because the
-	# literal is what is wanted and shellcheck cannot tell the two apart inside
-	# single quotes - SC2016 on a pattern that was already correct.
-	ing_sites=$(grep -oE '^[a-z0-9][a-z0-9.-]*\.\{[$]DOMAIN\}' "$ing_caddyfile" 2>/dev/null |
-		sed 's/\.{[$]DOMAIN}$//' | sort -u) || ing_sites=""
 	ing_sites_n=0 ing_missing=""
 	for ing_s in $ing_sites; do
 		ing_sites_n=$(( ing_sites_n + 1 ))

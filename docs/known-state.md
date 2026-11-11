@@ -6315,3 +6315,16 @@ service on the rack read **memory starved**. Nothing on the host was.
   tracks upstream through `bin/runner-release.sh`, the check warns past two weeks behind, and
   `ci.runner_refused` reads the runner's own refusal line out of `_diag`, so the failure is
   graded rather than inferred. The driver backs off from the third quick exit.
+
+### A required parameter answered with a bare 400, and a domain move the store outlived
+
+- **qBittorrent 5.3 made `shareLimitsMode` a required parameter of `torrents/setShareLimits`**, so
+  `bin/apply-seeding-policy.py` was refused with a bare HTTP 400 from 2026-10-23 for nineteen days
+  and no torrent was promoted past the floor. `requireParams` lists all six; the accepted values
+  are `Default`, `MatchAny` and `MatchAll`, and anything else silently falls back to `Default`.
+  It sends `MatchAny`, which is what every earlier version did.
+- **`ingress.cert_expiry` and `ingress.renewal_due` graded every certificate in Caddy's store**,
+  and the store outlives the Caddyfile: after the move to `avanserv.me` the fifteen `avanserv.com`
+  certificates stayed on disk unrenewed, by design, and read as a renewal failure with a cert
+  expiring. Both now grade only the names a site block serves, derived from the same Caddyfile
+  extraction `ingress.cert_coverage` uses; the rest are counted in the message.
