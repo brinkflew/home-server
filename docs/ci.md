@@ -955,30 +955,42 @@ So the lane's own marker is the signal: `~/.cache/home-server/ci-state-<n>`, one
 because a whole-file rewrite needs a single owner, in `conduct-state`'s format and under its
 contract - **omitted is not zero**, because the collector drops a sample that does not parse.
 
-`bin/verify-host.sh` grows a `ci` section - **fourteen** checks, **WARN or NOTE and never FAIL**,
+`bin/verify-host.sh` grows a `ci` section - **fifteen** checks, **WARN or NOTE and never FAIL**,
 on the
 Agents section's charter: `bin/reboot-host.sh` refuses to act on a host this battery calls
 unhealthy, and nothing a CI lane does wrong is fixed by a reboot.
 
-That count said "nine" until 2026-08-28, which is the ordinary fate of a number written in prose
+That count said "nine" until 2026-08-28 and "fourteen" until 2026-11-11, which is the ordinary fate of a number written in prose
 next to a list that grows - `docs/observability.md` records the agent tally getting it wrong twice
 for the same reason. Count `say ci` to the next `say` in `bin/verify-host.sh` rather than trusting
 this sentence.
 
 **Since 2026-08-28 there is somewhere to look that is not `jq`.** `/ci` on the dashboard renders
-the lane markers, the two budgets, the slice and all fourteen checks - see `docs/dashboard.md`. It
+the lane markers, the two budgets, the slice and every `ci` check - see `docs/dashboard.md`. It
 shows **passing** checks as well as failing ones, which the System page deliberately does not,
 because `github_runner_runtime_split` and `github_runner_root_label` are string facts that mint no
 series: the check's own status is the only route to them anywhere. It carries nothing from
 GitHub's API, and says so on screen rather than letting three lanes read as the whole picture.
 
 `ci.runner_version` is the only one with a **deadline** rather than a threshold. GitHub enforces a
-minimum runner version and a runner below it stops being given jobs - the symptom is a job that
-queues for ever while the runner shows online and idle. It grades **what is on disk in a lane**,
-never the image's `ARG`: a JIT configuration carries no `disableUpdate`, so the runner updates
-itself into the lane's writable tree and legitimately runs ahead of the seed. That writable tree
-is also what stops the update failing, the runner exiting, and the lane minting a fresh
-registration on every pass.
+minimum runner version and a runner below it stops being given jobs. **A just-in-time runner polls
+with `disableUpdate=true` and never updates itself**, so a lane runs the version it was seeded with
+and nothing else moves it. The version therefore travels one way: `bin/runner-release.sh` resolves
+upstream's latest release and its sha256 into `.runner-release.env`, `github-runner.build` builds
+`:next` from it, the smoke test gates the promotion to `:latest`, and `bin/github-runner.sh` re-seeds
+any lane whose tree differs from the image's `io.home-server.runner-version` label at the top of its
+next cycle. The check grades the **oldest lane**: a note while it is behind a release under two
+weeks old, a warn past that.
+
+`ci.runner_refused` reads the failure itself. A refused runner connects, is answered 403 *"Runner
+version vX is deprecated and cannot receive messages"*, exits without a job, and the lane mints
+again 35 seconds later - unit active, heartbeat fresh, every mint a 201. The driver counts an exit
+without a job before the idle ceiling as a `quick_exits`, quotes the runner's own `_diag` line into
+the marker as `runner_refused`, and backs off from the third in a row. A refusal in the last hour,
+or three quick exits, is a warn, which `CiCheckWarning` pages on.
+
+The tree stays writable regardless: if GitHub ever does push an update, a read-only tree turns it
+into an exit and a fresh registration on every pass.
 
 The collector's family is `home_server_ci_*` while the battery's facts are `github_runner_*`. That
 asymmetry is deliberate: `ci_*` facts would be shadowed by the collector's prefix and fail

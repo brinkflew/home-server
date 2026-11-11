@@ -55,3 +55,15 @@ SetWorkingDirectory=/var/home-server/apps/github-runner
 # Ubuntu userland with a container engine and a browser's worth of system
 # libraries in it.
 Pull=newer
+
+# THE RUNNER VERSION COMES FROM UPSTREAM, NOT FROM THE Dockerfile. A lane runs the
+# seed this image carries and nothing updates it after that (a just-in-time runner
+# polls with disableUpdate=true), so the weekly build is the only thing that keeps
+# a lane above GitHub's minimum. bin/runner-release.sh writes the file below before
+# every build, from upstream's latest release or, failing that, the Dockerfile's
+# ARG floor, so it is never empty.
+BuildArg=GITHUB_RUNNER_VERSION=${GITHUB_RUNNER_VERSION}
+BuildArg=GITHUB_RUNNER_SHA256=${GITHUB_RUNNER_SHA256}
+
+[Service]
+EnvironmentFile=/var/home-server/cache/github-runner/.runner-release.env

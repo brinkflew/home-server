@@ -13,14 +13,13 @@
 # runner version - a runner too far behind stops being given jobs, and the
 # symptom is a job that queues for ever while the runner shows online and idle.
 #
-# THAT IS NOT WHAT THIS TIMER DEFENDS AGAINST, and the distinction matters
-# because it would be easy to reach for a nightly build believing it did. The
-# defence is that the lane's runner tree is WRITABLE, so the runner updates
-# ITSELF - a just-in-time configuration carries no `disableUpdate` and GitHub
-# pushes the new version the moment it is required. This timer refreshes the
-# SEED, which is what a brand new lane starts from, and the Ubuntu base beneath
-# it. ci.runner_version grades what is on disk in a lane, never the seed, for
-# exactly that reason.
+# THIS TIMER IS THE ONLY DEFENCE AGAINST THAT, and it is a real one. A
+# just-in-time runner polls with `disableUpdate=true` and never updates itself,
+# so the seed this image carries is the version every lane runs - measured on
+# 2026-11-05, when 2.336.0 was refused for four days. bin/runner-release.sh
+# builds upstream's latest each week and bin/github-runner.sh re-seeds a lane
+# whose tree differs from the promoted image, so a release reaches every lane
+# within a week plus one idle period. ci.runner_version warns when it has not.
 #
 # So the cadence is chosen the way conduct-runner's is: the build is over a
 # gigabyte with two apt runs and a browser dependency set, and a nightly build

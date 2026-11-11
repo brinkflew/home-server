@@ -1,9 +1,11 @@
 # ==============================================================================
 # Build the CI lane image, prove it, and only then let a job land on it
 # ------------------------------------------------------------------------------
-# THREE STEPS, IN ONE ONESHOT, AND THE ORDER IS THE MECHANISM. A Type=oneshot
+# FOUR STEPS, IN ONE ONESHOT, AND THE ORDER IS THE MECHANISM. A Type=oneshot
 # runs its ExecStart= lines in sequence and stops at the first failure, so:
 #
+#   0. bin/runner-release.sh resolves upstream's latest runner and its sha256,
+#      because the seed in this image is the version every lane runs
 #   1. github-runner.build produces localhost/home-server/github-runner:next
 #   2. bin/github-runner-smoke.sh has to pass against :next
 #   3. only then does :latest move onto it
@@ -48,6 +50,7 @@ Documentation=file:/var/home-server/apps/github-runner/Dockerfile
 
 [Service]
 Type=oneshot
+ExecStart=/var/home-server/bin/runner-release.sh
 ExecStart=/usr/bin/systemctl --user restart github-runner-build.service
 ExecStart=/var/home-server/bin/github-runner-smoke.sh
 ExecStart=/usr/bin/podman tag localhost/home-server/github-runner:next localhost/home-server/github-runner:latest

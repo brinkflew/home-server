@@ -218,6 +218,9 @@ last_job_seconds=""
 last_error=""
 last_error_at=""
 runner_version=""
+quick_exits=0
+runner_refused=""
+runner_refused_at=""
 lane_disk_mb=""
 store_jobs=0
 store_resets=0
@@ -261,6 +264,9 @@ marker_read() {
 			lane_pids_peak)       lane_pids_peak="$v" ;;
 			lane_mem_max_events)  lane_mem_max_events="$v" ;;
 			lane_oom_kills)       lane_oom_kills="$v" ;;
+			quick_exits)          quick_exits="$v" ;;
+			runner_refused)       runner_refused="$v" ;;
+			runner_refused_at)    runner_refused_at="$v" ;;
 		esac
 	done < "$MARKER"
 	case "$jobs_today" in ''|*[!0-9]*) jobs_today=0 ;; esac
@@ -272,6 +278,7 @@ marker_read() {
 	case "$lane_pids_peak" in *[!0-9]*) lane_pids_peak="" ;; esac
 	case "$lane_mem_max_events" in ''|*[!0-9]*) lane_mem_max_events=0 ;; esac
 	case "$lane_oom_kills" in ''|*[!0-9]*) lane_oom_kills=0 ;; esac
+	case "$quick_exits" in ''|*[!0-9]*) quick_exits=0 ;; esac
 }
 
 # OMITTED IS NOT ZERO. A key with no value is left out entirely rather than
@@ -306,6 +313,9 @@ marker_write() {
 		[ -n "$last_job_seconds" ] && printf 'last_job_seconds=%s\n' "$last_job_seconds"
 		[ -n "$last_reset_at" ] && printf 'last_reset_at=%s\n' "$last_reset_at"
 		[ -n "$last_reset_reason" ] && printf 'last_reset_reason=%s\n' "$last_reset_reason"
+		printf 'quick_exits=%s\n' "$quick_exits"
+		[ -n "$runner_refused" ] && printf 'runner_refused=%s\n' "$runner_refused"
+		[ -n "$runner_refused_at" ] && printf 'runner_refused_at=%s\n' "$runner_refused_at"
 		[ -n "$runner_version" ] && printf 'runner_version=%s\n' "$runner_version"
 		printf 'store_jobs=%s\n' "$store_jobs"
 		printf 'store_resets=%s\n' "$store_resets"
@@ -486,27 +496,7 @@ preflight() {
 		log "created $NET (isolate=true)"
 	fi
 
-	# Seeded ONCE, not per image build. The runner updates itself - a
-	# just-in-time configuration carries no disableUpdate and GitHub pushes the
-	# new version the moment its minimum moves - so this tree legitimately runs
-	# AHEAD of the image's seed, and re-seeding on every image bump would throw
-	# that away and re-download it. ci.runner_version grades what is here, never
-	# the image's ARG.
-	# `cp -rp` AND NOT `cp -a`, which would carry the SELinux MCS categories of
-	# whichever container did the seeding onto the lane's mount - after which the
-	# NEXT container, with a different pair, cannot read the tree it was given.
-	# Measured on the tool cache, where the symptom was `Permission denied` on a
-	# directory plainly present and owned by the right uid. See
-	# apps/github-runner/scripts/runner-init.sh.
-	if [ ! -x "$LANE_ROOT/runner/run.sh" ]; then
-		log "seeding the runner tree from $IMAGE"
-		podman run --rm --label io.home-server.ephemeral \
-			--network none --log-driver=none --no-healthcheck \
-			--entrypoint /bin/sh \
-			-v "$LANE_ROOT/runner:/seed:rw" \
-			"$IMAGE" -c 'cp -rp /opt/actions-runner-seed/. /seed/' ||
-			die 4 "could not seed the runner tree into $LANE_ROOT/runner"
-	fi
+	seed_runner
 
 	# THE STORE REMEMBERS A RUNTIME DIRECTORY THE IMAGE MAY NO LONGER USE.
 	# libpod writes its runroot and tmpdir into `db.sql` at the root of the graph
@@ -540,6 +530,52 @@ preflight() {
 				die 4 "could not remove the stale $store_db"
 		fi
 	fi
+
+}
+
+# THE LANE'S RUNNER TREE IS RE-SEEDED WHENEVER IT DIFFERS FROM THE IMAGE, and
+# that is what keeps a lane above GitHub's minimum runner version. A just-in-time
+# runner polls with `disableUpdate=true` and never updates itself: on 2026-11-05
+# GitHub refused 2.336.0 with 403 "deprecated and cannot receive messages" for
+# four days while the rebuilt image sat unused, because this tree was seeded once
+# and never again. Called at the top of every cycle, between jobs, so a promoted
+# image reaches an idle lane within IDLE_SEC.
+#
+# `_work` and `_diag` survive: the workspace is the job cache, and `_diag` is the
+# record the quick-exit check below reads.
+#
+# `cp -rp` AND NOT `cp -a`, which would carry the SELinux MCS categories of
+# whichever container did the seeding onto the lane's mount - after which the
+# NEXT container, with a different pair, cannot read the tree it was given.
+# Measured on the tool cache, where the symptom was `Permission denied` on a
+# directory plainly present and owned by the right uid. See
+# apps/github-runner/scripts/runner-init.sh.
+seed_runner() {
+	local want have
+	want=$(podman image inspect "$IMAGE" \
+		--format '{{ index .Config.Labels "io.home-server.runner-version" }}' 2>/dev/null)
+	case "$want" in '<no value>') want="" ;; esac
+	have=$(cat "$LANE_ROOT/runner/.seed-version" 2>/dev/null)
+
+	if [ -x "$LANE_ROOT/runner/run.sh" ] && { [ -z "$want" ] || [ "$want" = "$have" ]; }; then
+		runner_version="${have:-unknown}"
+		return 0
+	fi
+
+	if [ -x "$LANE_ROOT/runner/run.sh" ]; then
+		log "re-seeding the runner tree: the lane has ${have:-an unrecorded version}, $IMAGE carries $want"
+		podman unshare find "$LANE_ROOT/runner" -mindepth 1 -maxdepth 1 \
+			! -name _work ! -name _diag -exec rm -rf {} + ||
+			die 4 "could not clear the stale runner tree in $LANE_ROOT/runner"
+	else
+		log "seeding the runner tree from $IMAGE"
+	fi
+	podman run --rm --label io.home-server.ephemeral \
+		--network none --log-driver=none --no-healthcheck \
+		--entrypoint /bin/sh \
+		-v "$LANE_ROOT/runner:/seed:rw" \
+		"$IMAGE" -c 'cp -rp /opt/actions-runner-seed/. /seed/' ||
+		die 4 "could not seed the runner tree into $LANE_ROOT/runner"
 
 	runner_version=$(cat "$LANE_ROOT/runner/.seed-version" 2>/dev/null)
 	[ -n "$runner_version" ] || runner_version="unknown"
@@ -971,6 +1007,7 @@ while [ "$stopping" = 0 ]; do
 
 	gc_lane
 	reap_offline
+	seed_runner
 
 	stamp=$(date +%s)
 	name="home-server-$LANE-$stamp"
@@ -1172,6 +1209,7 @@ while [ "$stopping" = 0 ]; do
 
 	run_pid=$!
 	busy=0
+	idle_recycled=0
 	job_started_at=""
 	idle_since=$stamp
 	job_mem_max_ev=0
@@ -1222,6 +1260,7 @@ while [ "$stopping" = 0 ]; do
 			# io.home-server.ephemeral - which a CI lane necessarily does. It is
 			# also what lets an idle lane pick up a newly promoted :latest.
 			log "idle for ${IDLE_SEC}s - recycling this registration"
+			idle_recycled=1
 			podman stop -t 30 "$cname" >/dev/null 2>&1
 			break
 		fi
@@ -1266,12 +1305,36 @@ while [ "$stopping" = 0 ]; do
 	cname=""
 	runner_id=""
 
-	# The runner's own version, re-read every cycle, because it updates itself
-	# and the image's ARG is only ever the seed.
-	v=$(sed -n 's/^.*"agentVersion" *: *"\([^"]*\)".*$/\1/p' "$LANE_ROOT/runner/.runner" 2>/dev/null | tail -1)
-	[ -n "$v" ] && runner_version="$v"
+	# A RUNNER THAT LEAVES WITHOUT A JOB, BEFORE THE IDLE CEILING, WAS SENT AWAY.
+	# That is what GitHub's minimum version looks like from here: the runner
+	# connects, is answered 403 "Runner version vX is deprecated and cannot
+	# receive messages", exits, and this loop mints again 35 seconds later - with
+	# the unit active, the heartbeat fresh and every mint a 201. Four days of
+	# that on 2026-11-05 with no check firing. The runner's own log names the
+	# reason, so it is quoted into the marker for ci.runner_refused; the backoff
+	# keeps a refused lane from spending the registration rate limit while it
+	# waits for a re-seed.
+	if [ "$busy" = 0 ] && [ "$idle_recycled" = 0 ] && [ "$stopping" = 0 ]; then
+		quick_exits=$(( quick_exits + 1 ))
+		refusal=$(podman unshare sh -c 'f=$(ls -t "$1"/_diag/Runner_*.log 2>/dev/null | head -1); [ -n "$f" ] && grep -hE "deprecated|cannot receive messages|is not supported|must be updated" "$f" | tail -1' sh "$LANE_ROOT/runner" 2>/dev/null)
+		if [ -n "$refusal" ]; then
+			runner_refused=$(printf '%s' "$refusal" | tr '\n\r' '  ' | cut -c1-160)
+			runner_refused_at=$(now_iso)
+			set_error "runner refused: $runner_refused"
+		fi
+		log "runner $runner_version exited after $(( $(date +%s) - stamp ))s without a job (container rc $run_rc, $quick_exits in a row)${refusal:+: $runner_refused}"
+	else
+		quick_exits=0
+	fi
 
 	marker_write 0
+
+	if [ "$quick_exits" -ge 3 ] && [ "$stopping" = 0 ]; then
+		backoff=$(( 60 * (1 << (quick_exits > 7 ? 4 : quick_exits - 3)) ))
+		[ "$backoff" -gt 900 ] && backoff=900
+		log "backing off ${backoff}s before minting again"
+		nap "$backoff"
+	fi
 done
 
 cleanup

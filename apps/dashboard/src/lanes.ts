@@ -207,7 +207,7 @@ const n = (v: number | undefined): number => (v === undefined ? Number.NaN : v);
  * are drawn per lane with a bar behind them. Restating them here would be the
  * duplication this page was rewritten to remove - Containment reproducing
  * FindingsPanel's markup directly above a FindingsPanel - committed a second
- * time in a different shape. The battery's verdict on all fourteen is still one
+ * time in a different shape. The battery's verdict on every ci check is still one
  * panel down.
  *
  * NOT SORTED WORST-FIRST, which is what keeps this a different object from that
@@ -240,7 +240,7 @@ const SPECS: RowSpec[] = [
       const age = n(f?.versionAge);
       return Number.isFinite(age) ? `checked ${fmt.number(age)}d ago` : fmt.NO_DATA;
     },
-    finding: "the stamp going stale is the finding, not a version behind upstream",
+    finding: "a lane two weeks behind upstream, or the stamp going stale",
   },
   {
     id: "ci.image_fresh",

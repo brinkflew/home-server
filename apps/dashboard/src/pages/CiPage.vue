@@ -515,7 +515,7 @@ const CAVEATS: Record<string, string> = {
   "ci.lanes_alive":
     "This is systemctl's count, not the markers'. A lane whose driver never got far enough to write one is enabled and active here and appears in no series at all, which is the difference the sentence under the table names.",
   "ci.runner_version":
-    "A lane self-updates when GitHub requires it, so running a version behind upstream is a note. The stamp going stale means nothing has asked upstream in a fortnight, which is the finding.",
+    "A just-in-time runner never updates itself, so a lane runs what the weekly build seeded it with. Behind upstream is a note for two weeks and a warning after; ci.runner_refused reads the refusal itself.",
   "ci.toolcache_seed":
     "The seed guard once keyed on existence rather than a version, so a lane was seeded once ever and work that shipped in the image reached neither deployed lane with every signal green.",
   "ci.artifact_store":

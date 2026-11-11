@@ -6297,3 +6297,21 @@ service on the rack read **memory starved**. Nothing on the host was.
   Windmill quadlets were masked with the fleet. A bump made then runs its migration unobserved on
   the day the fleet returns. It is a note while conduct is not enabled, and the bump is a step in
   `host/systemd/README.md`'s "AND BACK ON".
+
+### A runner that never updated itself, and a rebuilt seed that never reached a lane
+
+- **From 2026-11-05 no CI job ran for four days.** Every lane polled as 2.336.0 with
+  `disableUpdate=true`, GitHub answered 403 *"Runner version v2.336.0 is deprecated and cannot
+  receive messages"*, the runner exited, and the lane minted a new registration every ~35 s. Unit
+  active, heartbeat fresh, every mint a 201: no check moved.
+- **The design rested on a self-update that does not happen.** Six files said a just-in-time
+  configuration carries no `disableUpdate`, so the runner would update itself into its writable
+  tree and the image's `ARG` was only a seed. Measured, it polls with the flag set. The seed is the
+  running version.
+- **A rebuilt image never reached a lane anyway**: the driver seeded only when `runner/run.sh` was
+  absent, so the fix was deleting every lane's tree by hand. It re-seeds against the image's
+  `io.home-server.runner-version` label at the top of every cycle now, keeping `_work` and `_diag`.
+- **`ci.runner_version` called "behind upstream" a note for ever**, on the same premise. The build
+  tracks upstream through `bin/runner-release.sh`, the check warns past two weeks behind, and
+  `ci.runner_refused` reads the runner's own refusal line out of `_diag`, so the failure is
+  graded rather than inferred. The driver backs off from the third quick exit.

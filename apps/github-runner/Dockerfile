@@ -424,19 +424,19 @@ COPY containers.conf /etc/containers/containers.conf
 # GitHub publishes the sha256 in the release notes and it is asserted before a
 # single byte is extracted.
 #
-# THIS ARG IS A SEED, NOT THE RUNNING VERSION, and that distinction is the whole
-# of how this image survives GitHub's minimum-version enforcement. A just-in-time
-# configuration carries no `disableUpdate`, so the runner WILL update itself; the
-# lane's runner tree is writable so that it can. What is on disk therefore runs
-# ahead of this number, and ci.runner_version grades the tree rather than the
-# ARG. Left read-only instead, the update fails, the runner exits, the lane mints
-# a fresh registration and repeats - thousands of them against a 5,000/hour limit.
+# THIS ARG IS A FLOOR, AND THE SEED IS THE RUNNING VERSION. A just-in-time
+# runner polls with `disableUpdate=true` and never updates itself, so whatever
+# this image carries is what a lane runs until the next image: on 2026-11-05
+# GitHub answered 2.336.0 with 403 "deprecated and cannot receive messages" and
+# no lane ran a job for four days. stacks/infra/github-runner.build therefore
+# passes upstream's latest version and sha256 as build arguments, resolved by
+# bin/runner-release.sh; these defaults are only what a build gets when upstream
+# cannot be read, and a build never takes an upstream release older than them.
+# bin/github-runner.sh re-seeds a lane whose tree differs from the label below.
 #
-# THAT SELF-UPDATE DID NOT HAPPEN ON 2026-11-05: the 2.336.0 lanes polled with
-# `disableUpdate=true`, GitHub answered 403 "Runner version v2.336.0 is deprecated
-# and cannot receive messages", and every lane minted a registration every ~35 s
-# and ran nothing for four days. A lane seeds only when its tree has no run.sh, so
-# a bump here reaches a lane only once its runner/ is deleted.
+# The tree stays writable regardless: a read-only one would turn any update
+# GitHub did push into an exit and a fresh registration, thousands of them
+# against a 5,000/hour limit.
 ARG GITHUB_RUNNER_VERSION=2.338.2
 ARG GITHUB_RUNNER_SHA256=baebf204307bac6193480852732f0aba2ae97b6c5597c244f4d5558390147c40
 RUN set -eu \
@@ -448,6 +448,7 @@ RUN set -eu \
  && rm -f /tmp/runner.tar.gz \
  && printf '%s\n' "$GITHUB_RUNNER_VERSION" > /opt/actions-runner-seed/.seed-version \
  && chown -R runner:runner /opt/actions-runner-seed
+LABEL io.home-server.runner-version=${GITHUB_RUNNER_VERSION}
 
 COPY scripts/runner-init.sh /usr/local/bin/runner-init
 COPY scripts/podman-healthcheck-loop.sh /usr/local/bin/podman-healthcheck-loop

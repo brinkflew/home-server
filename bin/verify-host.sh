@@ -3906,6 +3906,11 @@ if [ -z "$GREENBOOT" ]; then
 	ci_disk_worst=""
 	ci_disk_lane=""
 	ci_version=""
+	ci_version_lane=""
+	ci_quick_worst=0
+	ci_quick_lane=""
+	ci_refused=""
+	ci_refused_lane=""
 	ci_markers=0
 	ci_mem_peak=""
 	ci_mem_lane=""
@@ -4003,8 +4008,35 @@ if [ -z "$GREENBOOT" ]; then
 			fi
 		fi
 
+		# THE OLDEST LANE IS THE ONE GITHUB REFUSES FIRST, so the lowest version
+		# wins rather than whichever lane was read last.
 		rv=$(sed -n 's/^runner_version=//p' "$m" 2>/dev/null | tail -1)
-		[ -n "$rv" ] && ci_version="$rv"
+		case "$rv" in
+			''|unknown) ;;
+			*) if [ -z "$ci_version" ] ||
+				[ "$(printf '%s\n%s\n' "$rv" "$ci_version" | sort -V | head -1)" = "$rv" ]; then
+					ci_version="$rv"; ci_version_lane="$l"
+				fi ;;
+		esac
+
+		qe=$(sed -n 's/^quick_exits=//p' "$m" 2>/dev/null | tail -1)
+		case "$qe" in
+			''|*[!0-9]*) ;;
+			*) if [ "$qe" -gt "$ci_quick_worst" ]; then
+					ci_quick_worst="$qe"; ci_quick_lane="$l"
+				fi ;;
+		esac
+
+		# A refusal counts for an hour: long enough for the hourly run to see
+		# one, short enough that a re-seeded lane clears on its own.
+		rfa=$(sed -n 's/^runner_refused_at=//p' "$m" 2>/dev/null | tail -1)
+		if [ -n "$rfa" ]; then
+			rfa_e=$(date -d "$rfa" +%s 2>/dev/null)
+			if [ -n "${rfa_e:-}" ] && [ $(( $(date +%s) - rfa_e )) -le 3600 ]; then
+				ci_refused=$(sed -n 's/^runner_refused=//p' "$m" 2>/dev/null | tail -1)
+				ci_refused_lane="$l"
+			fi
+		fi
 	done
 
 	fact github_runner_jobs_today "$ci_jobs_today" num
@@ -4279,11 +4311,15 @@ if [ -z "$GREENBOOT" ]; then
 	# runner shows online and idle - nothing here fails, nothing is unhealthy,
 	# and no unit is inactive.
 	#
-	# IT GRADES THE LANE'S TREE, NEVER THE IMAGE'S ARG. A just-in-time
-	# configuration carries no disableUpdate, so the runner updates ITSELF into
-	# the lane's writable tree and legitimately runs ahead of the seed the image
-	# ships. Grading the image would report a problem that does not exist and
-	# miss the one that does.
+	# IT GRADES THE LANE'S TREE, NEVER THE IMAGE'S ARG. A just-in-time runner
+	# polls with `disableUpdate=true` and never updates itself, so the lane runs
+	# whatever it was seeded with: the weekly build tracks upstream and the
+	# driver re-seeds a lane whose tree differs from the promoted image. Behind
+	# upstream for under two weeks is that pipeline in progress; past two weeks
+	# it has stopped, and on 2026-11-05 a stopped one cost four days of CI. The
+	# age is upstream's latest release, so a release stream faster than two
+	# weeks would keep this a note; ci.runner_refused below is the backstop that
+	# reads the refusal itself.
 	#
 	# THE COMPARISON IS MADE WEEKLY BY THE SMOKE TEST, not here. Asking
 	# api.github.com hourly for a number that moves monthly is the mistake
@@ -4292,6 +4328,12 @@ if [ -z "$GREENBOOT" ]; then
 	ci_latest_file="$ci_root/.runner-version-latest"
 	ci_latest=$(sed -n 's/^runner_version_latest=//p' "$ci_latest_file" 2>/dev/null | tail -1)
 	ci_checked=$(sed -n 's/^runner_version_checked_at=//p' "$ci_latest_file" 2>/dev/null | tail -1)
+	ci_published=$(sed -n 's/^runner_version_published_at=//p' "$ci_latest_file" 2>/dev/null | tail -1)
+	ci_behind_d=""
+	if [ -n "$ci_published" ]; then
+		pb_e=$(date -d "$ci_published" +%s 2>/dev/null)
+		[ -z "${pb_e:-}" ] || ci_behind_d=$(( ( $(date +%s) - pb_e ) / 86400 ))
+	fi
 	ci_checked_age=""
 	if [ -n "$ci_checked" ]; then
 		ck_e=$(date -d "$ci_checked" +%s 2>/dev/null)
@@ -4307,8 +4349,27 @@ if [ -z "$GREENBOOT" ]; then
 		warn ci.runner_version "upstream's runner version was last read ${ci_checked_age} days ago, so this cannot say whether the lanes are behind. GitHub stops giving jobs to a runner past its minimum version, and that failure is a job queueing for ever with the runner showing online. Run 'systemctl --user start home-server-github-runner-build.service'."
 	elif [ "$ci_version" = "$ci_latest" ]; then
 		ok ci.runner_version "the lanes run $ci_version, which is upstream's latest"
+	elif [ -n "$ci_behind_d" ] && [ "$ci_behind_d" -gt 14 ]; then
+		warn ci.runner_version "lane $ci_version_lane runs ${ci_version:-an unknown version} and upstream released $ci_latest ${ci_behind_d} days ago - the weekly build should have reached every lane by now, and a lane does not update itself. GitHub refuses a runner below its minimum version with no other symptom than jobs that never start. Read 'journalctl --user -u home-server-github-runner-build.service', then 'journalctl --user -u home-server-github-runner@$ci_version_lane | grep seed'."
 	else
-		note ci.runner_version "the lanes run ${ci_version:-unknown} against upstream's $ci_latest - a lane self-updates when GitHub requires it, so this is a note rather than a finding until it stops happening"
+		note ci.runner_version "lane ${ci_version_lane:-?} runs ${ci_version:-unknown} against upstream's $ci_latest${ci_behind_d:+, released ${ci_behind_d} days ago} - the weekly build and the lane's re-seed carry it, and this warns past 14 days"
+	fi
+
+	# THE REFUSAL ITSELF, which ci.runner_version can only infer. A runner GitHub
+	# will not serve connects, is answered 403, exits without a job, and the lane
+	# mints again - unit active, heartbeat fresh, every mint a 201, so nothing
+	# else here moves. bin/github-runner.sh quotes the runner's own log line into
+	# the marker; three quick exits in a row without one is the same shape with
+	# a reason that log did not name.
+	fact github_runner_quick_exits "$ci_quick_worst" num
+	if [ "$ci_markers" -eq 0 ]; then
+		note ci.runner_refused "no CI lane has written a marker - none has run yet"
+	elif [ -n "$ci_refused" ]; then
+		warn ci.runner_refused "lane $ci_refused_lane's runner was refused within the hour and no job can start on it: $ci_refused. A lane re-seeds from the promoted image between jobs, so if the image is current this clears by itself; otherwise run 'systemctl --user start home-server-github-runner-build.service'."
+	elif [ "$ci_quick_worst" -ge 3 ]; then
+		warn ci.runner_refused "lane $ci_quick_lane's runner has exited $ci_quick_worst times in a row without a job and before its idle ceiling - GitHub is turning it away. Read the newest runner/_diag/Runner_*.log under that lane's root for the reason."
+	else
+		ok ci.runner_refused "no lane's runner has been turned away"
 	fi
 
 	# The image itself, graded on its own creation time rather than on the unit's

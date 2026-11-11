@@ -2144,6 +2144,11 @@ signal read green.
   so the assertion is tables in the restored database.
 - `update.pin_lag` is a note while the fleet - and Windmill with it - is off.
 
+### A runner that never updated itself, and a rebuilt seed that never reached a lane
+- **A just-in-time runner polls with `disableUpdate=true` and never updates itself**, so 2.336.0
+  was refused for four days from 2026-11-05 with every check green. The build tracks upstream now,
+  a lane re-seeds when its tree differs from the image, and `ci.runner_refused` reads the 403.
+
 ## Target architecture
 
 **Steps 1 and 2 are done.** The host is uCore `stable-nvidia-lts` and every service is a rootless

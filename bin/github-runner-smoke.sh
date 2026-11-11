@@ -264,15 +264,24 @@ else
 	bad "git is '${gitver:-absent}' - actions/checkout would fall back to a REST tarball with no .git, and upskald's changed-file logic then runs everything"
 fi
 
-# THE SEEDED TREE IS THE VERSION THE Dockerfile CLAIMS, read out of the Dockerfile
-# rather than repeated here. A second literal is a second thing to forget - the
-# argument bin/conduct-runner-smoke.sh makes for CLAUDE_CODE_VERSION.
-want=$(sed -n 's/^ARG GITHUB_RUNNER_VERSION=//p' "$ROOT/apps/github-runner/Dockerfile" | tail -1)
+# THE SEEDED TREE IS THE VERSION THE BUILD WAS ASKED FOR: what bin/runner-release.sh
+# resolved, or the Dockerfile's ARG when it has not run. Read rather than repeated
+# here - a second literal is a second thing to forget, the argument
+# bin/conduct-runner-smoke.sh makes for CLAUDE_CODE_VERSION. The label is what
+# bin/github-runner.sh re-seeds a lane against, so it must agree with the tree.
+want=$(sed -n 's/^GITHUB_RUNNER_VERSION=//p' "$FLEET_ROOT/.runner-release.env" 2>/dev/null | tail -1)
+[ -n "$want" ] || want=$(sed -n 's/^ARG GITHUB_RUNNER_VERSION=//p' "$ROOT/apps/github-runner/Dockerfile" | tail -1)
 seed=$(runner cat /opt/actions-runner-seed/.seed-version 2>/dev/null | tr -d '\r\n')
+label=$(podman image inspect "$IMAGE" --format '{{ index .Config.Labels "io.home-server.runner-version" }}' 2>/dev/null || true)
 if [ -n "$want" ] && [ "$want" = "$seed" ]; then
-	ok "the seeded runner tree is $seed, matching the Dockerfile's ARG"
+	ok "the seeded runner tree is $seed, the version this build was asked for"
 else
-	bad "the seeded runner tree is '${seed:-absent}' but the Dockerfile asks for '${want:-absent}' - this image did not build from this checkout"
+	bad "the seeded runner tree is '${seed:-absent}' but the build asked for '${want:-absent}' - this image did not build from this checkout"
+fi
+if [ -n "$seed" ] && [ "$label" = "$seed" ]; then
+	ok "the image's io.home-server.runner-version label agrees with the seed"
+else
+	bad "the image's runner-version label is '${label:-absent}' against a seed of '${seed:-absent}' - a lane would re-seed against the wrong version"
 fi
 
 if runner test -x /opt/actions-runner-seed/run.sh; then
@@ -397,24 +406,25 @@ fi
 # THE VERSION AGAINST UPSTREAM, WRITTEN DOWN RATHER THAN ACTED ON. GitHub
 # enforces a minimum runner version and a runner too far below it stops being
 # given jobs - a job that queues for ever while the runner shows online and idle.
-# The lane's tree updates itself, so this is not a gate; it is the number
-# ci.runner_version grades, recorded here because this is the one moment a week
-# when an outbound call to api.github.com is already warranted.
+# The build already asked bin/runner-release.sh for it, so this is not a gate; it
+# is the number ci.runner_version grades, recorded here because this is the one
+# moment a week when an outbound call to api.github.com is already warranted.
 #
 # A FAILED LOOKUP IS A note, NEVER A FAIL. An upstream outage must not stop a
 # promotion, and this is unauthenticated so it is rate limited at 60/hour.
-latest=$(curl -fsS --max-time 20 https://api.github.com/repos/actions/runner/releases/latest 2>/dev/null |
-	jq -r '.tag_name // empty' 2>/dev/null | sed 's/^v//')
+release=$(curl -fsS --max-time 20 https://api.github.com/repos/actions/runner/releases/latest 2>/dev/null || true)
+latest=$(printf '%s' "$release" | jq -r '.tag_name // empty' 2>/dev/null | sed 's/^v//' || true)
+published=$(printf '%s' "$release" | jq -r '.published_at // empty' 2>/dev/null || true)
 if [ -z "$latest" ]; then
 	note "could not read actions/runner's latest release - ci.runner_version will grade on the age of its last successful check"
 elif [ "$latest" = "$want" ]; then
-	ok "the pin $want is upstream's latest"
+	ok "this build carries $want, upstream's latest"
 else
-	note "the pin is $want and upstream is $latest - the SEED is behind, which is harmless because a lane's tree self-updates; ci.runner_version grades the tree"
+	note "this build carries $want and upstream is $latest - bin/runner-release.sh fell back or upstream released mid-build; ci.runner_version warns once a lane is two weeks behind"
 fi
 mkdir -p "$(dirname "${GITHUB_RUNNER_VERSION_STAMP:-$FLEET_ROOT/.runner-version-latest}")" 2>/dev/null || true
-printf 'runner_version_latest=%s\nrunner_version_checked_at=%s\n' \
-	"${latest:-}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+printf 'runner_version_latest=%s\nrunner_version_published_at=%s\nrunner_version_checked_at=%s\n' \
+	"${latest:-}" "${published:-}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
 	> "${GITHUB_RUNNER_VERSION_STAMP:-$FLEET_ROOT/.runner-version-latest}" 2>/dev/null || true
 
 # ------------------------------------------------------------------------------
